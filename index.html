@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>바티인베스트 채팅방 관리</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117;
+    --bg2: #1a1d27;
+    --bg3: #222535;
+    --border: rgba(255,255,255,0.08);
+    --border2: rgba(255,255,255,0.14);
+    --text: #e8eaf0;
+    --text2: #8b90a7;
+    --text3: #555a70;
+    --tg: #2AABEE;
+    --tg2: #1e96d3;
+    --green: #2dce89;
+    --red: #f5365c;
+    --yellow: #fb6340;
+    --radius: 10px;
+    --radius-sm: 6px;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'Pretendard', 'Apple SD Gothic Neo', -apple-system, sans-serif; font-size: 14px; line-height: 1.5; min-height: 100vh; }
+
+  /* ── Layout ── */
+  .app { display: flex; min-height: 100vh; }
+  .sidebar { width: 240px; flex-shrink: 0; background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; height: 100vh; z-index: 50; transition: transform 0.25s; }
+  .main { margin-left: 240px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+  .topbar { background: var(--bg2); border-bottom: 1px solid var(--border); padding: 0 1.5rem; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 40; }
+  .content { padding: 1.5rem; flex: 1; }
+
+  /* ── Sidebar ── */
+  .logo { padding: 1.25rem 1.25rem 1rem; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+  .logo-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--tg); display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 15px; flex-shrink: 0; }
+  .logo-text { font-size: 13px; font-weight: 600; color: var(--text); }
+  .logo-sub { font-size: 11px; color: var(--text3); }
+  .nav { padding: 0.75rem 0; flex: 1; overflow-y: auto; }
+  .nav-section { padding: 0.75rem 1.25rem 0.25rem; font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.1em; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 1.25rem; cursor: pointer; font-size: 13px; color: var(--text2); border-left: 2px solid transparent; transition: all 0.15s; user-select: none; }
+  .nav-item:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+  .nav-item.active { color: var(--tg); background: rgba(42,171,238,0.08); border-left-color: var(--tg); font-weight: 500; }
+  .nav-item svg { width: 15px; height: 15px; flex-shrink: 0; opacity: 0.8; }
+  .nav-badge { margin-left: auto; background: var(--tg); color: #fff; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 100px; }
+  .sidebar-footer { padding: 1rem 1.25rem; border-top: 1px solid var(--border); }
+
+  /* ── Token Setup ── */
+  .setup-card { background: linear-gradient(135deg, rgba(42,171,238,0.15), rgba(42,171,238,0.05)); border: 1px solid rgba(42,171,238,0.3); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1.5rem; }
+  .setup-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 0.5rem; color: var(--tg); }
+  .setup-card p { font-size: 12px; color: var(--text2); margin-bottom: 0.75rem; line-height: 1.6; }
+  .token-input-row { display: flex; gap: 8px; }
+  .token-input { flex: 1; background: var(--bg); border: 1px solid var(--border2); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 13px; color: var(--text); font-family: monospace; }
+  .token-input:focus { outline: none; border-color: var(--tg); }
+
+  /* ── Buttons ── */
+  .btn { padding: 7px 14px; font-size: 13px; border-radius: var(--radius-sm); cursor: pointer; font-family: inherit; transition: all 0.15s; border: 1px solid var(--border2); background: transparent; color: var(--text2); }
+  .btn:hover { background: var(--bg3); color: var(--text); border-color: var(--border2); }
+  .btn:active { transform: scale(0.98); }
+  .btn-primary { background: var(--tg); color: #fff; border-color: var(--tg); font-weight: 500; }
+  .btn-primary:hover { background: var(--tg2); color: #fff; border-color: var(--tg2); }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  .btn-danger { border-color: rgba(245,54,92,0.4); color: var(--red); }
+  .btn-danger:hover { background: rgba(245,54,92,0.1); }
+  .btn-success { border-color: rgba(45,206,137,0.4); color: var(--green); }
+  .btn-success:hover { background: rgba(45,206,137,0.1); }
+
+  /* ── Metrics ── */
+  .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 1.5rem; }
+  .metric-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.125rem; }
+  .metric-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .metric-value { font-size: 26px; font-weight: 600; line-height: 1.1; }
+  .metric-sub { font-size: 11px; color: var(--text3); margin-top: 4px; }
+  .metric-up { color: var(--green); }
+  .metric-down { color: var(--red); }
+
+  /* ── Cards ── */
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 1rem; }
+  .card-header { padding: 0.875rem 1.125rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .card-title { font-size: 13px; font-weight: 600; }
+  .card-body { padding: 1.125rem; }
+
+  /* ── Table ── */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 9px 12px; font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* ── Badge ── */
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 100px; font-size: 11px; font-weight: 500; }
+  .badge-full { background: rgba(245,54,92,0.15); color: var(--red); }
+  .badge-open { background: rgba(45,206,137,0.15); color: var(--green); }
+  .badge-cat { background: rgba(42,171,238,0.12); color: var(--tg); }
+
+  /* ── Progress ── */
+  .progress { height: 3px; background: var(--bg3); border-radius: 2px; overflow: hidden; width: 60px; }
+  .progress-fill { height: 100%; border-radius: 2px; }
+
+  /* ── Filters ── */
+  .filter-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+  .chip { padding: 4px 12px; font-size: 12px; border-radius: 100px; border: 1px solid var(--border); cursor: pointer; background: transparent; color: var(--text2); font-family: inherit; transition: all 0.15s; }
+  .chip:hover { border-color: var(--border2); color: var(--text); }
+  .chip.active { background: var(--tg); color: #fff; border-color: var(--tg); }
+  .search-box { padding: 6px 12px; font-size: 13px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg2); color: var(--text); font-family: inherit; flex: 1; max-width: 220px; }
+  .search-box:focus { outline: none; border-color: var(--tg); }
+  .search-box::placeholder { color: var(--text3); }
+
+  /* ── Modal ── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 200; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+  .modal { background: var(--bg2); border: 1px solid var(--border2); border-radius: 14px; padding: 1.5rem; width: 480px; max-width: 94vw; max-height: 90vh; overflow-y: auto; transform: translateY(16px); transition: transform 0.2s; }
+  .modal-overlay.open .modal { transform: translateY(0); }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
+  .modal-title { font-size: 15px; font-weight: 600; }
+  .modal-close { background: none; border: none; color: var(--text2); font-size: 20px; cursor: pointer; line-height: 1; padding: 0; }
+  .modal-close:hover { color: var(--text); }
+  .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+
+  /* ── Forms ── */
+  .form-group { margin-bottom: 1rem; }
+  .form-label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+  .form-input { width: 100%; padding: 8px 12px; font-size: 13px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg3); color: var(--text); font-family: inherit; transition: border-color 0.15s; }
+  .form-input:focus { outline: none; border-color: var(--tg); }
+  .form-input::placeholder { color: var(--text3); }
+  .form-select { width: 100%; padding: 8px 12px; font-size: 13px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg3); color: var(--text); font-family: inherit; }
+  .form-select:focus { outline: none; border-color: var(--tg); }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .form-hint { font-size: 11px; color: var(--text3); margin-top: 4px; }
+  textarea.form-input { resize: vertical; min-height: 100px; }
+
+  /* ── Tabs ── */
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 1.125rem; }
+  .tab { padding: 8px 14px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text2); margin-bottom: -1px; transition: all 0.15s; background: none; border-top: none; border-left: none; border-right: none; font-family: inherit; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--tg); border-bottom-color: var(--tg); font-weight: 500; }
+
+  /* ── Status dot ── */
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .dot-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot-red { background: var(--red); }
+  .dot-gray { background: var(--text3); }
+
+  /* ── Activity ── */
+  .activity-item { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .activity-item:last-child { border-bottom: none; }
+  .activity-time { font-size: 11px; color: var(--text3); min-width: 65px; padding-top: 1px; }
+
+  /* ── Toast ── */
+  .toast-container { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
+  .toast { background: var(--bg2); border: 1px solid var(--border2); border-radius: var(--radius); padding: 10px 14px; font-size: 13px; display: flex; align-items: center; gap: 10px; min-width: 260px; animation: slideUp 0.25s ease; }
+  .toast-success { border-left: 3px solid var(--green); }
+  .toast-error { border-left: 3px solid var(--red); }
+  .toast-info { border-left: 3px solid var(--tg); }
+  @keyframes slideUp { from { opacity:0; transform: translateY(12px); } to { opacity:1; transform: translateY(0); } }
+
+  /* ── Loading ── */
+  .loading { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border2); border-top-color: var(--tg); border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-row td { color: var(--text3); text-align: center; padding: 2rem; }
+
+  /* ── Misc ── */
+  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+  .section-title { font-size: 13px; font-weight: 600; }
+  .cat-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .topbar-title { font-size: 15px; font-weight: 600; }
+  .topbar-actions { display: flex; gap: 8px; align-items: center; }
+  a { color: var(--tg); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .text-muted { color: var(--text2); }
+  .text-sm { font-size: 12px; }
+  .mt-1 { margin-top: 0.5rem; }
+  .flex { display: flex; align-items: center; }
+  .gap-1 { gap: 6px; }
+  .gap-2 { gap: 10px; }
+  .ml-auto { margin-left: auto; }
+  .hidden { display: none !important; }
+  @media (max-width: 900px) {
+    .sidebar { transform: translateX(-100%); }
+    .sidebar.open { transform: translateX(0); }
+    .main { margin-left: 0; }
+    .metrics-grid { grid-template-columns: repeat(2,1fr); }
+  }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div class="app">
+<nav class="sidebar" id="sidebar">
+  <div class="logo">
+    <div class="logo-icon">B</div>
+    <div>
+      <div class="logo-text">바티인베스트</div>
+      <div class="logo-sub">채팅방 관리 대시보드</div>
+    </div>
+  </div>
+  <div class="nav">
+    <div class="nav-section">메뉴</div>
+    <div class="nav-item active" data-page="overview" onclick="navigate('overview')">
+      <svg viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.3"/><rect x="9" y="1" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.3"/><rect x="1" y="9" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.3"/><rect x="9" y="9" width="6" height="6" rx="1.5" stroke="currentColor" stroke-width="1.3"/></svg>
+      전체 현황
+    </div>
+    <div class="nav-item" data-page="rooms" onclick="navigate('rooms')">
+      <svg viewBox="0 0 16 16" fill="none"><path d="M13 3H3a1 1 0 00-1 1v7a1 1 0 001 1h2l3 2 3-2h2a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="currentColor" stroke-width="1.3"/></svg>
+      채팅방 관리
+      <span class="nav-badge" id="rooms-badge">67</span>
+    </div>
+    <div class="nav-item" data-page="notice" onclick="navigate('notice')">
+      <svg viewBox="0 0 16 16" fill="none"><path d="M2 5l6-3 6 3v7H2V5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><rect x="6" y="9" width="4" height="3" rx="0.5" stroke="currentColor" stroke-width="1.3"/></svg>
+      전체 공지
+    </div>
+    <div class="nav-item" data-page="members" onclick="navigate('members')">
+      <svg viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M1 13c0-2.76 2.24-5 5-5s5 2.24 5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="12" cy="6" r="1.8" stroke="currentColor" stroke-width="1.3"/><path d="M14.5 13c0-1.93-1.12-3.6-2.75-4.38" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      멤버 조회
+    </div>
+    <div class="nav-section">설정</div>
+    <div class="nav-item" data-page="settings" onclick="navigate('settings')">
+      <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3 3l1 1M12 12l1 1M3 13l1-1M12 4l1-1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      설정 / Bot 연동
+    </div>
+  </div>
+  <div class="sidebar-footer">
+    <div id="bot-status" style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:6px;">
+      <span class="dot dot-gray"></span> Bot 미연결
+    </div>
+  </div>
+</nav>
+
+<!-- Main -->
+<div class="main">
+  <div class="topbar">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button style="display:none;background:none;border:none;color:var(--text);cursor:pointer;" id="menu-btn" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
+      <div class="topbar-title" id="page-title">전체 현황</div>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn" onclick="syncAll()" id="sync-btn">
+        <svg style="width:13px;height:13px;vertical-align:middle;margin-right:4px;" viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        멤버 수 동기화
+      </button>
+      <button class="btn" onclick="openModal('notice-modal')">공지 발송</button>
+      <button class="btn btn-primary" onclick="openModal('add-room-modal')">+ 방 추가</button>
+    </div>
+  </div>
+
+  <div class="content" id="main-content"></div>
+</div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- ═══ MODALS ═══ -->
+
+<!-- Add Room Modal -->
+<div class="modal-overlay" id="add-room-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">새 채팅방 추가</span>
+      <button class="modal-close" onclick="closeModal('add-room-modal')">×</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">채팅방 이름 *</label>
+      <input class="form-input" id="new-name" placeholder="예: 카카오뱅크">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">산업 카테고리 *</label>
+        <select class="form-select" id="new-cat">
+          <option>바이오</option><option>뷰티</option><option>로봇</option>
+          <option>2차전지</option><option>신재생</option><option>소비재</option>
+          <option>테크</option><option>반도체</option><option>엔터</option>
+          <option>조선</option><option>우주</option><option>종합</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">최대 정원</label>
+        <input class="form-input" type="number" id="new-max" value="1000">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">텔레그램 채팅방 ID 또는 링크 *</label>
+      <input class="form-input" id="new-chatid" placeholder="-100123456789 또는 @channelname">
+      <div class="form-hint">Bot이 관리자로 추가된 채팅방의 Chat ID를 입력하세요.</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">초대 링크</label>
+      <input class="form-input" id="new-link" placeholder="https://t.me/...">
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('add-room-modal')">취소</button>
+      <button class="btn btn-primary" onclick="addRoom()">추가하기</button>
+    </div>
+  </div>
+</div>
+
+<!-- Notice Modal -->
+<div class="modal-overlay" id="notice-modal">
+  <div class="modal" style="width:520px;">
+    <div class="modal-header">
+      <span class="modal-title">전체 공지 발송</span>
+      <button class="modal-close" onclick="closeModal('notice-modal')">×</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">발송 대상</label>
+      <select class="form-select" id="notice-target">
+        <option value="all">전체 채팅방 (67개)</option>
+        <option value="open">입장 가능한 방만</option>
+        <option value="바이오">바이오만</option>
+        <option value="뷰티">뷰티만</option>
+        <option value="로봇">로봇만</option>
+        <option value="2차전지">2차전지만</option>
+        <option value="테크">테크만</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">공지 내용 *</label>
+      <textarea class="form-input" id="notice-content" placeholder="공지 내용을 입력하세요.&#10;&#10;HTML 태그 지원: &lt;b&gt;굵게&lt;/b&gt;, &lt;i&gt;기울임&lt;/i&gt;, &lt;code&gt;코드&lt;/code&gt;"></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">미리보기</label>
+      <div id="notice-preview" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;min-height:40px;color:var(--text2);"></div>
+    </div>
+    <div id="notice-progress" class="hidden" style="font-size:12px;color:var(--text2);padding:8px;background:var(--bg3);border-radius:var(--radius-sm);margin-bottom:0.5rem;"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('notice-modal')">취소</button>
+      <button class="btn btn-primary" id="send-notice-btn" onclick="sendNotice()">발송하기</button>
+    </div>
+  </div>
+</div>
+
+<!-- Room Detail Modal -->
+<div class="modal-overlay" id="room-detail-modal">
+  <div class="modal" style="width:520px;">
+    <div class="modal-header">
+      <span class="modal-title" id="detail-modal-title">채팅방 상세</span>
+      <button class="modal-close" onclick="closeModal('room-detail-modal')">×</button>
+    </div>
+    <div class="tabs">
+      <button class="tab active" onclick="switchDetailTab('info', this)">정보</button>
+      <button class="tab" onclick="switchDetailTab('admins', this)">관리자</button>
+      <button class="tab" onclick="switchDetailTab('notice', this)">공지 발송</button>
+    </div>
+    <div id="detail-body"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal('room-detail-modal')">닫기</button>
+      <button class="btn btn-primary" id="detail-tg-btn">텔레그램 열기</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════
+//  STATE
+// ════════════════════════════════════════════════
+const STATE = {
+  token: localStorage.getItem('tg_bot_token') || '',
+  rooms: JSON.parse(localStorage.getItem('tg_rooms') || 'null') || getDefaultRooms(),
+  noticeHistory: JSON.parse(localStorage.getItem('tg_notice_history') || '[]'),
+  currentPage: 'overview',
+  filterCat: 'all',
+  filterStatus: 'all',
+  searchQ: '',
+  currentDetailRoom: null,
+};
+
+const CATS = {
+  '바이오':'#2AABEE','뷰티':'#f5365c','로봇':'#2dce89','2차전지':'#fb6340',
+  '신재생':'#5e72e4','소비재':'#f3a4b5','테크':'#a259ff','반도체':'#8898aa',
+  '엔터':'#ffd600','조선':'#11cdef','우주':'#172b4d','종합':'#2AABEE'
+};
+
+function getDefaultRooms() {
+
+  return [{"id": 1, "name": "HD현대일렉트릭", "code": "267260.KS", "cat": "테크", "subCat": "전력기기", "chatId": "-1003145330550", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 2, "name": "감성코퍼레이션", "code": "036620.KQ", "cat": "소비재", "subCat": "의류", "chatId": "-1002903810445", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "스노우피크, 스노우피크어패럴"}, {"id": 3, "name": "네오이뮨텍", "code": "950220.KQ", "cat": "바이오", "subCat": "신약개발", "chatId": "-1002562177250", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 4, "name": "넥스트바이오메디컬", "code": "389650.KQ", "cat": "바이오", "subCat": "기기/진단", "chatId": "@NextBioMedicalChat", "link": "https://t.me/NextBioMedicalChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 5, "name": "대주전자재료", "code": "078600.KQ", "cat": "2차전지", "subCat": "테슬라", "chatId": "-1002734143711", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "실리콘음극재"}, {"id": 6, "name": "덕산네오룩스", "code": "213420.KQ", "cat": "테크", "subCat": "폴더블", "chatId": "-1002967541897", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 7, "name": "두산에너빌리티", "code": "034020.KS", "cat": "신재생", "subCat": "원전", "chatId": "-1002752603637", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 8, "name": "디앤디파마텍", "code": "347850.KQ", "cat": "바이오", "subCat": "비만", "chatId": "-1002478139425", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "멧세라"}, {"id": 9, "name": "레인보우로보틱스", "code": "277810.KQ", "cat": "로봇", "subCat": "협동로봇", "chatId": "-1002644053661", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 10, "name": "로보티즈", "code": "108490.KQ", "cat": "로봇", "subCat": "엑추에이터", "chatId": "-1002874814842", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 11, "name": "로킷헬스케어", "code": "376900.KQ", "cat": "바이오", "subCat": "바이오", "chatId": "-1003198952749", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 12, "name": "루닛", "code": "328130.KQ", "cat": "바이오", "subCat": "의료AI", "chatId": "@lunitChat", "link": "https://t.me/lunitChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "서범석"}, {"id": 13, "name": "리가켐바이오", "code": "141080.KQ", "cat": "바이오", "subCat": "플랫폼", "chatId": "-1002164265783", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "김용주, ADC"}, {"id": 14, "name": "리브스메드", "code": "491000.KQ", "cat": "바이오", "subCat": "기기/진단", "chatId": "-1003371106096", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 15, "name": "마이크로디지탈", "code": "305090.KQ", "cat": "바이오", "subCat": "기기/진단", "chatId": "@MicrodigitalChat", "link": "https://t.me/MicrodigitalChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "김경남"}, {"id": 16, "name": "메지온", "code": "140410.KQ", "cat": "바이오", "subCat": "신약개발", "chatId": "-1002906730985", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 17, "name": "바이오다인", "code": "314930.KQ", "cat": "바이오", "subCat": "기기/진단", "chatId": "@biodynechat", "link": "https://t.me/biodynechat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "로슈, 임욱빈, 자궁경부암, 틸완드"}, {"id": 18, "name": "보로노이", "code": "310210.KQ", "cat": "바이오", "subCat": "신약개발", "chatId": "-1002339309027", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "김대권"}, {"id": 19, "name": "삼양바이오팜", "code": "0120G0.KS", "cat": "바이오", "subCat": "RNA", "chatId": "-1003549770933", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 20, "name": "삼천당제약", "code": "000250.KQ", "cat": "바이오", "subCat": "바이오", "chatId": "-1002004519180", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "전인석, 비만, 아일리아"}, {"id": 21, "name": "셀비온", "code": "308430.KQ", "cat": "바이오", "subCat": "방사성의약품", "chatId": "-1002604143918", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "플루빅토, 방사성의약품"}, {"id": 22, "name": "쓰리빌리언", "code": "394800.KQ", "cat": "바이오", "subCat": "의료AI", "chatId": "-1003440436882", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 23, "name": "씨어스테크놀로지", "code": "458870.KQ", "cat": "바이오", "subCat": "의료AI", "chatId": "-1002269332733", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 24, "name": "아미코젠", "code": "092040.KQ", "cat": "바이오", "subCat": "바이오", "chatId": "-1001837798680", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "신용철, 배지, 레진"}, {"id": 25, "name": "아이티켐", "code": "309710.KQ", "cat": "바이오", "subCat": "바이오", "chatId": "-1003119132837", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 26, "name": "알지노믹스", "code": "476830.KQ", "cat": "바이오", "subCat": "RNA", "chatId": "-1002795363765", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 27, "name": "알테오젠", "code": "196170.KQ", "cat": "바이오", "subCat": "플랫폼", "chatId": "-1001808065262", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "박순재, 아일리아, 키트루다, 다이이찌산쿄, 엔허투, 듀피젠트, SC제형, 임핀지"}, {"id": 28, "name": "앱클론", "code": "174900.KQ", "cat": "바이오", "subCat": "신약개발", "chatId": "-1003227779478", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 29, "name": "에스바이오메딕스", "code": "304360.KQ", "cat": "바이오", "subCat": "바이오", "chatId": "@sbiomedicschat", "link": "https://t.me/sbiomedicschat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "김동욱,강세일"}, {"id": 30, "name": "에스티팜", "code": "237690.KQ", "cat": "바이오", "subCat": "RNA", "chatId": "@stpharmchat", "link": "https://t.me/stpharmchat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "성무제, 우시앱텍, 올리고핵산, 생물보안법, 빅타비, 라이텔로, 렉비오, 펠라카르센, 도니달로센, 올레자르센, Ionis Pharmaceuticals"}, {"id": 31, "name": "에스피지", "code": "058610.KQ", "cat": "로봇", "subCat": "감속기", "chatId": "-1002890579146", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 32, "name": "에이비엘바이오", "code": "298380.KQ", "cat": "바이오", "subCat": "플랫폼", "chatId": "-1002296548192", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "이상훈"}, {"id": 33, "name": "에이프릴바이오", "code": "397030.KQ", "cat": "바이오", "subCat": "플랫폼", "chatId": "@aprilbioChat", "link": "https://t.me/aprilbioChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "차상훈"}, {"id": 34, "name": "에이피알", "code": "278470.KS", "cat": "뷰티", "subCat": "미용기기", "chatId": "@aprinChat", "link": "https://t.me/aprinChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "김병훈, 메디큐브, 에이지알"}, {"id": 35, "name": "에임드바이오", "code": "0009K0.KQ", "cat": "바이오", "subCat": "바이오", "chatId": "-1003472834734", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 36, "name": "엔솔바이오사이언스", "code": "140610.KQ", "cat": "바이오", "subCat": "신약개발", "chatId": "-1002294707248", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "엔솔바이오"}, {"id": 37, "name": "엔켐", "code": "348370.KQ", "cat": "2차전지", "subCat": "전해액", "chatId": "-1002756566031", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "전해액, 리튬염"}, {"id": 38, "name": "엘앤씨바이오", "code": "290650.KQ", "cat": "뷰티", "subCat": "필러,톡신", "chatId": "-1002746181151", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "강국진, 척추임플란트"}, {"id": 39, "name": "엘앤에프", "code": "066970.KS", "cat": "2차전지", "subCat": "테슬라", "chatId": "-1002742139795", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "LFP, 양극재"}, {"id": 40, "name": "엘앤케이바이오", "code": "156100.KQ", "cat": "바이오", "subCat": "기기/진단", "chatId": "-1001723698670", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "강국진, 척추임플란트"}, {"id": 41, "name": "오가노이드사이언스", "code": "476040.KQ", "cat": "바이오", "subCat": "오가노이드", "chatId": "-1003659013565", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 42, "name": "오름테라퓨틱", "code": "475830.KQ", "cat": "바이오", "subCat": "플랫폼", "chatId": "@orumChat", "link": "https://t.me/orumChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "이승주"}, {"id": 43, "name": "오스코텍", "code": "039200.KQ", "cat": "바이오", "subCat": "신약개발", "chatId": "-1002706197504", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 44, "name": "올릭스", "code": "226950.KQ", "cat": "바이오", "subCat": "RNA", "chatId": "@OlixChat", "link": "https://t.me/OlixChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 45, "name": "유일로보틱스", "code": "388720.KQ", "cat": "로봇", "subCat": "협동로봇", "chatId": "-1002801059751", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 46, "name": "이수스페셜티케미컬", "code": "457190.KS", "cat": "2차전지", "subCat": "전고체", "chatId": "-1002549002071", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "전고체"}, {"id": 47, "name": "이오플로우", "code": "294090.KQ", "cat": "바이오", "subCat": "기기/진단", "chatId": "-1001722507088", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "김재진, 인슐렛"}, {"id": 48, "name": "인벤티지랩", "code": "389470.KQ", "cat": "바이오", "subCat": "비만", "chatId": "@InventagelabChat", "link": "https://t.me/InventagelabChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "김주희"}, {"id": 49, "name": "인투셀", "code": "287840.KQ", "cat": "바이오", "subCat": "바이오", "chatId": "-1003206880006", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 50, "name": "젬백스", "code": "082270.KQ", "cat": "바이오", "subCat": "신약개발", "chatId": "@GemvaxChat", "link": "https://t.me/GemvaxChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "이석준"}, {"id": 51, "name": "지노믹트리", "code": "228760.KQ", "cat": "바이오", "subCat": "기기/진단", "chatId": "-1002346753518", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 52, "name": "지아이이노베이션", "code": "358570.KQ", "cat": "바이오", "subCat": "바이오", "chatId": "@GIInnovationChat", "link": "https://t.me/GIInnovationChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "이병건"}, {"id": 53, "name": "지투지바이오", "code": "456160.KQ", "cat": "바이오", "subCat": "비만", "chatId": "-1002957160271", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 54, "name": "케어젠", "code": "214370.KQ", "cat": "바이오", "subCat": "바이오", "chatId": "@caregenChat", "link": "https://t.me/caregenChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "정용지"}, {"id": 55, "name": "코아스템켐온", "code": "166480.KQ", "cat": "바이오", "subCat": "신약개발", "chatId": "@corestemChat", "link": "https://t.me/corestemChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "양길안"}, {"id": 56, "name": "코오롱티슈진", "code": "950160.KQ", "cat": "바이오", "subCat": "신약개발", "chatId": "-1002762741821", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 57, "name": "큐리언트", "code": "115180.KQ", "cat": "바이오", "subCat": "신약개발", "chatId": "-1003381168193", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 58, "name": "큐리옥스바이오시스템즈", "code": "445680.KQ", "cat": "바이오", "subCat": "기기/진단", "chatId": "-1002243373887", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "김남용, 큐리옥스"}, {"id": 59, "name": "토모큐브", "code": "475960.KQ", "cat": "바이오", "subCat": "오가노이드", "chatId": "-1002560532353", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 60, "name": "파마리서치", "code": "214450.KQ", "cat": "뷰티", "subCat": "필러,톡신", "chatId": "@pharmaresearchChat", "link": "https://t.me/pharmaresearchChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "김정숙, 리주란"}, {"id": 61, "name": "펩트론", "code": "087010.KQ", "cat": "바이오", "subCat": "비만", "chatId": "-1002164132368", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "최호일, 티르제파타이드, 레타트루타이드, 젭바운드, 마운자로, Glp1, Glp-1, 비만치료제, 일라이 릴리, 노보노디스크"}, {"id": 62, "name": "퓨쳐켐", "code": "220100.KQ", "cat": "바이오", "subCat": "방사성의약품", "chatId": "-1002734365881", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "플루빅토, 방사성의약품"}, {"id": 63, "name": "프로티나", "code": "468530.KQ", "cat": "바이오", "subCat": "의료AI", "chatId": "-1003132864073", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 64, "name": "하나머티리얼즈", "code": "166090.KQ", "cat": "반도체", "subCat": "파츠/쿼츠", "chatId": "-1003041171034", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 65, "name": "한미약품", "code": "128940.KS", "cat": "바이오", "subCat": "비만", "chatId": "-1003266864087", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": ""}, {"id": 66, "name": "한올바이오파마", "code": "009420.KS", "cat": "바이오", "subCat": "신약개발", "chatId": "@hanallChat", "link": "https://t.me/hanallChat", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "정승원, 박수진"}, {"id": 67, "name": "한화솔루션", "code": "009830.KS", "cat": "신재생", "subCat": "태양광", "chatId": "-1002653352818", "link": "", "members": 0, "max": 1000, "status": "open", "pinned": false, "created": "2024-01-01", "keywords": "태양광"}];
+}
+
+function save() {
+  localStorage.setItem('tg_rooms', JSON.stringify(STATE.rooms));
+  localStorage.setItem('tg_notice_history', JSON.stringify(STATE.noticeHistory));
+  if (STATE.token) localStorage.setItem('tg_bot_token', STATE.token);
+  document.getElementById('rooms-badge').textContent = STATE.rooms.length;
+}
+
+// ════════════════════════════════════════════════
+//  TELEGRAM API
+// ════════════════════════════════════════════════
+const API = 'https://api.telegram.org/bot';
+
+async function tgCall(method, params = {}) {
+  if (!STATE.token) throw new Error('Bot 토큰이 없습니다. 설정 페이지에서 입력해주세요.');
+  const url = `${API}${STATE.token}/${method}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.description || '오류가 발생했습니다.');
+  return data.result;
+}
+
+async function getChatMemberCount(chatId) {
+  if (!chatId) return null;
+  try {
+    const count = await tgCall('getChatMemberCount', { chat_id: chatId });
+    return count;
+  } catch { return null; }
+}
+
+async function getChatAdmins(chatId) {
+  if (!chatId) return [];
+  try {
+    return await tgCall('getChatAdministrators', { chat_id: chatId });
+  } catch { return []; }
+}
+
+async function sendMessage(chatId, text) {
+  return tgCall('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML' });
+}
+
+async function getBotInfo() {
+  return tgCall('getMe');
+}
+
+// ════════════════════════════════════════════════
+//  SYNC
+// ════════════════════════════════════════════════
+async function syncAll() {
+  if (!STATE.token) { toast('Bot 토큰을 먼저 설정해주세요.', 'error'); navigate('settings'); return; }
+  const btn = document.getElementById('sync-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading"></span>동기화 중...';
+
+  const withId = STATE.rooms.filter(r => r.chatId);
+  let updated = 0;
+
+  for (const room of withId) {
+    const count = await getChatMemberCount(room.chatId);
+    if (count !== null) { room.members = count; updated++; }
+  }
+
+  save();
+  renderPage();
+  btn.disabled = false;
+  btn.innerHTML = `<svg style="width:13px;height:13px;vertical-align:middle;margin-right:4px;" viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>멤버 수 동기화`;
+  toast(`${updated}개 채팅방 멤버 수 업데이트 완료`, 'success');
+}
+
+// ════════════════════════════════════════════════
+//  NAVIGATION
+// ════════════════════════════════════════════════
+function navigate(page) {
+  STATE.currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+  const titles = { overview:'전체 현황', rooms:'채팅방 관리', notice:'전체 공지', members:'멤버 조회', settings:'설정 / Bot 연동' };
+  document.getElementById('page-title').textContent = titles[page] || '';
+  renderPage();
+}
+
+function renderPage() {
+  const el = document.getElementById('main-content');
+  const pages = { overview: renderOverview, rooms: renderRooms, notice: renderNotice, members: renderMembers, settings: renderSettings };
+  el.innerHTML = (pages[STATE.currentPage] || renderOverview)();
+  if (STATE.currentPage === 'settings') initSettings();
+  if (STATE.currentPage === 'notice') initNoticePreview();
+}
+
+// ════════════════════════════════════════════════
+//  PAGES
+// ════════════════════════════════════════════════
+function renderOverview() {
+  const total = STATE.rooms.length;
+  const full = STATE.rooms.filter(r => r.status === 'full').length;
+  const open = STATE.rooms.filter(r => r.status === 'open').length;
+  const totalM = STATE.rooms.reduce((s, r) => s + (r.members || 0), 0);
+  const withId = STATE.rooms.filter(r => r.chatId).length;
+
+  const catCounts = {};
+  const catMembers = {};
+  STATE.rooms.forEach(r => {
+    catCounts[r.cat] = (catCounts[r.cat] || 0) + 1;
+    catMembers[r.cat] = (catMembers[r.cat] || 0) + (r.members || 0);
+  });
+  const top5 = [...STATE.rooms].sort((a, b) => b.members - a.members).slice(0, 5);
+
+  return `
+  ${!STATE.token ? `
+  <div class="setup-card">
+    <h3>🔑 Bot 토큰 설정 필요</h3>
+    <p>실시간 멤버 수 동기화 및 공지 발송을 사용하려면 텔레그램 Bot 토큰을 입력해주세요.<br>Bot을 각 채팅방의 <strong>관리자</strong>로 추가해야 합니다.</p>
+    <div class="token-input-row">
+      <input class="token-input" id="quick-token" placeholder="123456789:ABCdefGhIJKlmNOPqrstUVWXyz" value="${STATE.token}">
+      <button class="btn btn-primary" onclick="saveQuickToken()">저장 및 연결</button>
+    </div>
+  </div>` : ''}
+
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-label">전체 채팅방</div>
+      <div class="metric-value">${total}</div>
+      <div class="metric-sub">Chat ID 등록: ${withId}개</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">전체 멤버 합계</div>
+      <div class="metric-value">${totalM.toLocaleString()}</div>
+      <div class="metric-sub">동기화된 방 기준</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">정원 마감</div>
+      <div class="metric-value" style="color:var(--red);">${full}</div>
+      <div class="metric-sub">전체의 ${Math.round(full/total*100)}%</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">입장 가능</div>
+      <div class="metric-value" style="color:var(--green);">${open}</div>
+      <div class="metric-sub">전체의 ${Math.round(open/total*100)}%</div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+    <div class="card">
+      <div class="card-header"><span class="card-title">산업별 현황</span></div>
+      <div class="card-body" style="padding:0.75rem 1rem;">
+        ${Object.entries(catCounts).map(([cat, cnt]) => `
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;">
+            <span class="cat-dot" style="background:${CATS[cat]||'#888'};"></span>
+            <span style="flex:1;">${cat}</span>
+            <span style="color:var(--text2);font-size:12px;">${cnt}개 방</span>
+            <span style="color:var(--text3);font-size:12px;">${(catMembers[cat]||0).toLocaleString()}명</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">멤버 많은 채팅방 Top 5</span></div>
+      <div class="card-body" style="padding:0.75rem 1rem;">
+        ${top5.map((r, i) => `
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px;">
+            <span style="width:16px;color:var(--text3);font-size:11px;font-weight:600;">${i+1}</span>
+            <span style="flex:1;">${r.name}</span>
+            <span style="color:var(--text2);font-size:12px;">${(r.members||0).toLocaleString()}</span>
+            <div style="width:50px;"><div class="progress"><div class="progress-fill" style="background:${CATS[r.cat]||'#888'};width:${r.max?Math.min(100,Math.round((r.members||0)/r.max*100)):30}%"></div></div></div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderRooms() {
+  const cats = [...new Set(STATE.rooms.map(r => r.cat))];
+  const filtered = STATE.rooms.filter(r => {
+    const catOk = STATE.filterCat === 'all' || r.cat === STATE.filterCat;
+    const stOk = STATE.filterStatus === 'all' || r.status === STATE.filterStatus;
+    const q = STATE.searchQ.toLowerCase();
+    return catOk && stOk && (!q || r.name.toLowerCase().includes(q) || r.cat.toLowerCase().includes(q));
+  });
+
+  return `
+  <div class="filter-bar">
+    <input class="search-box" placeholder="채팅방 검색..." value="${STATE.searchQ}" oninput="STATE.searchQ=this.value;renderPage();">
+    <button class="chip ${STATE.filterStatus==='all'?'active':''}" onclick="STATE.filterStatus='all';renderPage();">전체</button>
+    <button class="chip ${STATE.filterStatus==='open'?'active':''}" onclick="STATE.filterStatus='open';renderPage();">입장 가능</button>
+    <button class="chip ${STATE.filterStatus==='full'?'active':''}" onclick="STATE.filterStatus='full';renderPage();">정원 마감</button>
+    <span style="width:1px;height:14px;background:var(--border2);margin:0 2px;"></span>
+    <button class="chip ${STATE.filterCat==='all'?'active':''}" onclick="STATE.filterCat='all';renderPage();">전체 산업</button>
+    ${cats.map(c => `<button class="chip ${STATE.filterCat===c?'active':''}" onclick="STATE.filterCat='${c}';renderPage();">${c}</button>`).join('')}
+  </div>
+  <div style="font-size:12px;color:var(--text3);margin-bottom:0.75rem;">${filtered.length}개 채팅방</div>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>채팅방</th>
+            <th>산업</th>
+            <th>멤버 수</th>
+            <th>상태</th>
+            <th>Chat ID</th>
+            <th>관리</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filtered.map(r => `
+            <tr>
+              <td>
+                <div class="flex gap-1">
+                  <span class="cat-dot" style="background:${CATS[r.cat]||'#888'};"></span>
+                  <span style="font-weight:500;">${r.name}</span>
+                  ${r.pinned ? '<span style="font-size:10px;color:var(--tg);margin-left:2px;">★</span>' : ''}
+                </div>
+              </td>
+              <td><div><span class="badge badge-cat">${r.cat}</span></div>
+              <div style="font-size:11px;color:var(--text3);margin-top:2px;">${r.subCat}</div></td>
+              <td>
+                <div style="font-size:13px;">${(r.members||0).toLocaleString()}${r.max?'<span style="color:var(--text3);">/'+r.max.toLocaleString()+'</span>':''}</div>
+                ${r.max ? `<div class="progress" style="width:55px;margin-top:4px;"><div class="progress-fill" style="background:${(r.members||0)/r.max>0.9?'var(--red)':'var(--tg)'};width:${Math.min(100,Math.round((r.members||0)/r.max*100))}%"></div></div>` : ''}
+              </td>
+              <td><span class="badge ${r.status==='full'?'badge-full':'badge-open'}">${r.status==='full'?'정원 마감':'입장 가능'}</span></td>
+              <td><span style="font-size:11px;color:${r.chatId?'var(--green)':'var(--text3)'};">${r.chatId||'미등록'}</span></td>
+              <td>
+                <div class="flex gap-1">
+                  <button class="btn btn-sm" onclick="openDetail(${r.id})">상세</button>
+                  <button class="btn btn-sm" onclick="syncOne(${r.id})" title="멤버 수 동기화">↻</button>
+                  <button class="btn btn-sm ${r.status==='full'?'btn-success':'btn-danger'}" onclick="toggleStatus(${r.id})">${r.status==='full'?'개방':'마감'}</button>
+                </div>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function renderNotice() {
+  return `
+  <div class="card" style="margin-bottom:1rem;">
+    <div class="card-header"><span class="card-title">새 공지 작성</span></div>
+    <div class="card-body">
+      <div class="form-group">
+        <label class="form-label">발송 대상</label>
+        <select class="form-select" id="inline-target" style="max-width:300px;">
+          <option value="all">전체 채팅방 (${STATE.rooms.length}개)</option>
+          <option value="open">입장 가능한 방만</option>
+          <option value="바이오">바이오만</option>
+          <option value="뷰티">뷰티만</option>
+          <option value="로봇">로봇만</option>
+          <option value="2차전지">2차전지만</option>
+          <option value="테크">테크만</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">공지 내용</label>
+        <textarea class="form-input" id="inline-content" rows="5" oninput="updateInlinePreview()" placeholder="공지 내용을 입력하세요.&#10;&#10;HTML 태그 지원: &lt;b&gt;굵게&lt;/b&gt;, &lt;i&gt;기울임&lt;/i&gt;, &lt;code&gt;코드&lt;/code&gt;, &lt;a href='...'&gt;링크&lt;/a&gt;"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">미리보기 (텔레그램 렌더링)</label>
+        <div id="inline-preview" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;min-height:40px;color:var(--text2);"></div>
+      </div>
+      <div id="inline-progress" class="hidden" style="font-size:12px;color:var(--text2);padding:8px;background:var(--bg3);border-radius:var(--radius-sm);margin-bottom:0.75rem;"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn" onclick="document.getElementById('inline-content').value='';updateInlinePreview();">초기화</button>
+        <button class="btn btn-primary" id="inline-send-btn" onclick="sendInlineNotice()">발송하기</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-header"><span class="section-title">발송 기록</span></div>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>발송 시각</th><th>대상</th><th>내용 요약</th><th>발송 수</th><th>성공</th></tr>
+        </thead>
+        <tbody>
+          ${STATE.noticeHistory.length === 0 ? '<tr><td colspan="5" class="loading-row">발송 기록 없음</td></tr>' :
+            STATE.noticeHistory.slice().reverse().map(h => `
+              <tr>
+                <td class="text-sm text-muted">${h.date}</td>
+                <td><span class="badge badge-cat">${h.target}</span></td>
+                <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${h.content.replace(/<[^>]+>/g,'').slice(0,40)}...</td>
+                <td>${h.sent}</td>
+                <td style="color:var(--green);">${h.success}</td>
+              </tr>
+            `).join('')
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function renderMembers() {
+  const withId = STATE.rooms.filter(r => r.chatId);
+  return `
+  <div class="setup-card" style="${STATE.token?'display:none':''}">
+    <h3>Bot 토큰 필요</h3>
+    <p>멤버 조회는 Bot 토큰 설정 후 사용 가능합니다.</p>
+  </div>
+  <div style="font-size:13px;color:var(--text2);margin-bottom:1rem;">Chat ID가 등록된 ${withId.length}개 채팅방의 관리자 목록을 조회할 수 있습니다.</div>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>채팅방</th><th>Chat ID</th><th>멤버 수</th><th>관리자 조회</th></tr></thead>
+        <tbody id="members-table-body">
+          ${withId.map(r => `
+            <tr id="member-row-${r.id}">
+              <td><div class="flex gap-1"><span class="cat-dot" style="background:${CATS[r.cat]||'#888'};"></span>${r.name}</div></td>
+              <td class="text-sm text-muted">${r.chatId}</td>
+              <td>${(r.members||0).toLocaleString()}</td>
+              <td><button class="btn btn-sm" onclick="fetchAdmins(${r.id})">관리자 조회</button></td>
+            </tr>
+            <tr id="admin-row-${r.id}" class="hidden">
+              <td colspan="4" style="padding:8px 12px 12px 28px;background:var(--bg3);" id="admin-content-${r.id}"></td>
+            </tr>
+          `).join('')}
+          ${withId.length===0?'<tr><td colspan="4" class="loading-row">Chat ID가 등록된 채팅방이 없습니다.</td></tr>':''}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function renderSettings() {
+  return `
+  <div class="card" style="max-width:560px;">
+    <div class="card-header"><span class="card-title">Bot 연동 설정</span></div>
+    <div class="card-body">
+      <div class="form-group">
+        <label class="form-label">Bot 토큰</label>
+        <input class="form-input" id="settings-token" type="password" placeholder="123456789:ABCdefGhIJKlmNOPqrstUVWXyz" value="${STATE.token}" autocomplete="off">
+        <div class="form-hint">@BotFather에서 발급받은 토큰을 입력하세요. 브라우저 localStorage에만 저장됩니다.</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:0.5rem;">
+        <button class="btn btn-primary" onclick="saveToken()">저장</button>
+        <button class="btn" onclick="testToken()">연결 테스트</button>
+        <button class="btn btn-danger" onclick="clearToken()">토큰 삭제</button>
+      </div>
+      <div id="token-test-result" style="margin-top:0.75rem;font-size:13px;"></div>
+    </div>
+  </div>
+
+  <div class="card" style="max-width:560px;">
+    <div class="card-header"><span class="card-title">채팅방 데이터 관리</span></div>
+    <div class="card-body">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:1rem;">채팅방 목록은 브라우저 localStorage에 저장됩니다.</p>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="exportData()">데이터 내보내기 (JSON)</button>
+        <button class="btn" onclick="document.getElementById('import-file').click()">데이터 불러오기</button>
+        <input type="file" id="import-file" accept=".json" class="hidden" onchange="importData(event)">
+        <button class="btn btn-danger" onclick="resetData()">초기화</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="max-width:560px;">
+    <div class="card-header"><span class="card-title">Bot 설정 가이드</span></div>
+    <div class="card-body" style="font-size:13px;color:var(--text2);line-height:1.9;">
+      <p style="margin-bottom:0.75rem;"><strong style="color:var(--text);">1. Bot 생성</strong></p>
+      <p>텔레그램에서 <a href="https://t.me/BotFather" target="_blank">@BotFather</a>에게 <code style="background:var(--bg3);padding:1px 5px;border-radius:3px;">/newbot</code> 명령 → 이름 설정 → 토큰 발급</p>
+      <p style="margin:0.75rem 0;"><strong style="color:var(--text);">2. 각 채팅방에 Bot 추가</strong></p>
+      <p>각 채팅방 → 멤버 추가 → Bot 검색 → 관리자 권한 부여 (멤버 수 조회, 메시지 발송 권한)</p>
+      <p style="margin:0.75rem 0;"><strong style="color:var(--text);">3. Chat ID 등록</strong></p>
+      <p>공개 채널: <code style="background:var(--bg3);padding:1px 5px;border-radius:3px;">@채널명</code> 형식<br>비공개 그룹: Bot이 참여 후 <a href="https://api.telegram.org/bot토큰/getUpdates" target="_blank">getUpdates API</a>로 확인 (<code style="background:var(--bg3);padding:1px 5px;border-radius:3px;">-100xxxxxxxxxx</code> 형식)</p>
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════════════
+//  ACTIONS
+// ════════════════════════════════════════════════
+function saveQuickToken() {
+  const val = document.getElementById('quick-token')?.value.trim();
+  if (val) { STATE.token = val; save(); updateBotStatus(); toast('토큰 저장됨. 동기화 버튼을 눌러주세요.', 'success'); renderPage(); }
+}
+
+async function saveToken() {
+  const val = document.getElementById('settings-token')?.value.trim();
+  if (!val) { toast('토큰을 입력해주세요.', 'error'); return; }
+  STATE.token = val;
+  save();
+  updateBotStatus();
+  toast('저장되었습니다.', 'success');
+}
+
+async function testToken() {
+  const el = document.getElementById('token-test-result');
+  if (!STATE.token) { el.innerHTML = '<span style="color:var(--red);">토큰을 먼저 저장해주세요.</span>'; return; }
+  el.innerHTML = '<span class="loading"></span>확인 중...';
+  try {
+    const bot = await getBotInfo();
+    el.innerHTML = `<span style="color:var(--green);">✓ 연결 성공 — @${bot.username} (${bot.first_name})</span>`;
+    updateBotStatus(bot.username);
+  } catch(e) {
+    el.innerHTML = `<span style="color:var(--red);">✗ 연결 실패: ${e.message}</span>`;
+  }
+}
+
+function clearToken() {
+  if (!confirm('토큰을 삭제할까요?')) return;
+  STATE.token = '';
+  localStorage.removeItem('tg_bot_token');
+  updateBotStatus();
+  renderPage();
+  toast('토큰이 삭제되었습니다.', 'info');
+}
+
+function updateBotStatus(username) {
+  const el = document.getElementById('bot-status');
+  if (STATE.token && username) {
+    el.innerHTML = `<span class="dot dot-green"></span> @${username} 연결됨`;
+  } else if (STATE.token) {
+    el.innerHTML = `<span class="dot" style="background:var(--yellow);"></span> 토큰 설정됨`;
+  } else {
+    el.innerHTML = `<span class="dot dot-gray"></span> Bot 미연결`;
+  }
+}
+
+function addRoom() {
+  const name = document.getElementById('new-name').value.trim();
+  if (!name) { toast('채팅방 이름을 입력해주세요.', 'error'); return; }
+  const newId = Math.max(...STATE.rooms.map(r => r.id), 0) + 1;
+  STATE.rooms.push({
+    id: newId, name,
+    cat: document.getElementById('new-cat').value,
+    members: 0,
+    max: parseInt(document.getElementById('new-max').value) || 1000,
+    status: 'open',
+    chatId: document.getElementById('new-chatid').value.trim(),
+    link: document.getElementById('new-link').value.trim(),
+    pinned: false,
+    created: new Date().toISOString().slice(0, 10),
+  });
+  save();
+  closeModal('add-room-modal');
+  renderPage();
+  toast(`${name} 채팅방이 추가되었습니다.`, 'success');
+}
+
+function toggleStatus(id) {
+  const r = STATE.rooms.find(r => r.id === id);
+  if (r) { r.status = r.status === 'full' ? 'open' : 'full'; save(); renderPage(); }
+}
+
+async function syncOne(id) {
+  if (!STATE.token) { toast('Bot 토큰을 먼저 설정해주세요.', 'error'); return; }
+  const r = STATE.rooms.find(r => r.id === id);
+  if (!r || !r.chatId) { toast('Chat ID가 등록되지 않았습니다.', 'error'); return; }
+  const count = await getChatMemberCount(r.chatId);
+  if (count !== null) { r.members = count; save(); renderPage(); toast(`${r.name}: ${count.toLocaleString()}명`, 'success'); }
+  else toast('멤버 수 조회 실패. Chat ID를 확인해주세요.', 'error');
+}
+
+async function fetchAdmins(id) {
+  const r = STATE.rooms.find(r => r.id === id);
+  if (!r) return;
+  const row = document.getElementById(`admin-row-${r.id}`);
+  const content = document.getElementById(`admin-content-${r.id}`);
+  if (!row.classList.contains('hidden')) { row.classList.add('hidden'); return; }
+  content.innerHTML = '<span class="loading"></span>조회 중...';
+  row.classList.remove('hidden');
+  const admins = await getChatAdmins(r.chatId);
+  if (admins.length === 0) { content.innerHTML = '<span style="color:var(--text3);">관리자 정보를 불러올 수 없습니다.</span>'; return; }
+  content.innerHTML = admins.map(a => `
+    <span style="display:inline-flex;align-items:center;gap:5px;margin:3px 6px 3px 0;font-size:12px;background:var(--bg2);padding:3px 8px;border-radius:100px;border:1px solid var(--border);">
+      <span class="dot" style="background:${a.status==='creator'?'var(--yellow)':'var(--tg)'};"></span>
+      ${a.user.first_name}${a.user.username?` @${a.user.username}`:''}
+      <span style="color:var(--text3);">${a.status==='creator'?'채널주':'관리자'}</span>
+    </span>
+  `).join('');
+}
+
+// Notice
+function initNoticePreview() {
+  const ta = document.getElementById('notice-content');
+  if (ta) ta.addEventListener('input', () => {
+    const preview = document.getElementById('notice-preview');
+    if (preview) preview.innerHTML = ta.value || '<span style="color:var(--text3);">미리보기</span>';
+  });
+}
+
+function updateInlinePreview() {
+  const ta = document.getElementById('inline-content');
+  const preview = document.getElementById('inline-preview');
+  if (ta && preview) preview.innerHTML = ta.value || '<span style="color:var(--text3);">미리보기</span>';
+}
+
+async function doSendNotice(content, targetValue, progressEl, btnEl) {
+  if (!STATE.token) { toast('Bot 토큰을 먼저 설정해주세요.', 'error'); return; }
+  if (!content.trim()) { toast('공지 내용을 입력해주세요.', 'error'); return; }
+
+  let targets = STATE.rooms.filter(r => r.chatId);
+  if (targetValue === 'open') targets = targets.filter(r => r.status === 'open');
+  else if (targetValue !== 'all') targets = targets.filter(r => r.cat === targetValue);
+
+  if (targets.length === 0) { toast('발송 가능한 채팅방이 없습니다. Chat ID를 등록해주세요.', 'error'); return; }
+  if (!confirm(`${targets.length}개 채팅방에 공지를 발송할까요?`)) return;
+
+  btnEl.disabled = true;
+  let success = 0;
+  const total = targets.length;
+
+  for (let i = 0; i < targets.length; i++) {
+    const r = targets[i];
+    progressEl.classList.remove('hidden');
+    progressEl.innerHTML = `<span class="loading"></span>${i+1}/${total} — ${r.name} 발송 중...`;
+    try {
+      await sendMessage(r.chatId, content);
+      success++;
+    } catch {}
+    await new Promise(res => setTimeout(res, 300)); // rate limit
+  }
+
+  STATE.noticeHistory.push({
+    date: new Date().toLocaleString('ko-KR'),
+    target: targetValue === 'all' ? '전체' : targetValue,
+    content, sent: total, success,
+  });
+  save();
+  progressEl.innerHTML = `✓ 완료: ${success}/${total}개 성공`;
+  btnEl.disabled = false;
+  toast(`공지 발송 완료: ${success}/${total}`, success === total ? 'success' : 'info');
+  setTimeout(() => progressEl.classList.add('hidden'), 4000);
+}
+
+function sendNotice() {
+  const content = document.getElementById('notice-content').value;
+  const target = document.getElementById('notice-target').value;
+  doSendNotice(content, target, document.getElementById('notice-progress'), document.getElementById('send-notice-btn'));
+}
+
+function sendInlineNotice() {
+  const content = document.getElementById('inline-content').value;
+  const target = document.getElementById('inline-target').value;
+  doSendNotice(content, target, document.getElementById('inline-progress'), document.getElementById('inline-send-btn'));
+}
+
+// Detail Modal
+function openDetail(id) {
+  const r = STATE.rooms.find(r => r.id === id);
+  if (!r) return;
+  STATE.currentDetailRoom = r;
+  document.getElementById('detail-modal-title').textContent = r.name;
+  document.getElementById('detail-tg-btn').onclick = () => window.open(r.link || '#', '_blank');
+  switchDetailTab('info', document.querySelector('#room-detail-modal .tab'));
+  openModal('room-detail-modal');
+}
+
+function switchDetailTab(tab, el) {
+  document.querySelectorAll('#room-detail-modal .tab').forEach(t => t.classList.remove('active'));
+  if (el) el.classList.add('active');
+  const r = STATE.currentDetailRoom;
+  if (!r) return;
+  const body = document.getElementById('detail-body');
+  if (tab === 'info') {
+    body.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:2px;">
+        ${[
+          ['이름', r.name], ['산업', r.cat],
+          ['멤버 수', `${(r.members||0).toLocaleString()}${r.max?' / '+r.max.toLocaleString():''}`],
+          ['상태', r.status==='full'?'<span class="badge badge-full">정원 마감</span>':'<span class="badge badge-open">입장 가능</span>'],
+          ['Chat ID', r.chatId || '<span style="color:var(--text3);">미등록</span>'],
+          ['초대 링크', r.link ? `<a href="${r.link}" target="_blank">${r.link.slice(0,45)}</a>` : '-'],
+          ['개설일', r.created],
+        ].map(([k,v]) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">
+            <span style="color:var(--text2);">${k}</span>
+            <span>${v}</span>
+          </div>
+        `).join('')}
+        <div style="margin-top:1rem;display:flex;gap:8px;">
+          <button class="btn btn-sm" onclick="syncOne(${r.id});closeModal('room-detail-modal');">멤버 수 동기화</button>
+          <button class="btn btn-sm ${r.status==='full'?'btn-success':'btn-danger'}" onclick="toggleStatus(${r.id});openDetail(${r.id});">${r.status==='full'?'개방하기':'마감하기'}</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteRoom(${r.id})">삭제</button>
+        </div>
+      </div>`;
+  } else if (tab === 'admins') {
+    body.innerHTML = `<button class="btn btn-primary" onclick="fetchAdminsModal(${r.id})">관리자 목록 불러오기</button><div id="modal-admin-list" style="margin-top:1rem;"></div>`;
+  } else {
+    body.innerHTML = `
+      <div class="form-group">
+        <label class="form-label">이 채팅방에만 공지 발송</label>
+        <textarea class="form-input" id="single-notice-content" rows="4" placeholder="공지 내용..."></textarea>
+      </div>
+      <button class="btn btn-primary" onclick="sendSingleNotice(${r.id})">발송하기</button>`;
+  }
+}
+
+async function fetchAdminsModal(id) {
+  const r = STATE.rooms.find(r => r.id === id);
+  if (!r || !r.chatId) { document.getElementById('modal-admin-list').innerHTML = '<span style="color:var(--red);">Chat ID가 등록되지 않았습니다.</span>'; return; }
+  const el = document.getElementById('modal-admin-list');
+  el.innerHTML = '<span class="loading"></span>조회 중...';
+  const admins = await getChatAdmins(r.chatId);
+  if (!admins.length) { el.innerHTML = '<span style="color:var(--text3);">불러오기 실패</span>'; return; }
+  el.innerHTML = admins.map(a => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <div class="avatar" style="background:${a.status==='creator'?'rgba(251,99,64,0.2)':'rgba(42,171,238,0.15)'};color:${a.status==='creator'?'var(--yellow)':'var(--tg)'};">${(a.user.first_name||'?').slice(0,2)}</div>
+      <div>
+        <div>${a.user.first_name} ${a.user.last_name||''}</div>
+        <div style="font-size:11px;color:var(--text3);">${a.user.username?'@'+a.user.username:''} · ${a.status==='creator'?'채널주':'관리자'}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function sendSingleNotice(id) {
+  const r = STATE.rooms.find(r => r.id === id);
+  if (!r || !r.chatId) { toast('Chat ID가 등록되지 않았습니다.', 'error'); return; }
+  const content = document.getElementById('single-notice-content').value;
+  if (!content.trim()) { toast('내용을 입력해주세요.', 'error'); return; }
+  try {
+    await sendMessage(r.chatId, content);
+    toast(`${r.name}에 공지 발송 완료`, 'success');
+    STATE.noticeHistory.push({ date: new Date().toLocaleString('ko-KR'), target: r.name, content, sent: 1, success: 1 });
+    save();
+  } catch(e) { toast('발송 실패: ' + e.message, 'error'); }
+}
+
+function deleteRoom(id) {
+  const r = STATE.rooms.find(r => r.id === id);
+  if (!r || !confirm(`"${r.name}" 채팅방을 삭제할까요?`)) return;
+  STATE.rooms = STATE.rooms.filter(r => r.id !== id);
+  save();
+  closeModal('room-detail-modal');
+  renderPage();
+  toast(`${r.name} 삭제됨`, 'info');
+}
+
+// Settings helpers
+function initSettings() {
+  const tokenInput = document.getElementById('settings-token');
+  if (tokenInput) tokenInput.value = STATE.token;
+  if (STATE.token) updateBotStatus();
+}
+
+function exportData() {
+  const blob = new Blob([JSON.stringify({ rooms: STATE.rooms, noticeHistory: STATE.noticeHistory }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `bati-rooms-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+}
+
+function importData(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (data.rooms) { STATE.rooms = data.rooms; save(); renderPage(); toast('데이터 불러오기 완료', 'success'); }
+    } catch { toast('파일 형식이 올바르지 않습니다.', 'error'); }
+  };
+  reader.readAsText(file);
+}
+
+function resetData() {
+  if (!confirm('모든 채팅방 데이터를 초기화할까요?')) return;
+  STATE.rooms = getDefaultRooms();
+  STATE.noticeHistory = [];
+  save();
+  renderPage();
+  toast('초기화 완료', 'info');
+}
+
+// ════════════════════════════════════════════════
+//  MODAL / UI HELPERS
+// ════════════════════════════════════════════════
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+  if (id === 'notice-modal') setTimeout(initNoticePreview, 50);
+}
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('open'); });
+});
+
+function toast(msg, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = `<span>${msg}</span>`;
+  container.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+// ════════════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════════════
+save();
+navigate('overview');
+if (STATE.token) updateBotStatus();
+</script>
+</body>
+</html>
