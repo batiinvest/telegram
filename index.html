@@ -351,10 +351,19 @@ textarea.form-input { resize:vertical; min-height:100px; }
 //  (이 두 값은 공개 키라 노출되어도 괜찮습니다.
 //   실제 보안은 RLS 정책이 담당합니다)
 // ══════════════════════════════════════════
-const SB_URL = 'https://ngyzcpogfxbkoqkcfipv.supabase.co';   // ← 교체
-const SB_KEY = 'sb_publishable_Z1NulIB63zzJABeC4eWLFw_UOyXCosq';               // ← 교체
+const SB_URL = 'https://YOUR_PROJECT.supabase.co';   // ← 교체
+const SB_KEY = 'YOUR_ANON_PUBLIC_KEY';               // ← 교체
 
-const sb  = supabase.createClient(SB_URL, SB_KEY);
+const sb = supabase.createClient(SB_URL, SB_KEY, {
+  auth: {
+    storageKey: 'bati-dashboard-auth',
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: false,
+    flowType: 'implicit',
+    lock: async (name, acquireTimeout, fn) => fn(),
+  }
+});
 const DB  = sb.from.bind(sb);
 const CATS = { '바이오':'#2AABEE','뷰티':'#f5365c','로봇':'#2dce89','2차전지':'#fb6340','신재생':'#5e72e4','소비재':'#f3a4b5','테크':'#a259ff','반도체':'#8898aa','엔터':'#ffd600','조선':'#11cdef','우주':'#4a6fa5' };
 
@@ -464,38 +473,37 @@ async function doLogout() {
 function showLogin()  { document.getElementById('login-form').classList.remove('hidden'); document.getElementById('signup-form').classList.add('hidden'); }
 function showSignup() { document.getElementById('login-form').classList.add('hidden'); document.getElementById('signup-form').classList.remove('hidden'); }
 
-// ── Auth state listener ──
-sb.auth.onAuthStateChange(async (event, session) => {
-  console.log('[auth]', event, session?.user?.email);
-  if (session?.user) {
-    if (A.user?.id === session.user.id) return;
-    A.user = session.user;
-    await loadProfile();
-    await loadConfig();
-    await loadRooms();
-    showDashboard();
-  } else {
+// ── Auth boot: 세션 확인 후 대시보드 또는 로그인 화면 ──
+async function bootAuth() {
+  try {
+    const { data: { session }, error } = await sb.auth.getSession();
+    console.log('[boot]', session?.user?.email, error?.message);
+    if (session?.user) {
+      A.user = session.user;
+      await Promise.all([loadProfile(), loadConfig(), loadRooms()]);
+      showDashboard();
+    } else {
+      showLoginScreen();
+    }
+  } catch(e) {
+    console.error('[boot error]', e);
+    showLoginScreen();
+  }
+}
+
+// ── 로그인/로그아웃 이벤트 감지 ──
+sb.auth.onAuthStateChange((event, session) => {
+  console.log('[auth event]', event, session?.user?.email);
+  if (event === 'SIGNED_IN' && !A.user) {
+    bootAuth();
+  } else if (event === 'SIGNED_OUT') {
     A.user = null; A.profile = null;
     showLoginScreen();
   }
 });
 
-// ── 페이지 로드 시 기존 세션 직접 확인 (Lock 지연 대비) ──
-(async () => {
-  try {
-    const { data: { session } } = await sb.auth.getSession();
-    console.log('[boot session]', session?.user?.email);
-    if (session?.user && !A.user) {
-      A.user = session.user;
-      await loadProfile();
-      await loadConfig();
-      await loadRooms();
-      showDashboard();
-    }
-  } catch(e) {
-    console.warn('[boot session error]', e.message);
-  }
-})();
+// 페이지 로드 시 실행
+bootAuth();
 
 async function loadProfile() {
   const { data } = await DB('app_users').select('*').eq('id', A.user.id).single();
