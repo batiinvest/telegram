@@ -351,8 +351,8 @@ textarea.form-input { resize:vertical; min-height:100px; }
 //  (이 두 값은 공개 키라 노출되어도 괜찮습니다.
 //   실제 보안은 RLS 정책이 담당합니다)
 // ══════════════════════════════════════════
-const SB_URL = 'https://ngyzcpogfxbkoqkcfipv.supabase.co';   // ← 교체
-const SB_KEY = 'sb_publishable_Z1NulIB63zzJABeC4eWLFw_UOyXCosq';               // ← 교체
+const SB_URL = 'https://YOUR_PROJECT.supabase.co';   // ← 교체
+const SB_KEY = 'YOUR_ANON_PUBLIC_KEY';               // ← 교체
 
 const sb  = supabase.createClient(SB_URL, SB_KEY);
 const DB  = sb.from.bind(sb);
@@ -383,10 +383,32 @@ async function doLogin() {
   const btn   = document.getElementById('login-btn');
   const err   = document.getElementById('login-err');
   err.classList.add('hidden');
+
+  if (!email || !pw) {
+    err.textContent = '이메일과 비밀번호를 입력해주세요.';
+    err.classList.remove('hidden'); return;
+  }
+
   btn.disabled = true; btn.textContent = '로그인 중...';
-  const { error } = await sb.auth.signInWithPassword({ email, password: pw });
-  btn.disabled = false; btn.textContent = '로그인';
-  if (error) { err.textContent = error.message; err.classList.remove('hidden'); }
+
+  try {
+    const { data, error } = await sb.auth.signInWithPassword({ email, password: pw });
+    console.log('[login] data:', data, 'error:', error);
+    if (error) throw error;
+  } catch(e) {
+    console.error('[login error]', e);
+    const msg = e.message || JSON.stringify(e);
+    err.textContent = msg.includes('Invalid login')
+      ? '이메일 또는 비밀번호가 올바르지 않습니다.'
+      : msg.includes('Email not confirmed')
+      ? '이메일 인증이 필요합니다. Supabase에서 Confirm email을 OFF로 설정해주세요.'
+      : msg.includes('fetch')
+      ? 'Supabase 연결 실패 — SB_URL, SB_KEY를 확인해주세요.'
+      : msg;
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.textContent = '로그인';
+  }
 }
 
 async function doSignup() {
@@ -395,13 +417,44 @@ async function doSignup() {
   const pw    = document.getElementById('signup-pw').value;
   const btn   = document.getElementById('signup-btn');
   const err   = document.getElementById('signup-err');
+  err.style.color = 'var(--red)';
   err.classList.add('hidden');
-  if (!name || !email || pw.length < 8) { err.textContent = '모든 항목을 입력하세요 (비밀번호 8자 이상)'; err.classList.remove('hidden'); return; }
+
+  if (!name || !email || pw.length < 8) {
+    err.textContent = '모든 항목을 입력하세요 (비밀번호 8자 이상)';
+    err.classList.remove('hidden'); return;
+  }
+
   btn.disabled = true; btn.textContent = '가입 중...';
-  const { error } = await sb.auth.signUp({ email, password: pw, options: { data: { name } } });
-  btn.disabled = false; btn.textContent = '가입하기';
-  if (error) { err.textContent = error.message; err.classList.remove('hidden'); }
-  else { err.style.color = 'var(--green)'; err.textContent = '가입 완료! 이메일을 확인하거나 바로 로그인하세요.'; err.classList.remove('hidden'); }
+
+  try {
+    const { data, error } = await sb.auth.signUp({
+      email, password: pw, options: { data: { name } }
+    });
+    console.log('[signup] data:', data, 'error:', error);
+    if (error) throw error;
+
+    err.style.color = 'var(--green)';
+    err.textContent = '가입 완료! 바로 로그인해주세요.';
+    err.classList.remove('hidden');
+    setTimeout(() => {
+      showLogin();
+      document.getElementById('login-email').value = email;
+    }, 1500);
+  } catch(e) {
+    console.error('[signup error]', e);
+    const msg = e.message || JSON.stringify(e);
+    err.textContent = msg.includes('already registered')
+      ? '이미 가입된 이메일입니다. 로그인을 시도해보세요.'
+      : msg.includes('fetch')
+      ? 'Supabase 연결 실패 — SB_URL, SB_KEY를 확인해주세요.'
+      : msg.includes('Database error')
+      ? 'DB 오류 — Supabase SQL Editor에서 fix_trigger.sql을 실행해주세요.'
+      : msg;
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.textContent = '가입하기';
+  }
 }
 
 async function doLogout() {
