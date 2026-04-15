@@ -237,6 +237,11 @@ textarea.form-input { resize:vertical; min-height:100px; }
         <svg viewBox="0 0 16 16" fill="none"><path d="M2 13L6 8l3 3 5-7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
         동기화 로그
       </div>
+      <div class="nav-sec">자동화</div>
+      <div class="nav-item" data-page="inactive" onclick="go('inactive')">
+        <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="6" r="3" stroke="currentColor" stroke-width="1.3"/><path d="M2 14c0-3.31 2.69-6 6-6s6 2.69 6 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="12" y1="2" x2="14" y2="4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><line x1="14" y1="2" x2="12" y2="4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        미접속자 관리
+      </div>
       <div class="nav-sec">관리</div>
       <div class="nav-item" data-page="team" id="nav-team" onclick="go('team')">
         <svg viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M1 13c0-2.76 2.24-5 5-5s5 2.24 5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="12" cy="6" r="1.8" stroke="currentColor" stroke-width="1.3"/><path d="M14.5 13c0-1.93-1.12-3.6-2.75-4.38" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
@@ -353,7 +358,6 @@ textarea.form-input { resize:vertical; min-height:100px; }
 // ══════════════════════════════════════════
 const SB_URL = 'https://ngyzcpogfxbkoqkcfipv.supabase.co';   // ← 교체
 const SB_KEY = 'sb_publishable_Z1NulIB63zzJABeC4eWLFw_UOyXCosq';               // ← 교체
-
 
 const sb = supabase.createClient(SB_URL, SB_KEY, {
   auth: {
@@ -740,18 +744,19 @@ async function changeRole(userId, role) {
 function go(page) {
   A.page = page;
   document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === page));
-  const t = { overview:'전체 현황', rooms:'채팅방 관리', notice:'전체 공지', logs:'동기화 로그', team:'팀원 관리', settings:'설정' };
+  const t = { overview:'전체 현황', rooms:'채팅방 관리', notice:'전체 공지', logs:'동기화 로그', inactive:'미접속자 관리', team:'팀원 관리', settings:'설정' };
   document.getElementById('page-title').textContent = t[page] || '';
   draw();
 }
 
 function draw() {
   const el = document.getElementById('content');
-  const pages = { overview:pOverview, rooms:pRooms, notice:pNotice, logs:pLogs, team:pTeam, settings:pSettings };
+  const pages = { overview:pOverview, rooms:pRooms, notice:pNotice, logs:pLogs, inactive:pInactive, team:pTeam, settings:pSettings };
   el.innerHTML = (pages[A.page] || pOverview)();
   if (A.page === 'notice') loadNotices();
   if (A.page === 'logs')   loadLogs();
   if (A.page === 'team')   loadTeam();
+  if (A.page === 'inactive') loadInactiveData();
 }
 
 // ── Pages ──
@@ -872,6 +877,215 @@ function pTeam() {
     <strong style="color:var(--green)">editor</strong>: 공지·동기화·추가·수정 &nbsp;|&nbsp;
     <strong style="color:var(--text3)">viewer</strong>: 읽기 전용
   </div>`;
+}
+
+function pInactive() {
+  if (!canEdit()) return `<div style="padding:2rem;text-align:center;color:var(--text3);font-size:13px">editor 이상 권한이 필요합니다.</div>`;
+  return `
+  <div class="metrics-grid" style="grid-template-columns:repeat(3,1fr)">
+    <div class="metric-card"><div class="metric-label">스캔된 미접속자</div><div class="metric-value" id="inactive-total">—</div><div class="metric-sub" id="inactive-sub">스캔 전</div></div>
+    <div class="metric-card"><div class="metric-label">강퇴 완료</div><div class="metric-value" style="color:var(--green)" id="inactive-kicked">—</div><div class="metric-sub">이번 스캔 기준</div></div>
+    <div class="metric-card"><div class="metric-label">마지막 스캔</div><div class="metric-value" style="font-size:16px" id="inactive-last">—</div><div class="metric-sub" id="inactive-days-label">기준일 미설정</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:1rem"><div class="card-header"><span class="card-title">스캔 설정</span></div><div class="card-body">
+    <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+      <div>
+        <label class="form-label">미접속 기준 (일)</label>
+        <input class="form-input" type="number" id="inactive-days" value="4" min="1" max="30" style="width:80px">
+      </div>
+      <div style="flex:1">
+        <label class="form-label">대상 채팅방</label>
+        <select class="form-select" id="inactive-room-select">
+          <option value="all">전체 채팅방 (${A.rooms.length}개)</option>
+          ${A.rooms.map(r=>`<option value="${r.id}:${r.chat_id}">${r.name}</option>`).join('')}
+        </select>
+      </div>
+      <div style="padding-top:1.25rem">
+        <button class="btn btn-primary" id="scan-btn" onclick="runScan()">
+          <svg style="width:13px;height:13px;vertical-align:middle;margin-right:4px" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          미접속자 스캔
+        </button>
+      </div>
+    </div>
+    <div id="scan-progress" class="hidden" style="margin-top:.75rem;font-size:12px;padding:8px;background:var(--bg3);border-radius:var(--radius-sm);color:var(--text2)"></div>
+  </div></div>
+
+  <div class="section-header">
+    <span class="section-title">미접속자 목록</span>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm" onclick="loadInactiveData()">새로고침</button>
+      <button class="btn btn-sm btn-danger" id="kick-all-btn" onclick="runKickAll()">
+        전체 강퇴 실행
+      </button>
+    </div>
+  </div>
+  <div class="card" id="inactive-list">
+    <div style="padding:1.5rem;text-align:center;color:var(--text3)"><span class="loading"></span></div>
+  </div>`;
+}
+
+async function loadInactiveData() {
+  const el = document.getElementById('inactive-list');
+  if (!el || !A.dbOk) return;
+
+  const { data, error } = await sb.from('inactive_members')
+    .select('*')
+    .order('scanned_at', { ascending: false })
+    .limit(500);
+
+  if (error) { el.innerHTML = `<div style="padding:1rem;color:var(--red);font-size:13px">${error.message}</div>`; return; }
+
+  const total   = (data||[]).filter(r=>!r.kicked).length;
+  const kicked  = (data||[]).filter(r=>r.kicked).length;
+  const lastScan = data?.length ? new Date(data[0].scanned_at).toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '없음';
+
+  const elTotal = document.getElementById('inactive-total');
+  const elKicked = document.getElementById('inactive-kicked');
+  const elLast = document.getElementById('inactive-last');
+  if (elTotal) elTotal.textContent = total.toLocaleString();
+  if (elKicked) elKicked.textContent = kicked.toLocaleString();
+  if (elLast) elLast.textContent = lastScan;
+
+  if (!data?.length) {
+    el.innerHTML = '<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:13px">스캔 결과 없음 — 상단에서 스캔을 실행해주세요.</div>';
+    return;
+  }
+
+  // 방별로 그룹핑
+  const byRoom = {};
+  data.forEach(m => {
+    const key = m.room_name || m.chat_id;
+    if (!byRoom[key]) byRoom[key] = [];
+    byRoom[key].push(m);
+  });
+
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>채팅방</th><th>이름</th><th>@username</th><th>마지막 접속</th><th>상태</th><th>강퇴</th></tr></thead>
+    <tbody>${data.map(m=>`<tr style="${m.kicked?'opacity:.4':''}">
+      <td style="font-size:12px;color:var(--text2)">${m.room_name||m.chat_id}</td>
+      <td style="font-weight:500">${[m.first_name,m.last_name].filter(Boolean).join(' ')||'—'}</td>
+      <td style="font-size:12px;color:var(--text2)">${m.username?'@'+m.username:'—'}</td>
+      <td style="font-size:12px;color:var(--text2)">${m.last_seen?new Date(m.last_seen).toLocaleDateString('ko-KR'):'—'}</td>
+      <td><span style="font-size:11px;padding:2px 7px;border-radius:100px;background:rgba(251,99,64,.12);color:var(--yellow)">${translateStatus(m.status_label)}</span></td>
+      <td>${m.kicked
+        ? `<span style="font-size:11px;color:var(--green)">✓ 완료</span>`
+        : `<button class="btn btn-sm btn-danger" onclick="runKickOne('${m.chat_id}','${m.user_id}','${m.id}')">강퇴</button>`
+      }</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+function translateStatus(label) {
+  const map = {
+    'UserStatusLastWeek':'일주일 미접속','UserStatusLastMonth':'한달 미접속',
+    'UserStatusEmpty':'장기 미접속','UserStatusOffline':'오프라인',
+    'UserStatusRecently':'최근 접속'
+  };
+  return map[label] || label || '알수없음';
+}
+
+async function runScan() {
+  if (!canEdit()) { toast('권한이 없습니다.', 'error'); return; }
+  const days = parseInt(document.getElementById('inactive-days')?.value || '4');
+  const roomVal = document.getElementById('inactive-room-select')?.value;
+  const btn = document.getElementById('scan-btn');
+  const prog = document.getElementById('scan-progress');
+
+  btn.disabled = true;
+  prog.classList.remove('hidden');
+  prog.innerHTML = '<span class="loading"></span>스캔 중... (채팅방 수에 따라 수 분 소요될 수 있습니다)';
+
+  try {
+    const body = { inactive_days: days };
+    if (roomVal && roomVal !== 'all') {
+      const [roomId, chatId] = roomVal.split(':');
+      body.chat_ids = [{ id: roomId, name: A.rooms.find(r=>r.id==roomId)?.name||chatId, chat_id: chatId }];
+    }
+
+    const { data: { session } } = await sb.auth.getSession();
+    const res = await fetch(
+      'https://ngyzcpogfxbkoqkcfipv.supabase.co/functions/v1/scan-inactive',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify(body),
+      }
+    );
+    const result = await res.json();
+
+    if (!result.ok) throw new Error(result.error || '스캔 실패');
+
+    prog.innerHTML = `✓ 스캔 완료 — ${result.scanned}개 방, 미접속자 ${result.total_inactive}명 발견`;
+    toast(`스캔 완료: ${result.total_inactive}명 미접속자 발견`, 'success');
+    await loadInactiveData();
+
+  } catch(e) {
+    prog.innerHTML = `<span style="color:var(--red)">✗ 오류: ${e.message}</span>`;
+    toast('스캔 실패: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function runKickAll() {
+  if (!canEdit()) { toast('권한이 없습니다.', 'error'); return; }
+  const { data } = await sb.from('inactive_members').select('count',{count:'exact',head:true}).eq('kicked',false);
+  if (!confirm(`미강퇴 상태인 전체 미접속자를 강퇴할까요?`)) return;
+
+  const btn = document.getElementById('kick-all-btn');
+  btn.disabled = true; btn.textContent = '강퇴 중...';
+
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const res = await fetch(
+      'https://ngyzcpogfxbkoqkcfipv.supabase.co/functions/v1/kick-members',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ kick_all_inactive: true }),
+      }
+    );
+    const result = await res.json();
+    if (!result.ok) throw new Error(result.error || '강퇴 실패');
+    toast(`강퇴 완료: ${result.kicked}명`, 'success');
+    await loadInactiveData();
+  } catch(e) {
+    toast('강퇴 실패: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '전체 강퇴 실행';
+  }
+}
+
+async function runKickOne(chatId, userId, dbId) {
+  if (!canEdit()) { toast('권한이 없습니다.', 'error'); return; }
+  if (!confirm(`이 유저를 강퇴할까요?`)) return;
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const res = await fetch(
+      'https://ngyzcpogfxbkoqkcfipv.supabase.co/functions/v1/kick-members',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ chat_id: chatId, user_ids: [userId] }),
+      }
+    );
+    const result = await res.json();
+    if (!result.ok) throw new Error(result.error);
+    toast('강퇴 완료', 'success');
+    await loadInactiveData();
+  } catch(e) {
+    toast('강퇴 실패: ' + e.message, 'error');
+  }
 }
 
 function pSettings() {
