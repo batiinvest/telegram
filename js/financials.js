@@ -290,8 +290,7 @@ async function openFinTrend(stockCode, corpName) {
   // 모달 생성
   const overlay = document.createElement('div');
   overlay.id = 'm-fin-trend';
-  overlay.className = 'modal-overlay';
-  overlay.style.display = 'flex';
+  overlay.className = 'modal-overlay open';
   overlay.innerHTML = `
     <div class="modal" style="width:720px;max-width:95vw">
       <div class="modal-header">
