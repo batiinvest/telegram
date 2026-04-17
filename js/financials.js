@@ -114,15 +114,15 @@ async function loadMarketData(el) {
     <tbody>${rows.map(r => {
       const chg = r.price_change_rate;
       const chgColor = chg > 0 ? 'var(--red)' : chg < 0 ? '#4a9eff' : 'var(--text3)';
-      const chgStr = chg != null ? `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%` : '—';
-      const cap = r.market_cap ? (r.market_cap / 1e8).toFixed(0) + '억' : '—';
+      const chgStr = chg != null && chg !== 0 ? `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%` : (chg === 0 ? '0.00%' : '—');
+      const cap = fmtCap(r.market_cap);
       return `<tr>
         <td style="font-weight:500">${r.corp_name}</td>
         <td>${cap}</td>
         <td>${r.price ? r.price.toLocaleString() + '원' : '—'}</td>
         <td style="color:${chgColor};font-weight:500">${chgStr}</td>
-        <td>${r.per != null ? r.per.toFixed(1) : '—'}</td>
-        <td>${r.pbr != null ? r.pbr.toFixed(2) : '—'}</td>
+        <td>${r.per != null && r.per !== 0 ? r.per.toFixed(1) : '—'}</td>
+        <td>${r.pbr != null && r.pbr !== 0 ? r.pbr.toFixed(2) : '—'}</td>
         <td>${r.eps ? r.eps.toLocaleString() : '—'}</td>
         <td>${r.volume ? r.volume.toLocaleString() : '—'}</td>
         <td style="font-size:11px;color:var(--text3)">${r.base_date || '—'}</td>
@@ -132,18 +132,28 @@ async function loadMarketData(el) {
 }
 
 async function loadFinancialData(el) {
-  // 최신 분기 데이터
+  // 종목당 최신 분기 데이터 — 전체 조회 후 stock_code 기준 최신 1개 추출
   const { data, error } = await sb.from('financials')
     .select('*')
     .order('bsns_year', { ascending: false })
     .order('quarter', { ascending: false })
-    .limit(2000);
+    .limit(5000);
   if (error) throw error;
 
-  // 종목당 최신 1개
+  // 종목당 최신 1개 (bsns_year+quarter 기준)
   const latest = {};
   (data || []).forEach(r => {
-    if (!latest[r.stock_code]) latest[r.stock_code] = r;
+    const key = r.stock_code;
+    if (!latest[key]) {
+      latest[key] = r;
+    } else {
+      // 더 최신 데이터로 교체
+      const cur = latest[key];
+      if (r.bsns_year > cur.bsns_year ||
+         (r.bsns_year === cur.bsns_year && r.quarter > cur.quarter)) {
+        latest[key] = r;
+      }
+    }
   });
   let rows = Object.values(latest);
 
@@ -197,13 +207,19 @@ async function loadCombinedData(el) {
   // 시장 + 재무 병합
   const [mktRes, finRes] = await Promise.all([
     sb.from('market_data').select('stock_code,corp_name,market_cap,price,price_change_rate,per,pbr').order('base_date',{ascending:false}).limit(2000),
-    sb.from('financials').select('stock_code,revenue,operating_profit,net_income,operating_margin,roe,debt_ratio,bsns_year,quarter').order('bsns_year',{ascending:false}).limit(2000),
+    sb.from('financials').select('stock_code,revenue,operating_profit,net_income,operating_margin,roe,debt_ratio,bsns_year,quarter').order('bsns_year',{ascending:false}).order('quarter',{ascending:false}).limit(5000),
   ]);
 
   const mktMap = {};
   (mktRes.data || []).forEach(r => { if (!mktMap[r.stock_code]) mktMap[r.stock_code] = r; });
   const finMap = {};
-  (finRes.data || []).forEach(r => { if (!finMap[r.stock_code]) finMap[r.stock_code] = r; });
+  (finRes.data || []).forEach(r => {
+    const cur = finMap[r.stock_code];
+    if (!cur || r.bsns_year > cur.bsns_year ||
+       (r.bsns_year === cur.bsns_year && r.quarter > cur.quarter)) {
+      finMap[r.stock_code] = r;
+    }
+  });
 
   const allCodes = new Set([...Object.keys(mktMap), ...Object.keys(finMap)]);
   let rows = [...allCodes].map(code => ({
@@ -240,7 +256,7 @@ async function loadCombinedData(el) {
       const chgColor = chg > 0 ? 'var(--red)' : chg < 0 ? '#4a9eff' : 'var(--text3)';
       return `<tr>
         <td style="font-weight:500">${r.corp_name}</td>
-        <td>${r.market_cap?(r.market_cap/1e8).toFixed(0)+'억':'—'}</td>
+        <td>${fmtCap(r.market_cap)}</td>
         <td>${r.price?r.price.toLocaleString()+'원':'—'}</td>
         <td style="color:${chgColor};font-weight:500">${chg!=null?(chg>0?'+':'')+chg.toFixed(2)+'%':'—'}</td>
         <td>${r.per!=null?r.per.toFixed(1):'—'}</td>
