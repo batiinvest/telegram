@@ -88,7 +88,17 @@ function renderStocks(list) {
       <td style="font-size:12px;color:var(--text2)">${s.sub_industry||'—'}</td>
       <td style="font-size:11px;font-family:monospace;color:var(--text3)">${s.chat_id||'—'}</td>
       <td style="font-size:12px;color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.keywords_additional||'—'}</td>
-      <td><span style="font-size:11px;padding:2px 7px;border-radius:100px;background:${s.active?'rgba(45,206,137,.15)':'rgba(255,255,255,.05)'};color:${s.active?'var(--green)':'var(--text3)'}">${s.active?'ON':'OFF'}</span></td>
+      <td>
+        <span style="font-size:11px;padding:2px 7px;border-radius:100px;margin-right:4px;background:${
+          s.monitoring_level==='full'?'rgba(42,171,238,.15)':
+          s.monitoring_level==='news'?'rgba(45,206,137,.12)':
+          'rgba(255,255,255,.05)'};color:${
+          s.monitoring_level==='full'?'var(--tg)':
+          s.monitoring_level==='news'?'var(--green)':
+          'var(--text3)'}">
+          ${s.monitoring_level==='full'?'채팅방':s.monitoring_level==='news'?'뉴스/공시':'데이터만'}
+        </span>
+      </td>
       <td><div style="display:flex;gap:4px">
         <button class="btn btn-sm" onclick="openStockEdit(${s.id})">수정</button>
         <button class="btn btn-sm btn-danger" onclick="deleteStock(${s.id},'${s.name.replace(/'/g,"\\'")}')">삭제</button>
@@ -109,6 +119,7 @@ async function openStockEdit(id) {
   document.getElementById('se-kw-add').value        = s.keywords_additional || '';
   document.getElementById('se-kw-rel').value        = s.keywords_related || '';
   document.getElementById('se-active').checked      = s.active !== false;
+  document.getElementById('se-level').value          = s.monitoring_level || 'data';
   openModal('m-stock-edit');
 }
 
@@ -124,6 +135,8 @@ async function saveStockEdit() {
     keywords_additional: document.getElementById('se-kw-add').value.trim(),
     keywords_related:    document.getElementById('se-kw-rel').value.trim(),
     active:              document.getElementById('se-active').checked,
+    monitoring_level:    document.getElementById('se-level').value,
+    is_monitored:        ['full','news'].includes(document.getElementById('se-level').value),
   };
   if (!payload.name) { toast('종목명은 필수입니다.', 'error'); return; }
   const { error } = await sb.from('companies').update(payload).eq('id', id);
