@@ -64,11 +64,21 @@ async function loadFinancials() {
 
 async function loadMarketData(el) {
   // 오늘 날짜 기준 최신 데이터
-  const { data, error } = await sb.from('market_data')
-    .select('*')
-    .order('base_date', { ascending: false })
-    .limit(2000);
-  if (error) throw error;
+  // 전체 로드 (페이지네이션으로 limit 우회)
+  let allMkt = [];
+  let mktPage = 0;
+  while (true) {
+    const { data: chunk, error } = await sb.from('market_data')
+      .select('*')
+      .order('base_date', { ascending: false })
+      .range(mktPage * 1000, (mktPage + 1) * 1000 - 1);
+    if (error) throw error;
+    if (!chunk?.length) break;
+    allMkt = allMkt.concat(chunk);
+    if (chunk.length < 1000) break;
+    mktPage++;
+  }
+  const data = allMkt;
 
   // 종목당 최신 1개만 (base_date 기준)
   const latest = {};
@@ -144,12 +154,21 @@ async function loadMarketData(el) {
 
 async function loadFinancialData(el) {
   // 종목당 최신 분기 데이터 — 전체 조회 후 stock_code 기준 최신 1개 추출
-  const { data, error } = await sb.from('financials')
-    .select('*')
-    .order('bsns_year', { ascending: false })
-    .order('quarter', { ascending: false })
-    .limit(5000);
-  if (error) throw error;
+  let allFin = [];
+  let finPage = 0;
+  while (true) {
+    const { data: chunk, error } = await sb.from('financials')
+      .select('*')
+      .order('bsns_year', { ascending: false })
+      .order('quarter', { ascending: false })
+      .range(finPage * 1000, (finPage + 1) * 1000 - 1);
+    if (error) throw error;
+    if (!chunk?.length) break;
+    allFin = allFin.concat(chunk);
+    if (chunk.length < 1000) break;
+    finPage++;
+  }
+  const data = allFin;
 
   // 종목당 최신 1개 (bsns_year+quarter 기준)
   const latest = {};
@@ -217,8 +236,30 @@ async function loadFinancialData(el) {
 async function loadCombinedData(el) {
   // 시장 + 재무 병합
   const [mktRes, finRes] = await Promise.all([
-    sb.from('market_data').select('stock_code,corp_name,market_cap,price,price_change_rate,per,pbr').order('base_date',{ascending:false}).limit(2000),
-    sb.from('financials').select('stock_code,revenue,operating_profit,net_income,operating_margin,roe,debt_ratio,bsns_year,quarter').order('bsns_year',{ascending:false}).order('quarter',{ascending:false}).limit(5000),
+    (async () => {
+      let allM = [];
+      let p = 0;
+      while (true) {
+        const { data: c } = await sb.from('market_data').select('stock_code,corp_name,market_cap,price,price_change_rate,per,pbr').order('base_date',{ascending:false}).range(p*1000,(p+1)*1000-1);
+        if (!c?.length) break;
+        allM = allM.concat(c);
+        if (c.length < 1000) break;
+        p++;
+      }
+      return { data: allM };
+    })(),
+    (async () => {
+      let allF = [];
+      let fp = 0;
+      while (true) {
+        const { data: c } = await sb.from('financials').select('stock_code,revenue,operating_profit,net_income,operating_margin,roe,debt_ratio,bsns_year,quarter').order('bsns_year',{ascending:false}).order('quarter',{ascending:false}).range(fp*1000,(fp+1)*1000-1);
+        if (!c?.length) break;
+        allF = allF.concat(c);
+        if (c.length < 1000) break;
+        fp++;
+      }
+      return { data: allF };
+    })(),
   ]);
 
   const mktMap = {};
