@@ -1,4 +1,16 @@
 // financials.js — 재무 조회 (시장/재무제표/종합)
+
+function fmtCap(won) {
+  if (won == null || won === 0) return '—';
+  const jo  = Math.floor(won / 1e12);
+  const eok = Math.floor((won % 1e12) / 1e8);
+  if (jo > 0 && eok > 0) return jo + '조 ' + eok.toLocaleString() + '억';
+  if (jo > 0)             return jo + '조';
+  return eok.toLocaleString() + '억';
+}
+
+const F = { mode: 'market', industry: '전체', q: '', sortBy: 'market_cap', sortDir: 'desc' };
+
 function pFinancials() {
   const industries = ['전체','바이오','반도체','2차전지','로봇','뷰티','테크','조선','신재생','엔터','소비재','우주'];
   return `
