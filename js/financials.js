@@ -9,7 +9,6 @@ function fmtCap(won) {
   return eok.toLocaleString() + '억';
 }
 
-const F = { mode: 'market', industry: '전체', q: '', sortBy: 'market_cap', sortDir: 'desc' };
 
 function pFinancials() {
   const industries = ['전체','바이오','반도체','2차전지','로봇','뷰티','테크','조선','신재생','엔터','소비재','우주'];

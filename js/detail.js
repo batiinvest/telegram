@@ -73,6 +73,3 @@ function toast(msg, type='info') {
   t.className = `toast toast-${type}`; t.textContent = msg; c.appendChild(t);
   setTimeout(() => t.remove(), 3500);
 }
-
-// 모든 JS 로드 완료 후 인증 시작
-bootAuth();

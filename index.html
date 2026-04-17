@@ -281,18 +281,24 @@
 </div>
 
 <!-- 설정 & 인증 -->
-<script src="js/config.js"></script>
-<script src="js/auth.js"></script>
+<script src="js/config.js" defer></script>
+<script src="js/auth.js" defer></script>
 <!-- 핵심 기능 -->
-<script src="js/telegram.js"></script>
-<script src="js/rooms.js"></script>
-<script src="js/nav.js"></script>
+<script src="js/telegram.js" defer></script>
+<script src="js/rooms.js" defer></script>
+<script src="js/nav.js" defer></script>
 <!-- 페이지 렌더링 -->
-<script src="js/pages.js"></script>
-<script src="js/financials.js"></script>
-<script src="js/stocks.js"></script>
-<script src="js/bots.js"></script>
+<script src="js/pages.js" defer></script>
+<script src="js/financials.js" defer></script>
+<script src="js/stocks.js" defer></script>
+<script src="js/bots.js" defer></script>
 <!-- 유틸리티 -->
-<script src="js/detail.js"></script>
+<script src="js/detail.js" defer></script>
+<!-- 초기화: 모든 defer 스크립트 로드 완료 후 실행 -->
+<script defer>
+  document.addEventListener('DOMContentLoaded', function() {
+    bootAuth();
+  });
+</script>
 </body>
 </html>

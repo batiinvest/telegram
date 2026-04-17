@@ -106,5 +106,4 @@ async function loadLogs() {
 }
 
 // ── 재무 상태 ──
-const F = { mode: 'market', industry: '전체', q: '', sortBy: 'market_cap', sortDir: 'desc' };
 
