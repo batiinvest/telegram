@@ -1,6 +1,8 @@
 // pages.js — 페이지 렌더링 함수들
 function pOverview() {
-  const total = A.rooms.length, full = A.rooms.filter(r=>r.status==='full').length, open = A.rooms.filter(r=>r.status==='open').length;
+  // 정원 마감: status='full' 이거나 members >= max_members 둘 다 체크
+  const isFull = r => r.status === 'full' || (r.members || 0) >= (r.max_members || 1000);
+  const total = A.rooms.length, full = A.rooms.filter(isFull).length, open = A.rooms.filter(r=>!isFull(r)).length;
   const totalM = A.rooms.reduce((s,r)=>s+(r.members||0),0);
   const catMap = {}; A.rooms.forEach(r=>{ if(!catMap[r.cat])catMap[r.cat]={n:0,m:0}; catMap[r.cat].n++; catMap[r.cat].m+=r.members||0; });
   const top5 = [...A.rooms].sort((a,b)=>b.members-a.members).slice(0,5);
