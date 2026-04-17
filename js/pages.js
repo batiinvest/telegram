@@ -109,3 +109,197 @@ async function loadLogs() {
 
 // ── 재무 상태 ──
 
+function pInvestment() {
+  return `
+  <div id="inv-body">
+    <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
+      <select class="form-select" id="inv-industry" onchange="loadInvestment()" style="width:130px;padding:6px 10px">
+        <option value="all">전체 산업</option>
+        <option value="반도체">반도체</option>
+        <option value="바이오">바이오</option>
+        <option value="2차전지">2차전지</option>
+        <option value="로봇">로봇</option>
+        <option value="뷰티">뷰티</option>
+        <option value="테크">테크</option>
+        <option value="조선">조선</option>
+        <option value="신재생">신재생</option>
+        <option value="엔터">엔터</option>
+        <option value="소비재">소비재</option>
+        <option value="우주">우주</option>
+      </select>
+      <span style="font-size:12px;color:var(--text3);align-self:center" id="inv-date"></span>
+      <button class="btn btn-sm" style="margin-left:auto" onclick="loadInvestment()">새로고침</button>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:1rem" id="inv-summary">
+      <div class="metric-card"><div class="metric-label">급등 (상위 5%)</div><div class="metric-value" style="color:var(--red)" id="inv-surge">—</div></div>
+      <div class="metric-card"><div class="metric-label">급락 (하위 5%)</div><div class="metric-value" style="color:#4a9eff" id="inv-drop">—</div></div>
+      <div class="metric-card"><div class="metric-label">산업 평균 등락률</div><div class="metric-value" id="inv-avg">—</div></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-bottom:1rem">
+      <div class="card">
+        <div class="card-header"><span class="card-title">시총 Top 10</span></div>
+        <div id="inv-cap-list" style="padding:.5rem 0"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">등락률 순위</span></div>
+        <div id="inv-chg-list" style="padding:.5rem 0"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">산업별 등락률</span><span style="font-size:11px;color:var(--text3)">각 산업 상위 3종목</span></div>
+      <div id="inv-industry-list" style="padding:.5rem 0"></div>
+    </div>
+  </div>`;
+}
+
+let _invData = [];
+let _invIndustryMap = {};
+
+async function loadInvestment() {
+  const industry = document.getElementById('inv-industry')?.value || 'all';
+
+  // market_data 조회
+  let query = sb.from('market_data')
+    .select('stock_code,corp_name,market_cap,price,price_change_rate,per,pbr')
+    .order('base_date', { ascending: false })
+    .limit(3000);
+
+  const { data: mktRaw } = await query;
+  if (!mktRaw?.length) return;
+
+  // 종목당 최신 1개
+  const latest = {};
+  mktRaw.forEach(r => { if (!latest[r.stock_code]) latest[r.stock_code] = r; });
+  let allData = Object.values(latest);
+
+  // 날짜 표시
+  const dateEl = document.getElementById('inv-date');
+  if (dateEl && mktRaw[0]) {
+    // base_date가 없으면 최근 updated_at 기준
+    dateEl.textContent = `기준: ${mktRaw[0].base_date || '최근'}`;
+  }
+
+  // companies 테이블에서 산업 정보 가져오기
+  if (!_allStocks?.length) await loadStocks();
+  const industryMap = {};
+  (_allStocks || []).forEach(s => {
+    const code = (s.code || '').split('.')[0];
+    if (code) industryMap[code] = s.industry || '기타';
+  });
+
+  // 산업 정보 붙이기
+  allData = allData.map(r => ({ ...r, industry: industryMap[r.stock_code] || '기타' }));
+
+  // 산업 필터
+  const filtered = industry === 'all' ? allData : allData.filter(r => r.industry === industry);
+
+  // 등락률 있는 것만
+  const withChg = filtered.filter(r => r.price_change_rate != null);
+
+  // 요약 지표
+  const sorted = [...withChg].sort((a,b) => (b.price_change_rate||0) - (a.price_change_rate||0));
+  const top5pct = Math.max(1, Math.floor(sorted.length * 0.05));
+  const surgeAvg = sorted.slice(0, top5pct).reduce((s,r) => s + r.price_change_rate, 0) / top5pct;
+  const dropAvg  = sorted.slice(-top5pct).reduce((s,r) => s + r.price_change_rate, 0) / top5pct;
+  const avg = withChg.reduce((s,r) => s + (r.price_change_rate||0), 0) / (withChg.length || 1);
+
+  const surgeEl = document.getElementById('inv-surge');
+  const dropEl  = document.getElementById('inv-drop');
+  const avgEl   = document.getElementById('inv-avg');
+  if (surgeEl) surgeEl.textContent = `+${surgeAvg.toFixed(2)}%`;
+  if (dropEl)  dropEl.textContent  = `${dropAvg.toFixed(2)}%`;
+  if (avgEl) {
+    avgEl.textContent = `${avg >= 0 ? '+' : ''}${avg.toFixed(2)}%`;
+    avgEl.style.color = avg >= 0 ? 'var(--red)' : '#4a9eff';
+  }
+
+  // 시총 Top 10
+  const capTop = [...filtered]
+    .filter(r => r.market_cap)
+    .sort((a,b) => (b.market_cap||0) - (a.market_cap||0))
+    .slice(0, 10);
+
+  const capEl = document.getElementById('inv-cap-list');
+  if (capEl) {
+    capEl.innerHTML = capTop.map((r, i) => {
+      const chg = r.price_change_rate;
+      const chgColor = chg > 0 ? 'var(--red)' : chg < 0 ? '#4a9eff' : 'var(--text3)';
+      const chgStr = chg != null ? `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%` : '—';
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:11px;color:var(--text3);width:14px">${i+1}</span>
+          <div>
+            <div style="font-size:13px;font-weight:500">${r.corp_name}</div>
+            <div style="font-size:11px;color:var(--text3)">${r.industry || ''}</div>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:12px;font-weight:500">${fmtCap(r.market_cap)}</div>
+          <div style="font-size:11px;color:${chgColor}">${chgStr}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // 등락률 Top/Bottom 10
+  const chgTop    = sorted.slice(0, 10);
+  const chgBottom = sorted.slice(-10).reverse();
+  const combined  = [...chgTop, ...chgBottom];
+
+  const chgEl = document.getElementById('inv-chg-list');
+  if (chgEl) {
+    chgEl.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
+        <div>
+          <div style="font-size:11px;color:var(--text3);padding:4px 12px;font-weight:500">급등</div>
+          ${chgTop.map(r => `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 12px;border-bottom:1px solid var(--border)">
+            <div>
+              <div style="font-size:12px;font-weight:500">${r.corp_name}</div>
+              <div style="font-size:10px;color:var(--text3)">${r.industry||''}</div>
+            </div>
+            <span style="font-size:12px;font-weight:500;color:var(--red)">+${r.price_change_rate.toFixed(2)}%</span>
+          </div>`).join('')}
+        </div>
+        <div style="border-left:1px solid var(--border)">
+          <div style="font-size:11px;color:var(--text3);padding:4px 12px;font-weight:500">급락</div>
+          ${chgBottom.map(r => `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 12px;border-bottom:1px solid var(--border)">
+            <div>
+              <div style="font-size:12px;font-weight:500">${r.corp_name}</div>
+              <div style="font-size:10px;color:var(--text3)">${r.industry||''}</div>
+            </div>
+            <span style="font-size:12px;font-weight:500;color:#4a9eff">${r.price_change_rate.toFixed(2)}%</span>
+          </div>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  // 산업별 등락률 (상위 3종목)
+  const industries = ['반도체','바이오','2차전지','로봇','뷰티','테크','조선','신재생','엔터','소비재','우주'];
+  const targetInds = industry === 'all' ? industries : [industry];
+
+  const indEl = document.getElementById('inv-industry-list');
+  if (indEl) {
+    indEl.innerHTML = targetInds.map(ind => {
+      const indStocks = withChg
+        .filter(r => r.industry === ind)
+        .sort((a,b) => (b.price_change_rate||0) - (a.price_change_rate||0));
+      if (!indStocks.length) return '';
+      const indAvg = indStocks.reduce((s,r) => s + (r.price_change_rate||0), 0) / indStocks.length;
+      const top3   = indStocks.slice(0, 3);
+      const bot3   = indStocks.slice(-3).reverse();
+      return `<div style="padding:10px 12px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <span style="font-size:13px;font-weight:500">${ind}</span>
+          <span style="font-size:12px;color:${indAvg>=0?'var(--red)':'#4a9eff'};font-weight:500">평균 ${indAvg>=0?'+':''}${indAvg.toFixed(2)}%</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${top3.map(r => `<span style="font-size:11px;padding:2px 8px;border-radius:100px;background:rgba(45,206,137,.12);color:var(--green)">${r.corp_name} +${r.price_change_rate.toFixed(1)}%</span>`).join('')}
+          ${bot3.map(r => `<span style="font-size:11px;padding:2px 8px;border-radius:100px;background:rgba(74,158,255,.12);color:#4a9eff">${r.corp_name} ${r.price_change_rate.toFixed(1)}%</span>`).join('')}
+        </div>
+      </div>`;
+    }).filter(Boolean).join('');
+  }
+}
