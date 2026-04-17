@@ -199,7 +199,7 @@ async function loadFinancialData(el) {
     <tbody>${rows.map(r => {
       const opColor = r.operating_profit > 0 ? 'var(--green)' : r.operating_profit < 0 ? 'var(--red)' : 'var(--text2)';
       return `<tr>
-        <td style="font-weight:500">${r.corp_name}</td>
+        <td style="font-weight:500;cursor:pointer;color:var(--tg)" onclick="openFinTrend('${r.stock_code}','${r.corp_name}')">${r.corp_name}</td>
         <td style="font-size:12px;color:var(--text2)">${r.bsns_year} ${r.quarter}</td>
         <td>${fmt(r.revenue)}</td>
         <td style="color:${opColor}">${fmt(r.operating_profit)}</td>
@@ -280,6 +280,95 @@ async function loadCombinedData(el) {
       </tr>`;
     }).join('')}
     </tbody></table></div>`;
+}
+
+async function openFinTrend(stockCode, corpName) {
+  // 기존 모달 제거
+  const existing = document.getElementById('m-fin-trend');
+  if (existing) existing.remove();
+
+  // 모달 생성
+  const overlay = document.createElement('div');
+  overlay.id = 'm-fin-trend';
+  overlay.className = 'modal-overlay';
+  overlay.style.display = 'flex';
+  overlay.innerHTML = `
+    <div class="modal" style="width:720px;max-width:95vw">
+      <div class="modal-header">
+        <span class="modal-title">${corpName} — 분기별 재무 추이</span>
+        <button class="modal-close" onclick="document.getElementById('m-fin-trend').remove()">×</button>
+      </div>
+      <div id="fin-trend-body" style="padding:1rem">
+        <div style="text-align:center;color:var(--text3)"><span class="loading"></span> 로딩 중...</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  // 데이터 조회
+  const { data, error } = await sb.from('financials')
+    .select('bsns_year,quarter,report_type,fs_div,revenue,operating_profit,net_income,operating_margin,roe,debt_ratio,total_assets,total_equity,total_liabilities,operating_cashflow')
+    .eq('stock_code', stockCode)
+    .order('bsns_year', { ascending: false })
+    .order('quarter', { ascending: false })
+    .limit(20);
+
+  const body = document.getElementById('fin-trend-body');
+  if (error || !data?.length) {
+    body.innerHTML = '<div style="text-align:center;color:var(--text3);padding:2rem">데이터 없음</div>';
+    return;
+  }
+
+  const fmt = v => fmtCap(v);
+  const pct = v => v != null ? v.toFixed(1) + '%' : '—';
+
+  // 손익 추이 테이블
+  let html = `
+    <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:.5rem">📊 손익계산서</div>
+    <div class="table-wrap" style="margin-bottom:1.25rem"><table>
+      <thead><tr>
+        <th>기간</th><th>매출액</th><th>영업이익</th><th>영업이익률</th><th>순이익</th><th>ROE</th>
+      </tr></thead>
+      <tbody>${data.map(r => {
+        const opColor = r.operating_profit > 0 ? 'var(--green)' : r.operating_profit < 0 ? 'var(--red)' : 'var(--text2)';
+        const prev = data[data.indexOf(r) + 1];
+        const revChg = prev?.revenue && r.revenue
+          ? ((r.revenue - prev.revenue) / Math.abs(prev.revenue) * 100).toFixed(1)
+          : null;
+        const chgStr = revChg != null
+          ? `<span style="font-size:10px;color:${revChg > 0 ? 'var(--green)' : 'var(--red)'};margin-left:4px">${revChg > 0 ? '▲' : '▼'}${Math.abs(revChg)}%</span>`
+          : '';
+        return `<tr>
+          <td style="font-weight:600">${r.bsns_year} ${r.quarter}</td>
+          <td>${fmt(r.revenue)}${chgStr}</td>
+          <td style="color:${opColor}">${fmt(r.operating_profit)}</td>
+          <td>${pct(r.operating_margin)}</td>
+          <td>${fmt(r.net_income)}</td>
+          <td>${pct(r.roe)}</td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table></div>
+
+    <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:.5rem">🏦 재무상태표</div>
+    <div class="table-wrap" style="margin-bottom:1.25rem"><table>
+      <thead><tr>
+        <th>기간</th><th>자산총계</th><th>부채총계</th><th>자본총계</th><th>부채비율</th><th>영업현금흐름</th>
+      </tr></thead>
+      <tbody>${data.map(r => `<tr>
+        <td style="font-weight:600">${r.bsns_year} ${r.quarter}</td>
+        <td>${fmt(r.total_assets)}</td>
+        <td>${fmt(r.total_liabilities)}</td>
+        <td>${fmt(r.total_equity)}</td>
+        <td>${pct(r.debt_ratio)}</td>
+        <td style="color:${r.operating_cashflow > 0 ? 'var(--green)' : 'var(--red)'}">${fmt(r.operating_cashflow)}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table></div>
+
+    <div style="font-size:11px;color:var(--text3)">* ${data[0].fs_div === 'CFS' ? '연결' : '별도'} 재무제표 기준 | 클릭 닫기</div>`;
+
+  body.innerHTML = html;
 }
 
 function exportFinancials() {
