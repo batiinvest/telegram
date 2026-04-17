@@ -187,7 +187,7 @@ async function loadFinancialData(el) {
   const cnt = document.getElementById('fin-count');
   if (cnt) cnt.textContent = `${rows.length}개`;
 
-  const fmt = v => v != null ? (v / 1e8).toFixed(0) + '억' : '—';
+  const fmt = v => fmtCap(v);  // fmtCap: 조/억 단위 자동 변환
   const pct = v => v != null ? v.toFixed(1) + '%' : '—';
 
   el.innerHTML = `<div class="table-wrap"><table>
@@ -253,7 +253,7 @@ async function loadCombinedData(el) {
   const cnt = document.getElementById('fin-count');
   if (cnt) cnt.textContent = `${rows.length}개`;
 
-  const fmt = v => v != null ? (v/1e8).toFixed(0)+'억' : '—';
+  const fmt = v => fmtCap(v);  // fmtCap: 조/억 단위 자동 변환
   const pct = v => v != null ? v.toFixed(1)+'%' : '—';
 
   el.innerHTML = `<div class="table-wrap"><table>
