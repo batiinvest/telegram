@@ -57,10 +57,34 @@ let _allStocks = [];
 async function loadStocks() {
   const el = document.getElementById('stock-list');
   if (!el) return;
-  const { data, error } = await sb.from('companies').select('*').order('industry').order('name');
-  if (error) { el.innerHTML = `<div style="padding:1rem;color:var(--red);font-size:13px">${error.message}</div>`; return; }
-  _allStocks = data || [];
-  renderStocks(_allStocks);
+  el.innerHTML = '<div style="padding:1.5rem;text-align:center;color:var(--text3)"><span class="loading"></span></div>';
+
+  const level = document.getElementById('stock-level')?.value || 'monitored';
+  let allData = [];
+  let page = 0;
+  const pageSize = 1000;
+
+  while (true) {
+    let q = sb.from('companies')
+      .select('id,name,code,industry,sub_industry,chat_id,keywords,monitoring_level,active,market')
+      .order('name')
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+
+    if (level === 'monitored') {
+      q = q.in('monitoring_level', ['full', 'news']);
+    } else if (level !== 'all') {
+      q = q.eq('monitoring_level', level);
+    }
+
+    const { data, error } = await q;
+    if (error) { el.innerHTML = `<div style="padding:1rem;color:var(--red);font-size:13px">${error.message}</div>`; return; }
+    if (!data?.length) break;
+    allData = allData.concat(data);
+    if (data.length < pageSize) break;
+    page++;
+  }
+  _allStocks = allData;
+  filterStocks();
 }
 
 function filterStocks() {
