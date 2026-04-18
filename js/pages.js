@@ -370,3 +370,277 @@ async function loadInvestment() {
     }).filter(Boolean).join('');
   }
 }
+
+function pScreener() {
+  return `
+  <div style="display:grid;grid-template-columns:280px 1fr;gap:1rem;align-items:start">
+
+    <div class="card" style="position:sticky;top:1rem">
+      <div class="card-header"><span class="card-title">필터 조건</span></div>
+      <div style="padding:.75rem 1rem;display:flex;flex-direction:column;gap:1rem">
+
+        <div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:6px">산업</div>
+          <select class="form-select" id="sc-industry" style="width:100%">
+            <option value="">전체</option>
+            <option>바이오</option><option>반도체</option><option>2차전지</option>
+            <option>로봇</option><option>뷰티</option><option>테크</option>
+            <option>조선</option><option>신재생</option><option>엔터</option>
+            <option>소비재</option><option>우주</option>
+          </select>
+        </div>
+
+        <div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:6px">시장</div>
+          <select class="form-select" id="sc-market" style="width:100%">
+            <option value="">전체</option>
+            <option value="KOSPI">코스피</option>
+            <option value="KOSDAQ">코스닥</option>
+          </select>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:.75rem">
+          <div style="font-size:11px;font-weight:600;color:var(--text3);margin-bottom:.75rem">밸류에이션</div>
+          ${[
+            ['sc-per-min','sc-per-max','PER','0','100'],
+            ['sc-pbr-min','sc-pbr-max','PBR','0','20'],
+          ].map(([id1,id2,label,min,max])=>`
+            <div style="margin-bottom:.75rem">
+              <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:4px">
+                <span>${label}</span>
+                <span id="${id1}-label" style="color:var(--text3)">0 ~ ${max}</span>
+              </div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="number" class="form-input" id="${id1}" placeholder="최소" min="${min}" style="width:70px;padding:4px 8px;font-size:12px">
+                <span style="color:var(--text3);font-size:12px">~</span>
+                <input type="number" class="form-input" id="${id2}" placeholder="최대" max="${max}" style="width:70px;padding:4px 8px;font-size:12px">
+              </div>
+            </div>`).join('')}
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:.75rem">
+          <div style="font-size:11px;font-weight:600;color:var(--text3);margin-bottom:.75rem">수익성</div>
+          ${[
+            ['sc-margin-min','sc-margin-max','영업이익률(%)'],
+            ['sc-roe-min','sc-roe-max','ROE(%)'],
+            ['sc-roa-min','sc-roa-max','ROA(%)'],
+          ].map(([id1,id2,label])=>`
+            <div style="margin-bottom:.75rem">
+              <div style="font-size:12px;color:var(--text2);margin-bottom:4px">${label}</div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="number" class="form-input" id="${id1}" placeholder="최소" style="width:70px;padding:4px 8px;font-size:12px">
+                <span style="color:var(--text3);font-size:12px">~</span>
+                <input type="number" class="form-input" id="${id2}" placeholder="최대" style="width:70px;padding:4px 8px;font-size:12px">
+              </div>
+            </div>`).join('')}
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:.75rem">
+          <div style="font-size:11px;font-weight:600;color:var(--text3);margin-bottom:.75rem">재무건전성</div>
+          ${[
+            ['sc-debt-min','sc-debt-max','부채비율(%)'],
+            ['sc-cr-min','sc-cr-max','유동비율(%)'],
+          ].map(([id1,id2,label])=>`
+            <div style="margin-bottom:.75rem">
+              <div style="font-size:12px;color:var(--text2);margin-bottom:4px">${label}</div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="number" class="form-input" id="${id1}" placeholder="최소" style="width:70px;padding:4px 8px;font-size:12px">
+                <span style="color:var(--text3);font-size:12px">~</span>
+                <input type="number" class="form-input" id="${id2}" placeholder="최대" style="width:70px;padding:4px 8px;font-size:12px">
+              </div>
+            </div>`).join('')}
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:.75rem">
+          <div style="font-size:11px;font-weight:600;color:var(--text3);margin-bottom:.75rem">시가총액</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="number" class="form-input" id="sc-cap-min" placeholder="최소(억)" style="width:90px;padding:4px 8px;font-size:12px">
+            <span style="color:var(--text3);font-size:12px">~</span>
+            <input type="number" class="form-input" id="sc-cap-max" placeholder="최대(억)" style="width:90px;padding:4px 8px;font-size:12px">
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:.75rem">
+          <div style="font-size:11px;font-weight:600;color:var(--text3);margin-bottom:.75rem">프리셋</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <button class="btn btn-sm" onclick="applyPreset('value')">가치주</button>
+            <button class="btn btn-sm" onclick="applyPreset('growth')">성장주</button>
+            <button class="btn btn-sm" onclick="applyPreset('quality')">우량주</button>
+            <button class="btn btn-sm" onclick="applyPreset('reset')">초기화</button>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" onclick="runScreener()" style="width:100%">검색</button>
+      </div>
+    </div>
+
+    <div>
+      <div id="sc-result" style="color:var(--text3);font-size:13px;padding:2rem;text-align:center">
+        조건을 설정하고 검색 버튼을 눌러주세요.
+      </div>
+    </div>
+  </div>`;
+}
+
+function applyPreset(type) {
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+  // 초기화
+  ['sc-per-min','sc-per-max','sc-pbr-min','sc-pbr-max',
+   'sc-margin-min','sc-margin-max','sc-roe-min','sc-roe-max','sc-roa-min','sc-roa-max',
+   'sc-debt-min','sc-debt-max','sc-cr-min','sc-cr-max','sc-cap-min','sc-cap-max']
+  .forEach(id => set(id, ''));
+
+  if (type === 'value') {
+    set('sc-per-max', '15'); set('sc-pbr-max', '1.5');
+    set('sc-margin-min', '5'); set('sc-debt-max', '100');
+  } else if (type === 'growth') {
+    set('sc-margin-min', '15'); set('sc-roe-min', '15');
+    set('sc-per-max', '50');
+  } else if (type === 'quality') {
+    set('sc-margin-min', '10'); set('sc-roe-min', '10');
+    set('sc-debt-max', '100'); set('sc-cr-min', '150');
+  }
+}
+
+async function runScreener() {
+  const el = document.getElementById('sc-result');
+  el.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text3)"><span class="loading"></span> 검색 중...</div>';
+
+  const g = id => { const v = document.getElementById(id)?.value; return v ? parseFloat(v) : null; };
+  const industry = document.getElementById('sc-industry')?.value || '';
+  const market   = document.getElementById('sc-market')?.value   || '';
+
+  const filters = {
+    perMin: g('sc-per-min'), perMax: g('sc-per-max'),
+    pbrMin: g('sc-pbr-min'), pbrMax: g('sc-pbr-max'),
+    marginMin: g('sc-margin-min'), marginMax: g('sc-margin-max'),
+    roeMin: g('sc-roe-min'), roeMax: g('sc-roe-max'),
+    roaMin: g('sc-roa-min'), roaMax: g('sc-roa-max'),
+    debtMin: g('sc-debt-min'), debtMax: g('sc-debt-max'),
+    crMin: g('sc-cr-min'), crMax: g('sc-cr-max'),
+    capMin: g('sc-cap-min'), capMax: g('sc-cap-max'),
+  };
+
+  // financials 최신 분기 데이터 로드
+  let finRows = [], page = 0;
+  while (true) {
+    const { data } = await sb.from('financials').select('stock_code,operating_margin,roe,roa,debt_ratio,current_ratio,bsns_year,quarter')
+      .order('bsns_year',{ascending:false}).order('quarter',{ascending:false})
+      .range(page*1000,(page+1)*1000-1);
+    if (!data?.length) break;
+    finRows = finRows.concat(data);
+    if (data.length < 1000) break;
+    page++;
+  }
+  // 종목당 최신 1개
+  const finMap = {};
+  finRows.forEach(r => { if (!finMap[r.stock_code]) finMap[r.stock_code] = r; });
+
+  // market_data 최신
+  const { data: latestDate } = await sb.from('market_data').select('base_date').order('base_date',{ascending:false}).limit(1);
+  const maxDate = latestDate?.[0]?.base_date;
+  let mktRows = [], mp = 0;
+  while (true) {
+    const { data } = await sb.from('market_data').select('stock_code,corp_name,market_cap,price,price_change_rate,per,pbr,market')
+      .eq('base_date', maxDate).range(mp*1000,(mp+1)*1000-1);
+    if (!data?.length) break;
+    mktRows = mktRows.concat(data);
+    if (data.length < 1000) break;
+    mp++;
+  }
+
+  // companies에서 industry 정보
+  let compRows = [], cp = 0;
+  while (true) {
+    const { data } = await sb.from('companies').select('code,industry').range(cp*1000,(cp+1)*1000-1);
+    if (!data?.length) break;
+    compRows = compRows.concat(data);
+    if (data.length < 1000) break;
+    cp++;
+  }
+  const indMap = {};
+  compRows.forEach(r => { indMap[r.code] = r.industry || ''; });
+
+  // 데이터 합치기
+  let combined = mktRows.map(m => ({
+    ...m,
+    industry: indMap[m.stock_code] || '',
+    ...(finMap[m.stock_code] || {}),
+    capEok: m.market_cap ? Math.round(m.market_cap / 1e8) : null,
+  }));
+
+  // 필터 적용
+  const inRange = (val, min, max) => {
+    if (val == null) return (min == null && max == null);
+    if (min != null && val < min) return false;
+    if (max != null && val > max) return false;
+    return true;
+  };
+
+  combined = combined.filter(r => {
+    if (industry && r.industry !== industry) return false;
+    if (market   && r.market   !== market)   return false;
+    if (!inRange(r.per,            filters.perMin,    filters.perMax))    return false;
+    if (!inRange(r.pbr,            filters.pbrMin,    filters.pbrMax))    return false;
+    if (!inRange(r.operating_margin, filters.marginMin, filters.marginMax)) return false;
+    if (!inRange(r.roe,            filters.roeMin,    filters.roeMax))    return false;
+    if (!inRange(r.roa,            filters.roaMin,    filters.roaMax))    return false;
+    if (!inRange(r.debt_ratio,     filters.debtMin,   filters.debtMax))   return false;
+    if (!inRange(r.current_ratio,  filters.crMin,     filters.crMax))     return false;
+    if (!inRange(r.capEok,         filters.capMin,    filters.capMax))    return false;
+    return true;
+  });
+
+  // 시총 내림차순 정렬
+  combined.sort((a,b) => (b.market_cap||0) - (a.market_cap||0));
+
+  if (!combined.length) {
+    el.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text3)">조건에 맞는 종목이 없습니다.</div>';
+    return;
+  }
+
+  const fmt = v => fmtCap(v);
+  const pct = v => v != null ? v.toFixed(1)+'%' : '—';
+  const num = v => v != null ? v.toFixed(1) : '—';
+  const chgColor = v => v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)';
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+      <span style="font-size:13px;font-weight:600">${combined.length}개 종목</span>
+      <button class="btn btn-sm" onclick="exportScreener()">CSV 다운로드</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>종목명</th><th>산업</th><th>시장</th><th>시가총액</th><th>현재가</th><th>등락률</th>
+        <th>PER</th><th>PBR</th><th>영업이익률</th><th>ROE</th><th>ROA</th><th>부채비율</th>
+      </tr></thead>
+      <tbody>${combined.map(r => `<tr>
+        <td style="font-weight:600;cursor:pointer;color:var(--tg)" onclick="openFinTrend('${r.stock_code}','${r.corp_name}')">${r.corp_name}</td>
+        <td><span class="badge badge-cat">${r.industry||'—'}</span></td>
+        <td style="font-size:11px;color:var(--text3)">${r.market||'—'}</td>
+        <td style="font-size:12px">${fmt(r.market_cap)}</td>
+        <td style="font-size:12px">${r.price ? r.price.toLocaleString()+'원' : '—'}</td>
+        <td style="font-size:12px;color:${chgColor(r.price_change_rate)}">${r.price_change_rate != null ? (r.price_change_rate>0?'+':'')+r.price_change_rate.toFixed(2)+'%' : '—'}</td>
+        <td>${num(r.per)}</td>
+        <td>${num(r.pbr)}</td>
+        <td style="color:${r.operating_margin>0?'var(--green)':'var(--text2)'}">${pct(r.operating_margin)}</td>
+        <td>${pct(r.roe)}</td>
+        <td>${pct(r.roa)}</td>
+        <td>${pct(r.debt_ratio)}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table></div>`;
+
+  window._screenerData = combined;
+}
+
+function exportScreener() {
+  if (!window._screenerData?.length) return;
+  const keys = ['corp_name','industry','market','capEok','price','price_change_rate','per','pbr','operating_margin','roe','roa','debt_ratio'];
+  const headers = ['종목명','산업','시장','시총(억)','현재가','등락률','PER','PBR','영업이익률','ROE','ROA','부채비율'];
+  const csv = [headers.join(','), ...window._screenerData.map(r => keys.map(k => r[k]??'').join(','))].join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csv);
+  a.download = 'screener_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}
