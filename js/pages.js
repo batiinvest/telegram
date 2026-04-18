@@ -250,7 +250,7 @@ async function loadInvestment() {
   }
 
   // companies 테이블에서 산업 정보 가져오기 (항상 최신으로 로드)
-  const { data: compData } = await sb.from('companies').select('name,code,industry').eq('active', true);
+  const { data: compData } = await sb.from('companies').select('name,code,industry,sub_industry').eq('active', true);
   const industryMap = {};
   (compData || []).forEach(s => {
     const code = (s.code || '').split('.')[0];
@@ -600,7 +600,7 @@ async function runScreener() {
   // companies에서 industry 정보
   let compRows = [], cp = 0;
   while (true) {
-    const { data } = await sb.from('companies').select('code,industry').range(cp*1000,(cp+1)*1000-1);
+    const { data } = await sb.from('companies').select('code,industry,sub_industry').range(cp*1000,(cp+1)*1000-1);
     if (!data?.length) break;
     compRows = compRows.concat(data);
     if (data.length < 1000) break;
