@@ -36,21 +36,37 @@ function pOverview() {
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
     <div class="card"><div class="card-header"><span class="card-title">산업별 현황</span></div><div class="card-body" style="padding:.75rem 1rem">
-      ${Object.entries(catMap).sort((a,b)=>b[1].m-a[1].m).map(([cat,v])=>`
-        <div style="padding:6px 0;border-bottom:1px solid var(--border)">
-          <div style="display:flex;align-items:center;gap:8px;font-size:13px">
+      ${Object.entries(catMap).sort((a,b)=>b[1].m-a[1].m).map(([cat,v])=>{
+        // 해당 산업 기업 채팅방 목록
+        const compList = companyRooms.filter(r=>r.cat===cat).sort((a,b)=>b.members-a.members);
+        const catId = 'cat-' + cat.replace(/[^a-zA-Z0-9가-힣]/g,'');
+        return `
+        <div style="border-bottom:1px solid var(--border)">
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 0;cursor:pointer"
+               onclick="toggleCatDetail('${catId}')">
             <span class="cat-dot" style="background:${CATS[cat]||'#888'}"></span>
-            <span style="flex:1;font-weight:500">${cat}</span>
-            <span style="font-size:11px;color:var(--text3);margin-right:4px">${v.n}개 기업방</span>
-            <span style="color:var(--text2);font-size:12px">${v.m.toLocaleString()}명</span>
+            <span style="flex:1;font-weight:500;font-size:13px">${cat}</span>
+            <div style="text-align:right">
+              <div style="font-size:13px;font-weight:500">${v.m.toLocaleString()}명
+                <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:4px">기업방 ${v.n}개</span>
+              </div>
+              ${v.industryM > 0 ? `<div style="font-size:11px;color:var(--text3)">${v.industryLink?`<a href="${v.industryLink}" target="_blank" style="color:var(--tg)" onclick="event.stopPropagation()">산업 채팅방</a>`:'산업 채팅방'} ${v.industryM.toLocaleString()}명</div>` : ''}
+            </div>
+            <span style="font-size:11px;color:var(--text3)" id="${catId}-icon">▶</span>
           </div>
-          ${v.industryM > 0 ? `
-          <div style="display:flex;align-items:center;gap:6px;margin-top:3px;padding-left:20px">
-            <span style="font-size:11px;color:var(--text3)">산업 채팅방</span>
-            ${v.industryLink ? `<a href="${v.industryLink}" target="_blank" style="font-size:11px;color:var(--tg)">바로가기</a>` : ''}
-            <span style="font-size:11px;color:var(--text3);margin-left:auto">${v.industryM.toLocaleString()}명</span>
-          </div>` : ''}
-        </div>`).join('')}
+          <div id="${catId}" style="display:none;padding:0 0 8px 16px">
+            ${compList.map(r=>`
+              <div style="display:flex;align-items:center;gap:6px;padding:4px 0">
+                <span style="font-size:12px;flex:1;color:var(--text2)">${r.name}</span>
+                <span style="font-size:11px;color:var(--text3);min-width:48px;text-align:right">${(r.members||0).toLocaleString()}명</span>
+                <span style="font-size:11px;color:${(r.members||0)>=(r.max_members||1000)?'var(--red)':'var(--green)'}">
+                  ${(r.members||0)>=(r.max_members||1000)?'마감':'입장'}
+                </span>
+                ${r.link?`<a href="${r.link}" target="_blank" style="font-size:11px;color:var(--tg)">→</a>`:''}
+              </div>`).join('')}
+          </div>
+        </div>`;
+      }).join('')}
     </div></div>
     <div class="card"><div class="card-header"><span class="card-title">멤버 Top 5</span></div><div class="card-body" style="padding:.75rem 1rem">
       ${top5.map((r,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px"><span style="width:16px;color:var(--text3);font-size:11px;font-weight:600">${i+1}</span><span style="flex:1">${r.name}</span><span style="color:var(--text2);font-size:12px">${(r.members||0).toLocaleString()}</span><div style="width:50px"><div class="progress"><div class="progress-fill" style="background:${CATS[r.cat]||'#888'};width:${Math.min(100,Math.round((r.members||0)/(r.max_members||1000)*100))}%"></div></div></div></div>`).join('')}
@@ -143,6 +159,15 @@ async function loadLogs() {
 }
 
 // ── 재무 상태 ──
+
+function toggleCatDetail(id) {
+  const el = document.getElementById(id);
+  const icon = document.getElementById(id + '-icon');
+  if (!el) return;
+  const isOpen = el.style.display !== 'none';
+  el.style.display = isOpen ? 'none' : 'block';
+  if (icon) icon.textContent = isOpen ? '▶' : '▼';
+}
 
 function pInvestment() {
   return `
