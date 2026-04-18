@@ -37,32 +37,33 @@ function pOverview() {
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
     <div class="card"><div class="card-header"><span class="card-title">산업별 현황</span></div><div class="card-body" style="padding:.75rem 1rem">
       ${Object.entries(catMap).sort((a,b)=>b[1].m-a[1].m).map(([cat,v])=>{
-        // 해당 산업 기업 채팅방 목록
         const compList = companyRooms.filter(r=>r.cat===cat).sort((a,b)=>b.members-a.members);
         const catId = 'cat-' + cat.replace(/[^a-zA-Z0-9가-힣]/g,'');
         return `
         <div style="border-bottom:1px solid var(--border)">
-          <div style="display:flex;align-items:center;gap:8px;padding:8px 0;cursor:pointer"
+          <div style="display:flex;align-items:center;gap:10px;padding:9px 0;cursor:pointer"
                onclick="toggleCatDetail('${catId}')">
             <span class="cat-dot" style="background:${CATS[cat]||'#888'}"></span>
-            <span style="flex:1;font-weight:500;font-size:13px">${cat}</span>
-            <div style="text-align:right">
-              <div style="font-size:13px;font-weight:500">${v.m.toLocaleString()}명
-                <span style="font-size:11px;color:var(--text3);font-weight:400;margin-left:4px">기업방 ${v.n}개</span>
-              </div>
-              ${v.industryM > 0 ? `<div style="font-size:11px;color:var(--text3)">${v.industryLink?`<a href="${v.industryLink}" target="_blank" style="color:var(--tg)" onclick="event.stopPropagation()">산업 채팅방</a>`:'산업 채팅방'} ${v.industryM.toLocaleString()}명</div>` : ''}
-            </div>
-            <span style="font-size:11px;color:var(--text3)" id="${catId}-icon">▶</span>
+            <span style="font-weight:600;font-size:13px;min-width:56px">${cat}</span>
+            ${v.industryM > 0 ? `
+            <span style="font-size:12px;color:var(--tg)">
+              ${v.industryLink
+                ? `<a href="${v.industryLink}" target="_blank" style="color:var(--tg)" onclick="event.stopPropagation()">산업채팅방</a>`
+                : '산업채팅방'}
+              <span style="color:var(--text2);margin-left:3px">${v.industryM.toLocaleString()}명</span>
+            </span>` : '<span></span>'}
+            <span style="flex:1"></span>
+            <span style="font-size:12px;color:var(--text2)">기업방 <b>${v.n}</b>개</span>
+            <span style="font-size:13px;font-weight:600;min-width:70px;text-align:right">${v.m.toLocaleString()}명</span>
+            <span style="font-size:11px;color:var(--text3);width:14px;text-align:center" id="${catId}-icon">▶</span>
           </div>
-          <div id="${catId}" style="display:none;padding:0 0 8px 16px">
+          <div id="${catId}" style="display:none;padding:2px 0 10px 18px">
             ${compList.map(r=>`
-              <div style="display:flex;align-items:center;gap:6px;padding:4px 0">
-                <span style="font-size:12px;flex:1;color:var(--text2)">${r.name}</span>
-                <span style="font-size:11px;color:var(--text3);min-width:48px;text-align:right">${(r.members||0).toLocaleString()}명</span>
-                <span style="font-size:11px;color:${(r.members||0)>=(r.max_members||1000)?'var(--red)':'var(--green)'}">
-                  ${(r.members||0)>=(r.max_members||1000)?'마감':'입장'}
-                </span>
-                ${r.link?`<a href="${r.link}" target="_blank" style="font-size:11px;color:var(--tg)">→</a>`:''}
+              <div style="display:flex;align-items:center;gap:6px;padding:3px 0">
+                <span style="font-size:12px;flex:1;color:var(--text1)">${r.name}</span>
+                <span style="font-size:12px;color:var(--text2);min-width:52px;text-align:right">${(r.members||0).toLocaleString()}명</span>
+                <span style="font-size:11px;font-weight:500;min-width:28px;text-align:center;color:${(r.members||0)>=(r.max_members||1000)?'var(--red)':'var(--green)'}">${(r.members||0)>=(r.max_members||1000)?'마감':'입장'}</span>
+                ${r.link?`<a href="${r.link}" target="_blank" style="font-size:12px;color:var(--tg);text-decoration:none">→</a>`:'<span style="width:12px"></span>'}
               </div>`).join('')}
           </div>
         </div>`;
