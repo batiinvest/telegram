@@ -254,11 +254,15 @@ async function loadInvestment() {
   const industryMap = {};
   (compData || []).forEach(s => {
     const code = (s.code || '').split('.')[0];
-    if (code) industryMap[code] = s.industry || '기타';
+    if (code) industryMap[code] = { industry: s.industry || '기타', sub_industry: s.sub_industry || '' };
   });
 
   // 산업 정보 붙이기
-  allData = allData.map(r => ({ ...r, industry: industryMap[r.stock_code] || '기타' }));
+  allData = allData.map(r => ({
+    ...r,
+    industry:     (industryMap[r.stock_code] || {}).industry     || '기타',
+    sub_industry: (industryMap[r.stock_code] || {}).sub_industry || '',
+  }));
 
   // 산업 필터
   const filtered = industry === 'all' ? allData : allData.filter(r => r.industry === industry);
@@ -343,9 +347,10 @@ async function loadInvestment() {
       </div>`;
   }
 
-  // 산업별 등락률 (상위 3종목)
+  // 산업별 등락률
   const industries = ['반도체','바이오','2차전지','로봇','뷰티','테크','조선','신재생','엔터','소비재','우주'];
   const targetInds = industry === 'all' ? industries : [industry];
+  const isSingle   = industry !== 'all';  // 단일 산업 선택 시 세부분류 표시
 
   const indEl = document.getElementById('inv-industry-list');
   if (indEl) {
@@ -355,18 +360,61 @@ async function loadInvestment() {
         .sort((a,b) => (b.price_change_rate||0) - (a.price_change_rate||0));
       if (!indStocks.length) return '';
       const indAvg = indStocks.reduce((s,r) => s + (r.price_change_rate||0), 0) / indStocks.length;
-      const top3   = indStocks.slice(0, 3);
-      const bot3   = indStocks.slice(-3).reverse();
-      return `<div style="padding:10px 12px;border-bottom:1px solid var(--border)">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <span style="font-size:13px;font-weight:500">${ind}</span>
-          <span style="font-size:12px;color:${indAvg>=0?'var(--red)':'#4a9eff'};font-weight:500">평균 ${indAvg>=0?'+':''}${indAvg.toFixed(2)}%</span>
-        </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${top3.map(r => `<span style="font-size:11px;padding:2px 8px;border-radius:100px;background:rgba(45,206,137,.12);color:var(--green)">${r.corp_name} +${r.price_change_rate.toFixed(1)}%</span>`).join('')}
-          ${bot3.map(r => `<span style="font-size:11px;padding:2px 8px;border-radius:100px;background:rgba(74,158,255,.12);color:#4a9eff">${r.corp_name} ${r.price_change_rate.toFixed(1)}%</span>`).join('')}
-        </div>
-      </div>`;
+
+      if (isSingle) {
+        // 세부분류별 그룹핑
+        const subMap = {};
+        indStocks.forEach(r => {
+          const sub = r.sub_industry || '기타';
+          if (!subMap[sub]) subMap[sub] = [];
+          subMap[sub].push(r);
+        });
+        // 세부분류별 평균 등락률 기준 정렬
+        const subEntries = Object.entries(subMap).sort((a,b) => {
+          const avgA = a[1].reduce((s,r) => s+(r.price_change_rate||0),0)/a[1].length;
+          const avgB = b[1].reduce((s,r) => s+(r.price_change_rate||0),0)/b[1].length;
+          return avgB - avgA;
+        });
+
+        return `<div style="padding:8px 0">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:0 12px;margin-bottom:8px">
+            <span style="font-size:13px;font-weight:600">${ind}</span>
+            <span style="font-size:12px;color:${indAvg>=0?'var(--red)':'#4a9eff'};font-weight:500">전체 평균 ${indAvg>=0?'+':''}${indAvg.toFixed(2)}%</span>
+          </div>
+          ${subEntries.map(([sub, stocks]) => {
+            const subAvg = stocks.reduce((s,r) => s+(r.price_change_rate||0),0)/stocks.length;
+            const icon = subAvg > 1 ? '🔥' : subAvg > 0 ? '🔺' : subAvg < 0 ? '🔹' : '⬜';
+            return `<div style="padding:7px 12px;border-top:1px solid var(--border)">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+                <span style="font-size:12px;font-weight:500;color:var(--text1)">${icon} ${sub}</span>
+                <span style="font-size:11px;color:${subAvg>=0?'var(--red)':'#4a9eff'}">${subAvg>=0?'+':''}${subAvg.toFixed(2)}%</span>
+              </div>
+              <div style="display:flex;gap:5px;flex-wrap:wrap">
+                ${stocks.map(r => {
+                  const chg = r.price_change_rate || 0;
+                  const color = chg > 0 ? 'rgba(45,206,137,.12)' : chg < 0 ? 'rgba(74,158,255,.12)' : 'rgba(128,128,128,.1)';
+                  const tc = chg > 0 ? 'var(--green)' : chg < 0 ? '#4a9eff' : 'var(--text3)';
+                  return `<span style="font-size:11px;padding:2px 8px;border-radius:100px;background:${color};color:${tc}">${r.corp_name} ${chg>=0?'+':''}${chg.toFixed(1)}%</span>`;
+                }).join('')}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>`;
+      } else {
+        // 전체 산업 보기 — 기존 방식 (상위 3 + 하위 3)
+        const top3 = indStocks.slice(0, 3);
+        const bot3 = indStocks.slice(-3).reverse();
+        return `<div style="padding:10px 12px;border-bottom:1px solid var(--border)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:13px;font-weight:500">${ind}</span>
+            <span style="font-size:12px;color:${indAvg>=0?'var(--red)':'#4a9eff'};font-weight:500">평균 ${indAvg>=0?'+':''}${indAvg.toFixed(2)}%</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${top3.map(r => `<span style="font-size:11px;padding:2px 8px;border-radius:100px;background:rgba(45,206,137,.12);color:var(--green)">${r.corp_name} +${r.price_change_rate.toFixed(1)}%</span>`).join('')}
+            ${bot3.map(r => `<span style="font-size:11px;padding:2px 8px;border-radius:100px;background:rgba(74,158,255,.12);color:#4a9eff">${r.corp_name} ${r.price_change_rate.toFixed(1)}%</span>`).join('')}
+          </div>
+        </div>`;
+      }
     }).filter(Boolean).join('');
   }
 }
