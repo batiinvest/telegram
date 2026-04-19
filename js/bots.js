@@ -383,6 +383,7 @@ async function saveDartLevel(key, elId) {
   if (error) { toast('저장 실패: ' + error.message, 'error'); return; }
   toast('저장 완료 — 봇 재로드 후 반영됩니다', 'success');
 }
+async function loadNewsFilter() {
   const keys = ['news_spam_patterns', 'news_meaningful_keywords', 'dart_blacklist'];
   const { data } = await sb.from('app_config').select('key,value').in('key', keys);
   const map = {};
