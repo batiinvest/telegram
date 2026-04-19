@@ -135,12 +135,18 @@ async function loadBotStatus() {
 function pBotConfig() {
   if (!isAdmin()) return `<div style="padding:2rem;text-align:center;color:var(--text3);font-size:13px">admin만 접근 가능합니다.</div>`;
   return `
-  <div class="tabs" style="margin-bottom:1rem" id="botcfg-tabs">
-    <button class="tab active" onclick="switchBotCfgTab('keywords',this)">키워드 설정</button>
-    <button class="tab" onclick="switchBotCfgTab('news-filter',this)">뉴스 필터</button>
-    <button class="tab" onclick="switchBotCfgTab('dart-level',this)">공시 등급</button>
-    <button class="tab" onclick="switchBotCfgTab('schedule',this)">스케줄</button>
-    <button class="tab" onclick="switchBotCfgTab('news-terms',this)">산업별 검색어</button>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+    <div class="tabs" style="margin-bottom:0" id="botcfg-tabs">
+      <button class="tab active" onclick="switchBotCfgTab('keywords',this)">키워드 설정</button>
+      <button class="tab" onclick="switchBotCfgTab('news-filter',this)">뉴스 필터</button>
+      <button class="tab" onclick="switchBotCfgTab('dart-level',this)">공시 등급</button>
+      <button class="tab" onclick="switchBotCfgTab('schedule',this)">스케줄</button>
+      <button class="tab" onclick="switchBotCfgTab('news-terms',this)">산업별 검색어</button>
+    </div>
+    <button class="btn btn-sm btn-primary" id="botcfg-reload-btn" onclick="requestBotReload('botcfg-reload-btn')" title="저장한 설정을 봇에 즉시 반영합니다">
+      <svg style="width:12px;height:12px;vertical-align:middle;margin-right:3px" viewBox="0 0 16 16" fill="none"><path d="M13.5 8A5.5 5.5 0 112.5 5M2.5 2v3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      봇 재로드
+    </button>
   </div>
 
   <!-- 키워드 설정 탭 -->
