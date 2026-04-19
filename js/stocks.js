@@ -273,22 +273,38 @@ async function saveAssign() {
   let ok = true;
 
   // 추가: industry 없는 종목은 industry도 함께 세팅
+  // monitoring_level이 'data'인 종목은 'news'로 자동 업그레이드
   if (toAdd.length) {
-    // industry 미배정 종목 따로 처리
-    const needIndustry = toAdd.filter(s => !s.industry || s.industry !== _assignIndustry);
+    const needIndustry      = toAdd.filter(s => !s.industry || s.industry !== _assignIndustry);
     const alreadyInIndustry = toAdd.filter(s => s.industry === _assignIndustry);
 
     if (needIndustry.length) {
       const { error } = await sb.from('companies')
-        .update({ industry: _assignIndustry, sub_industry: _assignSub })
+        .update({
+          industry: _assignIndustry,
+          sub_industry: _assignSub,
+          // data 레벨만 news로 업그레이드 (full은 유지)
+          // → 일괄 업데이트라 개별 체크 불가, 조건을 분리해서 처리
+        })
         .in('id', needIndustry.map(s => s.id));
       if (error) { toast('배정 실패: ' + error.message, 'error'); ok = false; }
+
+      // data 레벨 종목만 news로 업그레이드
+      const dataIds = needIndustry.filter(s => !s.monitoring_level || s.monitoring_level === 'data').map(s => s.id);
+      if (dataIds.length) {
+        await sb.from('companies').update({ monitoring_level: 'news', is_monitored: true }).in('id', dataIds);
+      }
     }
     if (alreadyInIndustry.length) {
       const { error } = await sb.from('companies')
         .update({ sub_industry: _assignSub })
         .in('id', alreadyInIndustry.map(s => s.id));
       if (error) { toast('배정 실패: ' + error.message, 'error'); ok = false; }
+
+      const dataIds = alreadyInIndustry.filter(s => !s.monitoring_level || s.monitoring_level === 'data').map(s => s.id);
+      if (dataIds.length) {
+        await sb.from('companies').update({ monitoring_level: 'news', is_monitored: true }).in('id', dataIds);
+      }
     }
   }
 
@@ -300,7 +316,11 @@ async function saveAssign() {
   }
 
   if (ok) {
-    toast(`저장 완료 — 추가 ${toAdd.length}개, 제외 ${toRemove.length}개`, 'success');
+    const upgradedCount = toAdd.filter(s => !s.monitoring_level || s.monitoring_level === 'data').length;
+    const msg = upgradedCount > 0
+      ? `저장 완료 — 추가 ${toAdd.length}개, 제외 ${toRemove.length}개 (${upgradedCount}개 뉴스/공시 자동 업그레이드)`
+      : `저장 완료 — 추가 ${toAdd.length}개, 제외 ${toRemove.length}개`;
+    toast(msg, 'success');
     _allCompanies = []; // 캐시 무효화 (다음 열 때 재조회)
     closeModal('m-assign-sub');
     loadSubIndustryPanel();
