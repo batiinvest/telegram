@@ -6,10 +6,16 @@ function pOverview() {
   const companyRooms  = A.rooms.filter(r => r.room_type !== 'industry');
   const industryRooms = A.rooms.filter(r => r.room_type === 'industry');
 
-  const total  = companyRooms.length;
-  const full   = companyRooms.filter(isFull).length;
-  const open   = companyRooms.filter(r => !isFull(r)).length;
-  const totalM = companyRooms.reduce((s,r) => s + (r.members||0), 0);
+  // 전체 채팅방 = 기업방 + 산업방
+  const total        = A.rooms.length;
+  const totalCompany = companyRooms.length;
+  const totalIndustry = industryRooms.length;
+
+  const full = companyRooms.filter(isFull).length;
+  const open = companyRooms.filter(r => !isFull(r)).length;
+
+  // 멤버 집계: 기업방 합산 (중복 포함, Bot API 한계로 개인별 중복 제거 불가)
+  const companyM = companyRooms.reduce((s,r) => s + (r.members||0), 0);
 
   // 산업별 집계 (기업 채팅방 기준)
   const catMap = {};
@@ -29,10 +35,18 @@ function pOverview() {
   const top5 = [...companyRooms].sort((a,b) => b.members - a.members).slice(0,5);
   return `
   <div class="metrics-grid">
-    <div class="metric-card"><div class="metric-label">전체 채팅방</div><div class="metric-value">${total}</div><div class="metric-sub">Supabase DB 기준</div></div>
-    <div class="metric-card"><div class="metric-label">전체 멤버</div><div class="metric-value">${totalM.toLocaleString()}</div><div class="metric-sub">동기화 기준</div></div>
-    <div class="metric-card"><div class="metric-label">정원 마감</div><div class="metric-value" style="color:var(--red)">${full}</div><div class="metric-sub">${total?Math.round(full/total*100):0}%</div></div>
-    <div class="metric-card"><div class="metric-label">입장 가능</div><div class="metric-value" style="color:var(--green)">${open}</div><div class="metric-sub">${total?Math.round(open/total*100):0}%</div></div>
+    <div class="metric-card">
+      <div class="metric-label">전체 채팅방</div>
+      <div class="metric-value">${total}</div>
+      <div class="metric-sub">기업방 ${totalCompany} · 산업방 ${totalIndustry}</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">전체 멤버</div>
+      <div class="metric-value">${companyM.toLocaleString()}</div>
+      <div class="metric-sub">기업방 합산 · 동기화 기준</div>
+    </div>
+    <div class="metric-card"><div class="metric-label">정원 마감</div><div class="metric-value" style="color:var(--red)">${full}</div><div class="metric-sub">${totalCompany?Math.round(full/totalCompany*100):0}% (기업방)</div></div>
+    <div class="metric-card"><div class="metric-label">입장 가능</div><div class="metric-value" style="color:var(--green)">${open}</div><div class="metric-sub">${totalCompany?Math.round(open/totalCompany*100):0}% (기업방)</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
     <div class="card"><div class="card-header"><span class="card-title">산업별 현황</span></div><div class="card-body" style="padding:.75rem 1rem">
