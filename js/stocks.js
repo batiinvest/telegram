@@ -311,7 +311,7 @@ async function saveAssign() {
 
   if (toRemove.length) {
     const { error } = await sb.from('companies')
-      .update({ sub_industry: null })
+      .update({ sub_industry: '' })
       .in('id', toRemove);
     if (error) { toast('제외 실패: ' + error.message, 'error'); ok = false; }
   }
@@ -333,7 +333,7 @@ async function removeFromSubIndustry(id, name, sub) {
   if (!canEdit()) { toast('권한이 없습니다.', 'error'); return; }
   if (!confirm(`"${name}"을(를) [${sub}]에서 제외할까요?\n산업 분류도 초기화됩니다.`)) return;
   const { error } = await sb.from('companies')
-    .update({ sub_industry: null, industry: null })
+    .update({ sub_industry: '', industry: '' })
     .eq('id', id);
   if (error) { toast('실패: ' + error.message, 'error'); return; }
   _allCompanies = []; // 캐시 무효화 — 다음 모달 열 때 재조회
@@ -469,8 +469,8 @@ async function saveStockEdit() {
   const payload = {
     name:             newName,
     code:             document.getElementById('se-code').value.trim(),
-    industry:         document.getElementById('se-industry').value.trim() || null,
-    sub_industry:     document.getElementById('se-sub').value.trim() || null,
+    industry:         document.getElementById('se-industry').value.trim(),
+    sub_industry:     document.getElementById('se-sub').value.trim(),
     chat_id:          document.getElementById('se-chatid').value.trim() || null,
     keywords:         document.getElementById('se-kw').value.trim(),
     active:           document.getElementById('se-active').checked,
@@ -526,8 +526,8 @@ async function addStock() {
   const payload = {
     name:         document.getElementById('sa-name').value.trim(),
     code:         document.getElementById('sa-code').value.trim(),
-    industry:     document.getElementById('sa-industry').value || null,
-    sub_industry: document.getElementById('sa-sub').value.trim() || null,
+    industry:     document.getElementById('sa-industry').value || '',
+    sub_industry: document.getElementById('sa-sub').value.trim(),
     chat_id:      document.getElementById('sa-chatid').value.trim() || null,
     keywords:     document.getElementById('sa-kw').value.trim(),
     active:       true,
