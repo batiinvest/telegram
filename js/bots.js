@@ -138,6 +138,7 @@ function pBotConfig() {
   <div class="tabs" style="margin-bottom:1rem" id="botcfg-tabs">
     <button class="tab active" onclick="switchBotCfgTab('keywords',this)">키워드 설정</button>
     <button class="tab" onclick="switchBotCfgTab('news-filter',this)">뉴스 필터</button>
+    <button class="tab" onclick="switchBotCfgTab('dart-level',this)">공시 등급</button>
     <button class="tab" onclick="switchBotCfgTab('schedule',this)">스케줄</button>
     <button class="tab" onclick="switchBotCfgTab('news-terms',this)">산업별 검색어</button>
   </div>
@@ -191,6 +192,86 @@ function pBotConfig() {
         </div>
       </div>
     </div>
+
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-header">
+        <span class="card-title">공시 블랙리스트 <span style="font-size:11px;font-weight:400;color:var(--text3)">— 이 기업의 공시는 수신 안 함</span></span>
+      </div>
+      <div class="card-body">
+        <div class="form-group">
+          <label class="form-label">기업명 <span style="font-size:11px;color:var(--text3)">(쉼표로 구분)</span></label>
+          <textarea class="form-input" id="cfg-dart-blacklist" rows="4" placeholder="삼성전자,SK하이닉스,..."></textarea>
+          <div class="form-hint">여기 입력된 기업의 공시는 기업채널 포함 모든 채널에 발송하지 않습니다.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-primary" onclick="saveNewsFilter('dart_blacklist', 'cfg-dart-blacklist', ',')">저장</button>
+          <span style="font-size:11px;color:var(--text3)">저장 후 봇 재로드 버튼을 눌러주세요.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">공시 채널 라우팅 기준</span></div>
+      <div class="card-body" style="font-size:12px;color:var(--text2);line-height:2">
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 16px">
+          <span style="color:var(--red);font-weight:600">🚨 긴급</span><span>거래정지·횡령·배임·상장폐지·불성실공시 → <b>메인 + 산업 + 기업채널</b></span>
+          <span style="color:var(--green);font-weight:600">📈 중요</span><span>공급계약·수주·잠정실적·증자·합병 등 → <b>산업 + 기업채널</b></span>
+          <span style="color:var(--text2)">📄 일반</span><span>그 외 공시 → <b>산업 + 기업채널</b></span>
+          <span style="color:var(--text3)">📊 잡공시</span><span>소유상황·IR·감사보고서 등 → <b>기업채널만</b></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 공시 등급 탭 -->
+  <div id="botcfg-dart-level" style="display:none">
+    <div style="font-size:12px;color:var(--text2);margin-bottom:1rem;padding:10px 14px;background:var(--bg3);border-radius:var(--radius-sm);border:1px solid var(--border)">
+      공시 제목에 키워드가 포함되면 해당 등급으로 분류됩니다. 쉼표로 구분하며 저장 후 봇 재로드 시 반영됩니다.<br>
+      <b style="color:var(--red)">긴급</b> → 메인+산업+기업 &nbsp;|&nbsp; <b style="color:var(--green)">중요</b> → 산업+기업 &nbsp;|&nbsp; <b style="color:var(--text2)">일반</b> → 산업+기업 &nbsp;|&nbsp; <b style="color:var(--text3)">잡공시</b> → 기업채널만
+    </div>
+
+    <div class="card" style="margin-bottom:.75rem">
+      <div class="card-header">
+        <span class="card-title" style="color:var(--red)">🚨 긴급 키워드</span>
+        <span style="font-size:11px;color:var(--text3)">메인 + 산업 + 기업채널</span>
+      </div>
+      <div class="card-body">
+        <textarea class="form-input" id="cfg-dart-urgent" rows="3"
+          placeholder="거래정지,횡령,배임,상장폐지,불성실,공개매수,영업정지"></textarea>
+        <div style="display:flex;gap:8px;margin-top:.75rem;align-items:center">
+          <button class="btn btn-primary btn-sm" onclick="saveDartLevel('dart_urgent','cfg-dart-urgent')">저장</button>
+          <span style="font-size:11px;color:var(--text3)">우선순위 가장 높음 — 중요/잡공시 키워드와 중복 시 긴급 우선</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:.75rem">
+      <div class="card-header">
+        <span class="card-title" style="color:var(--green)">📈 중요 키워드</span>
+        <span style="font-size:11px;color:var(--text3)">산업 + 기업채널</span>
+      </div>
+      <div class="card-body">
+        <textarea class="form-input" id="cfg-dart-major" rows="4"
+          placeholder="공급계약,수주,잠정실적,무상증자,유상증자,최대주주변경,합병,분할,인수,전환사채,소송,특허,임상,사업보고서"></textarea>
+        <div style="margin-top:.75rem">
+          <button class="btn btn-primary btn-sm" onclick="saveDartLevel('dart_major','cfg-dart-major')">저장</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title" style="color:var(--text3)">📊 잡공시 키워드</span>
+        <span style="font-size:11px;color:var(--text3)">기업채널만 (산업/메인 발송 안 함)</span>
+      </div>
+      <div class="card-body">
+        <textarea class="form-input" id="cfg-dart-skip" rows="4"
+          placeholder="소유상황보고,기업설명회,IR개최,감사보고서,주주총회소집,의결권대리,증권발행실적,투자설명서,자기주식취득결과,자기주식처분결과"></textarea>
+        <div style="margin-top:.75rem">
+          <button class="btn btn-primary btn-sm" onclick="saveDartLevel('dart_skip','cfg-dart-skip')">저장</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- 스케줄 탭 -->
@@ -222,17 +303,16 @@ function pBotConfig() {
 }
 
 function switchBotCfgTab(tab, el) {
-  ['keywords','news-filter','schedule','news-terms'].forEach(t => {
+  ['keywords','news-filter','dart-level','schedule','news-terms'].forEach(t => {
     document.getElementById(`botcfg-${t}`).style.display = t === tab ? '' : 'none';
   });
   document.querySelectorAll('#botcfg-tabs .tab').forEach(t => t.classList.remove('active'));
   if (el) el.classList.add('active');
 
-  if (tab === 'schedule' && !document.getElementById('schedule-list').children.length) {
-    loadSchedules();
-  }
+  if (tab === 'schedule') loadSchedules();
   if (tab === 'news-terms') loadNewsTerms();
   if (tab === 'news-filter') loadNewsFilter();
+  if (tab === 'dart-level') loadDartLevel();
 }
 
 async function loadBotConfig() {
@@ -278,16 +358,42 @@ async function loadSchedules() {
   '<div style="font-size:11px;color:var(--text3);margin-top:.75rem">변경 즉시 반영됩니다. 봇은 다음 사이클에서 확인합니다.</div>';
 }
 
-async function loadNewsFilter() {
-  const keys = ['news_spam_patterns', 'news_meaningful_keywords'];
+async function loadDartLevel() {
+  const keys = ['dart_urgent', 'dart_major', 'dart_skip'];
   const { data } = await sb.from('app_config').select('key,value').in('key', keys);
   const map = {};
   (data || []).forEach(r => map[r.key] = r.value);
 
-  const spamEl = document.getElementById('cfg-spam-patterns');
-  const kwEl   = document.getElementById('cfg-meaningful-kw');
+  const urgentEl = document.getElementById('cfg-dart-urgent');
+  const majorEl  = document.getElementById('cfg-dart-major');
+  const skipEl   = document.getElementById('cfg-dart-skip');
+  if (urgentEl && map['dart_urgent']) urgentEl.value = map['dart_urgent'];
+  if (majorEl  && map['dart_major'])  majorEl.value  = map['dart_major'];
+  if (skipEl   && map['dart_skip'])   skipEl.value   = map['dart_skip'];
+}
+
+async function saveDartLevel(key, elId) {
+  if (!isAdmin()) { toast('admin만 수정 가능합니다.', 'error'); return; }
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const value = el.value.trim();
+  const { error } = await sb.from('app_config')
+    .update({ value, updated_at: new Date().toISOString() })
+    .eq('key', key);
+  if (error) { toast('저장 실패: ' + error.message, 'error'); return; }
+  toast('저장 완료 — 봇 재로드 후 반영됩니다', 'success');
+}
+  const keys = ['news_spam_patterns', 'news_meaningful_keywords', 'dart_blacklist'];
+  const { data } = await sb.from('app_config').select('key,value').in('key', keys);
+  const map = {};
+  (data || []).forEach(r => map[r.key] = r.value);
+
+  const spamEl  = document.getElementById('cfg-spam-patterns');
+  const kwEl    = document.getElementById('cfg-meaningful-kw');
+  const blEl    = document.getElementById('cfg-dart-blacklist');
   if (spamEl && map['news_spam_patterns'])       spamEl.value = map['news_spam_patterns'];
   if (kwEl   && map['news_meaningful_keywords']) kwEl.value   = map['news_meaningful_keywords'];
+  if (blEl   && map['dart_blacklist'])           blEl.value   = map['dart_blacklist'];
 }
 
 async function saveNewsFilter(key, elId, separator) {
