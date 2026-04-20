@@ -102,26 +102,107 @@ async function testBot() {
 // ══════════════════════════════════════════
 //  TEAM MANAGEMENT
 // ══════════════════════════════════════════
+function pTeam() {
+  if (!isAdmin()) return `<div style="padding:2rem;text-align:center;color:var(--text3);font-size:13px">admin만 접근 가능합니다.</div>`;
+  return `
+  <div style="max-width:720px">
+    <!-- 역할 설명 카드 -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:1.5rem">
+      ${[
+        { role:'admin', label:'관리자', color:'var(--tg)', bg:'rgba(42,171,238,.1)', perms:['모든 기능', '삭제·설정·팀원관리', '봇 설정 변경'] },
+        { role:'editor', label:'에디터', color:'var(--green)', bg:'rgba(45,206,137,.1)', perms:['채팅방·종목 추가/수정', '공지 발송·동기화', '봇 재로드'] },
+        { role:'viewer', label:'뷰어', color:'var(--text2)', bg:'rgba(255,255,255,.04)', perms:['모든 페이지 조회', '수정·발송 불가', '읽기 전용'] },
+      ].map(r => `
+      <div style="background:${r.bg};border:1px solid var(--border);border-radius:var(--radius);padding:1rem">
+        <div style="font-size:13px;font-weight:600;color:${r.color};margin-bottom:.5rem">${r.label}</div>
+        ${r.perms.map(p => `<div style="font-size:11px;color:var(--text2);padding:2px 0;display:flex;gap:5px;align-items:center">
+          <span style="width:4px;height:4px;border-radius:50%;background:${r.color};flex-shrink:0"></span>${p}
+        </div>`).join('')}
+      </div>`).join('')}
+    </div>
+
+    <!-- 팀원 목록 -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">팀원 목록</span>
+        <button class="btn btn-sm" onclick="loadTeam()">새로고침</button>
+      </div>
+      <div id="team-list" style="padding:.5rem 0">
+        <div style="padding:1.5rem;text-align:center;color:var(--text3)"><span class="loading"></span></div>
+      </div>
+    </div>
+  </div>`;
+}
+
 async function loadTeam() {
-  const el = document.getElementById('team-list'); if (!el) return;
+  const el = document.getElementById('team-list');
+  if (!el) return;
+
   const { data, error } = await DB('app_users').select('*').order('created_at');
-  if (error) { el.innerHTML = `<div style="padding:1rem;color:var(--red);font-size:13px">${error.message}</div>`; return; }
-  const roleLabel = { admin: '관리자', editor: '에디터', viewer: '뷰어' };
-  const roleCls   = { admin: 'role-admin', editor: 'role-editor', viewer: 'role-viewer' };
-  el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>이름</th><th>이메일</th><th>역할</th><th>마지막 로그인</th>${isAdmin()?'<th>역할 변경</th>':''}</tr></thead>
-    <tbody>${data.map(u => `<tr>
-      <td style="font-weight:500">${u.name || '—'}</td>
-      <td style="color:var(--text2)">${u.email}</td>
-      <td><span class="nav-role ${roleCls[u.role]}">${roleLabel[u.role]}</span></td>
-      <td style="font-size:12px;color:var(--text3)">${u.last_login ? new Date(u.last_login).toLocaleString('ko-KR') : '없음'}</td>
-      ${isAdmin() ? `<td><select style="font-size:12px;padding:3px 6px;border-radius:4px;border:1px solid var(--border);background:var(--bg3);color:var(--text)" onchange="changeRole('${u.id}',this.value)" ${u.id === A.user.id ? 'disabled' : ''}>
-        <option value="admin" ${u.role==='admin'?'selected':''}>관리자</option>
-        <option value="editor" ${u.role==='editor'?'selected':''}>에디터</option>
-        <option value="viewer" ${u.role==='viewer'?'selected':''}>뷰어</option>
-      </select></td>` : ''}
-    </tr>`).join('')}</tbody>
-  </table></div>`;
+  if (error) {
+    el.innerHTML = `<div style="padding:1rem;color:var(--red);font-size:13px">${error.message}</div>`;
+    return;
+  }
+
+  const roleMeta = {
+    admin:  { label:'관리자', color:'var(--tg)',    bg:'rgba(42,171,238,.12)' },
+    editor: { label:'에디터', color:'var(--green)', bg:'rgba(45,206,137,.12)' },
+    viewer: { label:'뷰어',   color:'var(--text3)', bg:'rgba(255,255,255,.06)' },
+  };
+
+  el.innerHTML = data.map(u => {
+    const m = roleMeta[u.role] || roleMeta.viewer;
+    const initials = (u.name || u.email).slice(0,2).toUpperCase();
+    const isMe = u.id === A.user.id;
+    const lastLogin = u.last_login
+      ? new Date(u.last_login).toLocaleString('ko-KR', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})
+      : '없음';
+
+    return `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border)">
+      <!-- 아바타 -->
+      <div style="width:36px;height:36px;border-radius:50%;background:${m.bg};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:${m.color};flex-shrink:0">${initials}</div>
+
+      <!-- 이름/이메일 -->
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;display:flex;align-items:center;gap:6px">
+          ${u.name || '—'}
+          ${isMe ? `<span style="font-size:10px;padding:1px 6px;border-radius:100px;background:rgba(42,171,238,.15);color:var(--tg)">나</span>` : ''}
+        </div>
+        <div style="font-size:11px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.email}</div>
+      </div>
+
+      <!-- 마지막 로그인 -->
+      <div style="font-size:11px;color:var(--text3);text-align:right;min-width:90px;display:none" class="team-col-time">${lastLogin}</div>
+
+      <!-- 역할 배지 / 변경 -->
+      <div style="flex-shrink:0">
+        ${isAdmin() && !isMe ? `
+        <div style="position:relative">
+          <select onchange="changeRole('${u.id}',this.value)"
+            style="appearance:none;-webkit-appearance:none;font-size:12px;font-weight:500;padding:4px 24px 4px 10px;border-radius:100px;border:1px solid var(--border);background:${m.bg};color:${m.color};cursor:pointer;font-family:inherit">
+            <option value="admin"  ${u.role==='admin' ?'selected':''}>관리자</option>
+            <option value="editor" ${u.role==='editor'?'selected':''}>에디터</option>
+            <option value="viewer" ${u.role==='viewer'?'selected':''}>뷰어</option>
+          </select>
+          <svg style="position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none;width:10px;height:10px;opacity:.5" viewBox="0 0 10 10" fill="none">
+            <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        ` : `
+        <span style="font-size:12px;font-weight:500;padding:4px 12px;border-radius:100px;background:${m.bg};color:${m.color}">${m.label}</span>
+        `}
+      </div>
+    </div>`;
+  }).join('') +
+  `<div style="padding:.75rem 1rem;font-size:11px;color:var(--text3)">
+    총 ${data.length}명 · 본인 역할은 변경 불가
+  </div>`;
+
+  // 화면 넓으면 마지막 로그인 표시
+  if (window.innerWidth >= 600) {
+    el.querySelectorAll('.team-col-time').forEach(e => e.style.display = 'block');
+  }
 }
 
 async function changeRole(userId, role) {
@@ -129,6 +210,7 @@ async function changeRole(userId, role) {
   const { error } = await DB('app_users').update({ role }).eq('id', userId);
   if (error) { toast('변경 실패: ' + error.message, 'error'); return; }
   toast('역할 변경됨', 'success');
+  loadTeam();
 }
 
 // ══════════════════════════════════════════

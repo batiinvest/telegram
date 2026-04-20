@@ -1,15 +1,5 @@
 // bots.js — 봇 모니터링, 봇 설정
-function pTeam() {
-  if (!isAdmin()) return `<div style="padding:2rem;text-align:center;color:var(--text3);font-size:13px">admin만 접근 가능합니다.</div>`;
-  return `
-  <div class="section-header"><span class="section-title">팀원 목록</span><button class="btn btn-sm" onclick="loadTeam()">새로고침</button></div>
-  <div class="card" id="team-list"><div style="padding:1.5rem;text-align:center;color:var(--text3)"><span class="loading"></span></div></div>
-  <div style="margin-top:.75rem;font-size:12px;color:var(--text3)">
-    역할 안내 — <strong style="color:var(--tg)">admin</strong>: 모든 기능 (설정·삭제 포함) &nbsp;|&nbsp;
-    <strong style="color:var(--green)">editor</strong>: 공지·동기화·추가·수정 &nbsp;|&nbsp;
-    <strong style="color:var(--text3)">viewer</strong>: 읽기 전용
-  </div>`;
-}
+
 
 
 function pBot() {
