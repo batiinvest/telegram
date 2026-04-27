@@ -188,35 +188,6 @@ function pBotConfig() {
         </div>
       </div>
     </div>
-
-    <div class="card" style="margin-bottom:1rem">
-      <div class="card-header">
-        <span class="card-title">공시 블랙리스트 <span style="font-size:11px;font-weight:400;color:var(--text3)">— 이 기업의 공시는 수신 안 함</span></span>
-      </div>
-      <div class="card-body">
-        <div class="form-group">
-          <label class="form-label">기업명 <span style="font-size:11px;color:var(--text3)">(쉼표로 구분)</span></label>
-          <textarea class="form-input" id="cfg-dart-blacklist" rows="4" placeholder="삼성전자,SK하이닉스,..."></textarea>
-          <div class="form-hint">여기 입력된 기업의 공시는 기업채널 포함 모든 채널에 발송하지 않습니다.</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn btn-primary" onclick="saveNewsFilter('dart_blacklist', 'cfg-dart-blacklist', ',')">저장</button>
-          <span style="font-size:11px;color:var(--text3)">저장 후 봇 재로드 버튼을 눌러주세요.</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header"><span class="card-title">공시 채널 라우팅 기준</span></div>
-      <div class="card-body" style="font-size:12px;color:var(--text2);line-height:2">
-        <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 16px">
-          <span style="color:var(--red);font-weight:600">🚨 긴급</span><span>거래정지·횡령·배임·상장폐지·불성실공시 → <b>메인 + 산업 + 기업채널</b></span>
-          <span style="color:var(--green);font-weight:600">📈 중요</span><span>공급계약·수주·잠정실적·증자·합병 등 → <b>산업 + 기업채널</b></span>
-          <span style="color:var(--text2)">📄 일반</span><span>그 외 공시 → <b>산업 + 기업채널</b></span>
-          <span style="color:var(--text3)">📊 잡공시</span><span>소유상황·IR·감사보고서 등 → <b>기업채널만</b></span>
-        </div>
-      </div>
-    </div>
   </div>
 
   <!-- 공시 등급 탭 -->
@@ -265,6 +236,36 @@ function pBotConfig() {
           placeholder="소유상황보고,기업설명회,IR개최,감사보고서,주주총회소집,의결권대리,증권발행실적,투자설명서,자기주식취득결과,자기주식처분결과"></textarea>
         <div style="margin-top:.75rem">
           <button class="btn btn-primary btn-sm" onclick="saveDartLevel('dart_skip','cfg-dart-skip')">저장</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:.75rem">
+      <div class="card-header">
+        <span class="card-title">🚫 기업 블랙리스트 <span style="font-size:11px;font-weight:400;color:var(--text3)">— 모든 채널 차단</span></span>
+      </div>
+      <div class="card-body">
+        <div class="form-group">
+          <label class="form-label">기업명 <span style="font-size:11px;color:var(--text3)">(쉼표로 구분)</span></label>
+          <textarea class="form-input" id="cfg-dart-blacklist" rows="3" placeholder="삼성전자,SK하이닉스,..."></textarea>
+          <div class="form-hint">여기 입력된 기업의 공시는 기업채널 포함 모든 채널에 발송하지 않습니다.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-primary btn-sm" onclick="saveDartLevel('dart_blacklist','cfg-dart-blacklist')">저장</button>
+          <span style="font-size:11px;color:var(--text3)">저장 후 봇 재로드 버튼을 눌러주세요.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">채널 라우팅 기준</span></div>
+      <div class="card-body" style="font-size:12px;color:var(--text2);line-height:2">
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 16px">
+          <span style="color:var(--red);font-weight:600">🚨 긴급</span><span>거래정지·횡령·배임·상장폐지·불성실 → <b>메인 + 산업 + 기업채널</b></span>
+          <span style="color:var(--green);font-weight:600">📈 중요</span><span>공급계약·수주·실적·증자·합병 등 → <b>산업 + 기업채널</b></span>
+          <span style="color:var(--text2)">📄 일반</span><span>그 외 공시 → <b>산업 + 기업채널</b></span>
+          <span style="color:var(--text3)">📊 잡공시</span><span>소유상황·IR·감사보고서 등 → <b>기업채널만</b></span>
+          <span style="color:var(--red)">🚫 블랙리스트</span><span>지정 기업 → <b>모든 채널 차단</b></span>
         </div>
       </div>
     </div>
@@ -355,7 +356,7 @@ async function loadSchedules() {
 }
 
 async function loadDartLevel() {
-  const keys = ['dart_urgent', 'dart_major', 'dart_skip'];
+  const keys = ['dart_urgent', 'dart_major', 'dart_skip', 'dart_blacklist'];
   const { data } = await sb.from('app_config').select('key,value').in('key', keys);
   const map = {};
   (data || []).forEach(r => map[r.key] = r.value);
@@ -363,9 +364,11 @@ async function loadDartLevel() {
   const urgentEl = document.getElementById('cfg-dart-urgent');
   const majorEl  = document.getElementById('cfg-dart-major');
   const skipEl   = document.getElementById('cfg-dart-skip');
-  if (urgentEl && map['dart_urgent']) urgentEl.value = map['dart_urgent'];
-  if (majorEl  && map['dart_major'])  majorEl.value  = map['dart_major'];
-  if (skipEl   && map['dart_skip'])   skipEl.value   = map['dart_skip'];
+  const blEl     = document.getElementById('cfg-dart-blacklist');
+  if (urgentEl && map['dart_urgent'])    urgentEl.value = map['dart_urgent'];
+  if (majorEl  && map['dart_major'])     majorEl.value  = map['dart_major'];
+  if (skipEl   && map['dart_skip'])      skipEl.value   = map['dart_skip'];
+  if (blEl     && map['dart_blacklist']) blEl.value     = map['dart_blacklist'];
 }
 
 async function saveDartLevel(key, elId) {
@@ -380,17 +383,15 @@ async function saveDartLevel(key, elId) {
   toast('저장 완료 — 봇 재로드 후 반영됩니다', 'success');
 }
 async function loadNewsFilter() {
-  const keys = ['news_spam_patterns', 'news_meaningful_keywords', 'dart_blacklist'];
+  const keys = ['news_spam_patterns', 'news_meaningful_keywords'];
   const { data } = await sb.from('app_config').select('key,value').in('key', keys);
   const map = {};
   (data || []).forEach(r => map[r.key] = r.value);
 
-  const spamEl  = document.getElementById('cfg-spam-patterns');
-  const kwEl    = document.getElementById('cfg-meaningful-kw');
-  const blEl    = document.getElementById('cfg-dart-blacklist');
+  const spamEl = document.getElementById('cfg-spam-patterns');
+  const kwEl   = document.getElementById('cfg-meaningful-kw');
   if (spamEl && map['news_spam_patterns'])       spamEl.value = map['news_spam_patterns'];
   if (kwEl   && map['news_meaningful_keywords']) kwEl.value   = map['news_meaningful_keywords'];
-  if (blEl   && map['dart_blacklist'])           blEl.value   = map['dart_blacklist'];
 }
 
 async function saveNewsFilter(key, elId, separator) {
