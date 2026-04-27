@@ -16,7 +16,48 @@ const sb = supabase.createClient(SB_URL, SB_KEY, {
   }
 });
 const DB = sb.from.bind(sb);
+
+// ══════════════════════════════════════════
+//  산업 목록 — 단일 정의, 전체 파일 참조
+// ══════════════════════════════════════════
+const INDUSTRIES = ['바이오','뷰티','로봇','2차전지','신재생','소비재','테크','반도체','엔터','조선','우주'];
 const CATS = { '바이오':'#2AABEE','뷰티':'#f5365c','로봇':'#2dce89','2차전지':'#fb6340','신재생':'#5e72e4','소비재':'#f3a4b5','테크':'#a259ff','반도체':'#8898aa','엔터':'#ffd600','조선':'#11cdef','우주':'#4a6fa5' };
+
+// ══════════════════════════════════════════
+//  공통 HTML 유틸
+// ══════════════════════════════════════════
+const loadingHTML = (msg = '') =>
+  `<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:13px"><span class="loading"></span>${msg ? ' ' + msg : ''}</div>`;
+
+const emptyHTML = (msg = '데이터 없음') =>
+  `<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:13px">${msg}</div>`;
+
+const errorHTML = (msg = '') =>
+  `<div style="padding:1rem;color:var(--red);font-size:13px">${msg}</div>`;
+
+// ══════════════════════════════════════════
+//  공통 페이징 유틸
+//  사용법:
+//    const data = await fetchAllPages(
+//      sb.from('companies').select('id,name').eq('active', true)
+//    );
+// ══════════════════════════════════════════
+async function fetchAllPages(queryOrFn, pageSize = 1000) {
+  let all = [], page = 0;
+  while (true) {
+    const s = page * pageSize, e = (page + 1) * pageSize - 1;
+    // 콜백 방식: (s, e) => query.range(s, e)
+    // query 객체 방식: sb.from('table').select(...).eq(...)
+    const q = typeof queryOrFn === 'function' ? queryOrFn(s, e) : queryOrFn.range(s, e);
+    const { data, error } = await q;
+    if (error) throw error;
+    if (!data?.length) break;
+    all = all.concat(data);
+    if (data.length < pageSize) break;
+    page++;
+  }
+  return all;
+}
 
 // ── App state ──
 const A = {

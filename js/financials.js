@@ -11,7 +11,7 @@ function fmtCap(won) {
 
 
 function pFinancials() {
-  const industries = ['전체','바이오','반도체','2차전지','로봇','뷰티','테크','조선','신재생','엔터','소비재','우주'];
+  const industries = ['전체', ...INDUSTRIES];
   return `
   <div class="tabs" style="margin-bottom:.75rem">
     <button class="tab fin-tab ${F.mode==='market'?'active':''}" data-mode="market" onclick="F.mode='market';loadFinancials()">시장 데이터</button>
@@ -36,7 +36,7 @@ function pFinancials() {
   </div>
 
   <div class="card" id="fin-table">
-    <div style="padding:1.5rem;text-align:center;color:var(--text3)"><span class="loading"></span></div>
+    ${loadingHTML()}
   </div>`;
 }
 
@@ -49,15 +49,8 @@ async function loadFinancials() {
   // 산업 필터용 companies 캐시 (없으면 로드)
   if (!window._finIndMap) {
     window._finIndMap = {};
-    let cp = 0;
-    while (true) {
-      const { data } = await sb.from('companies').select('code,industry')
-        .range(cp * 1000, (cp + 1) * 1000 - 1);
-      if (!data?.length) break;
-      data.forEach(r => { if (r.code) window._finIndMap[r.code.split('.')[0]] = r.industry || ''; });
-      if (data.length < 1000) break;
-      cp++;
-    }
+    const rows = await fetchAllPages(sb.from('companies').select('code,industry'));
+    rows.forEach(r => { if (r.code) window._finIndMap[r.code.split('.')[0]] = r.industry || ''; });
   }
 
   // 탭 active 상태 업데이트
@@ -65,7 +58,7 @@ async function loadFinancials() {
     t.classList.toggle('active', t.dataset.mode === F.mode);
   });
 
-  el.innerHTML = '<div style="padding:1.5rem;text-align:center;color:var(--text3)"><span class="loading"></span></div>';
+  el.innerHTML = loadingHTML();
 
   try {
     if (F.mode === 'market') {
@@ -76,7 +69,7 @@ async function loadFinancials() {
       await loadCombinedData(el);
     }
   } catch(e) {
-    el.innerHTML = `<div style="padding:1rem;color:var(--red);font-size:13px">${e.message}</div>`;
+    el.innerHTML = `${errorHTML(e.message)}`;
   }
 }
 
@@ -87,39 +80,23 @@ async function loadMarketData(el) {
 
   if (F.scope === 'monitored') {
     // 모니터링 종목만
-    let compPage = 0, compData = [];
-    while (true) {
-      const { data: c } = await sb.from('companies').select('code')
-        .in('monitoring_level', ['full','news'])
-        .range(compPage * 1000, (compPage + 1) * 1000 - 1);
-      if (!c?.length) break;
-      compData = compData.concat(c);
-      if (c.length < 1000) break;
-      compPage++;
-    }
+    const compData = await fetchAllPages(
+      sb.from('companies').select('code').in('monitoring_level', ['full','news'])
+    );
     monitoredCodes = new Set(compData.map(c => c.code));
   }
 
-  // 가장 최신 base_date 조회 (최신 날짜 데이터만 가져오기)
+  // 가장 최신 base_date 조회
   const { data: latestDate } = await sb.from('market_data')
     .select('base_date').order('base_date', { ascending: false }).limit(1);
   const maxDate = latestDate?.[0]?.base_date;
 
-  // 최신 날짜 데이터만 전체 로드 (중복 없음, 빠름)
+  // 최신 날짜 데이터 전체 로드
   let allMkt = [];
   if (maxDate) {
-    let mktPage = 0;
-    while (true) {
-      const { data: chunk, error } = await sb.from('market_data')
-        .select('*')
-        .eq('base_date', maxDate)
-        .range(mktPage * 1000, (mktPage + 1) * 1000 - 1);
-      if (error) throw error;
-      if (!chunk?.length) break;
-      allMkt = allMkt.concat(chunk);
-      if (chunk.length < 1000) break;
-      mktPage++;
-    }
+    allMkt = await fetchAllPages(
+      sb.from('market_data').select('*').eq('base_date', maxDate)
+    );
   }
 
   // scope 필터
@@ -157,7 +134,7 @@ async function loadMarketData(el) {
   if (cnt) cnt.textContent = `${rows.length}개`;
 
   if (!rows.length) {
-    el.innerHTML = '<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:13px">데이터 없음</div>';
+    el.innerHTML = emptyHTML();
     return;
   }
 
@@ -204,33 +181,17 @@ async function loadFinancialData(el) {
   // 모니터링 종목 코드 목록 (scope='monitored' 시)
   let monitoredCodesFin = null;
   if (F.scope === 'monitored') {
-    let compPage = 0, compData = [];
-    while (true) {
-      const { data: c } = await sb.from('companies').select('code')
-        .in('monitoring_level', ['full','news'])
-        .range(compPage * 1000, (compPage + 1) * 1000 - 1);
-      if (!c?.length) break;
-      compData = compData.concat(c);
-      if (c.length < 1000) break;
-      compPage++;
-    }
+    const compData = await fetchAllPages(
+      sb.from('companies').select('code').in('monitoring_level', ['full','news'])
+    );
     monitoredCodesFin = new Set(compData.map(c => c.code));
   }
 
-  let allFin = [];
-  let finPage = 0;
-  while (true) {
-    const { data: chunk, error } = await sb.from('financials')
-      .select('*')
+  const allFin = await fetchAllPages(
+    sb.from('financials').select('*')
       .order('bsns_year', { ascending: false })
       .order('quarter', { ascending: false })
-      .range(finPage * 1000, (finPage + 1) * 1000 - 1);
-    if (error) throw error;
-    if (!chunk?.length) break;
-    allFin = allFin.concat(chunk);
-    if (chunk.length < 1000) break;
-    finPage++;
-  }
+  );
   const data = monitoredCodesFin
     ? allFin.filter(r => monitoredCodesFin.has(r.stock_code))
     : allFin;
@@ -299,33 +260,22 @@ async function loadFinancialData(el) {
 }
 
 async function loadCombinedData(el) {
-  // 시장 + 재무 병합
-  const [mktRes, finRes] = await Promise.all([
-    (async () => {
-      let allM = [];
-      let p = 0;
-      while (true) {
-        const { data: c } = await sb.from('market_data').select('stock_code,corp_name,market_cap,price,price_change_rate,per,pbr').order('base_date',{ascending:false}).range(p*1000,(p+1)*1000-1);
-        if (!c?.length) break;
-        allM = allM.concat(c);
-        if (c.length < 1000) break;
-        p++;
-      }
-      return { data: allM };
-    })(),
-    (async () => {
-      let allF = [];
-      let fp = 0;
-      while (true) {
-        const { data: c } = await sb.from('financials').select('stock_code,revenue,operating_profit,net_income,operating_margin,roe,debt_ratio,bsns_year,quarter').order('bsns_year',{ascending:false}).order('quarter',{ascending:false}).range(fp*1000,(fp+1)*1000-1);
-        if (!c?.length) break;
-        allF = allF.concat(c);
-        if (c.length < 1000) break;
-        fp++;
-      }
-      return { data: allF };
-    })(),
+  // 시장 + 재무 병합 (병렬 조회)
+  const [allM, allF] = await Promise.all([
+    fetchAllPages(
+      sb.from('market_data')
+        .select('stock_code,corp_name,market_cap,price,price_change_rate,per,pbr')
+        .order('base_date', { ascending: false })
+    ),
+    fetchAllPages(
+      sb.from('financials')
+        .select('stock_code,revenue,operating_profit,net_income,operating_margin,roe,debt_ratio,bsns_year,quarter')
+        .order('bsns_year', { ascending: false })
+        .order('quarter', { ascending: false })
+    ),
   ]);
+  const mktRes = { data: allM };
+  const finRes = { data: allF };
 
   const mktMap = {};
   (mktRes.data || []).forEach(r => { if (!mktMap[r.stock_code]) mktMap[r.stock_code] = r; });
@@ -402,7 +352,7 @@ async function openFinTrend(stockCode, corpName) {
         <button class="modal-close" onclick="document.getElementById('m-fin-trend').remove()">×</button>
       </div>
       <div id="fin-trend-body" style="padding:1rem">
-        <div style="text-align:center;color:var(--text3)"><span class="loading"></span> 로딩 중...</div>
+        ${loadingHTML('로딩 중...')}
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -418,7 +368,7 @@ async function openFinTrend(stockCode, corpName) {
 
   const body = document.getElementById('fin-trend-body');
   if (error || !rawData?.length) {
-    body.innerHTML = '<div style="text-align:center;color:var(--text3);padding:2rem">데이터 없음</div>';
+    body.innerHTML = emptyHTML();
     return;
   }
 

@@ -440,18 +440,16 @@ async function saveNewsFilter(key, elId, separator) {
   toast('저장 완료 — 봇 재로드 후 반영됩니다', 'success');
 }
 
-const NEWS_INDUSTRIES = ['2차전지','반도체','로봇','조선','뷰티','엔터','신재생','바이오','테크','소비재','우주'];
-
 async function loadNewsTerms() {
   const el = document.getElementById('news-terms-list');
   if (!el) return;
 
-  const keys = NEWS_INDUSTRIES.map(i => `news_terms_${i}`);
+  const keys = INDUSTRIES.map(i => `news_terms_${i}`);
   const { data } = await sb.from('app_config').select('key,value').in('key', keys);
   const map = {};
   (data || []).forEach(r => { map[r.key] = r.value; });
 
-  el.innerHTML = NEWS_INDUSTRIES.map(ind => {
+  el.innerHTML = INDUSTRIES.map(ind => {
     const key = `news_terms_${ind}`;
     const val = map[key] || '';
     return `<div style="margin-bottom:.75rem">

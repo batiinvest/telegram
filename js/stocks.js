@@ -1,5 +1,5 @@
 // stocks.js — 종목 관리 CRUD
-const INDUSTRIES = ['바이오','반도체','2차전지','로봇','뷰티','테크','조선','신재생','엔터','소비재','우주'];
+// INDUSTRIES는 config.js에서 전역으로 제공됨
 let _stocksTab = 'list'; // 'list' | 'subindustry'
 
 function pStocks() {
@@ -86,33 +86,27 @@ async function loadSubIndustryPanel() {
   if (!industry) return;
   const panel = document.getElementById('sub-industry-panel');
   if (!panel) return;
-  panel.innerHTML = '<div style="padding:2rem;text-align:center;color:var(--text3)"><span class="loading"></span></div>';
+  panel.innerHTML = loadingHTML();
 
   // 해당 산업의 모든 종목 로드
-  let all = [], page = 0;
-  while (true) {
-    const { data, error } = await sb.from('companies')
+  _subStocks = await fetchAllPages((s, e) =>
+    sb.from('companies')
       .select('id,name,code,sub_industry,monitoring_level,active')
       .eq('industry', industry)
       .order('sub_industry').order('name')
-      .range(page*1000, (page+1)*1000-1);
-    if (error || !data?.length) break;
-    all = all.concat(data);
-    if (data.length < 1000) break;
-    page++;
-  }
-  _subStocks = all;
+      .range(s, e)
+  );
 
   // sub_industry별 그룹핑
   const groups = {};
-  all.forEach(s => {
+  _subStocks.forEach(s => {
     const sub = s.sub_industry || '(미분류)';
     if (!groups[sub]) groups[sub] = [];
     groups[sub].push(s);
   });
 
   const cnt = document.getElementById('sub-panel-count');
-  if (cnt) cnt.textContent = `${all.length}개 종목 · ${Object.keys(groups).length}개 세부분야`;
+  if (cnt) cnt.textContent = `${_subStocks.length}개 종목 · ${Object.keys(groups).length}개 세부분야`;
 
   panel.innerHTML = Object.entries(groups)
     .sort(([a],[b]) => a==='(미분류)'?1:b==='(미분류)'?-1:a.localeCompare(b,'ko'))
@@ -185,22 +179,13 @@ async function openAssignCompanies(industry, sub, isNew=false) {
 
   // 전체 종목 로드 (캐시 없으면 DB 조회)
   const list = document.getElementById('assign-company-list');
-  list.innerHTML = '<div style="padding:1.5rem;text-align:center;color:var(--text3)"><span class="loading"></span></div>';
+  list.innerHTML = loadingHTML();
   openModal('m-assign-sub');
 
   if (!_allCompanies.length) {
-    let all = [], page = 0;
-    while (true) {
-      const { data } = await sb.from('companies')
-        .select('id,name,code,industry,sub_industry')
-        .order('industry').order('name')
-        .range(page*1000, (page+1)*1000-1);
-      if (!data?.length) break;
-      all = all.concat(data);
-      if (data.length < 1000) break;
-      page++;
-    }
-    _allCompanies = all;
+    _allCompanies = await fetchAllPages(
+      sb.from('companies').select('id,name,code,industry,sub_industry').order('industry').order('name')
+    );
   }
 
   // 검색창 초기화
@@ -377,34 +362,22 @@ let _allStocks = [];
 async function loadStocks() {
   const el = document.getElementById('stock-list');
   if (!el) return;
-  el.innerHTML = '<div style="padding:1.5rem;text-align:center;color:var(--text3)"><span class="loading"></span></div>';
+  el.innerHTML = loadingHTML();
 
   const level = document.getElementById('stock-level')?.value || 'monitored';
-  let allData = [];
-  let page = 0;
-  const pageSize = 1000;
-
-  while (true) {
-    let q = sb.from('companies')
-      .select('id,name,code,industry,sub_industry,sector,keywords,monitoring_level,active,market')
-      .order('name')
-      .range(page * pageSize, (page + 1) * pageSize - 1);
-
-    if (level === 'monitored') {
-      q = q.in('monitoring_level', ['full', 'news']);
-    } else if (level !== 'all') {
-      q = q.eq('monitoring_level', level);
-    }
-
-    const { data, error } = await q;
-    if (error) { el.innerHTML = `<div style="padding:1rem;color:var(--red);font-size:13px">${error.message}</div>`; return; }
-    if (!data?.length) break;
-    allData = allData.concat(data);
-    if (data.length < pageSize) break;
-    page++;
+  try {
+    _allStocks = await fetchAllPages((s, e) => {
+      let q = sb.from('companies')
+        .select('id,name,code,industry,sub_industry,sector,keywords,monitoring_level,active,market')
+        .order('name').range(s, e);
+      if (level === 'monitored') q = q.in('monitoring_level', ['full', 'news']);
+      else if (level !== 'all') q = q.eq('monitoring_level', level);
+      return q;
+    });
+    filterStocks();
+  } catch(e) {
+    el.innerHTML = errorHTML(e.message);
   }
-  _allStocks = allData;
-  filterStocks();
 }
 
 function filterStocks() {
