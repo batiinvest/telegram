@@ -10,7 +10,15 @@ function go(page) {
 
 function draw() {
   const el = document.getElementById('content');
-  const pages = { overview:pOverview, rooms:pRooms, notice:pNotice, logs:pLogs, bot:pBot, botconfig:pBotConfig, investment:pInvestment, watchlist:pWatchlist, screener:pScreener, financials:pFinancials, stocks:pStocks, team:pTeam, settings:pSettings };
+  const pageFns = {
+    overview:'pOverview', rooms:'pRooms', notice:'pNotice', logs:'pLogs',
+    bot:'pBot', botconfig:'pBotConfig', investment:'pInvestment',
+    watchlist:'pWatchlist', screener:'pScreener', financials:'pFinancials',
+    stocks:'pStocks', team:'pTeam', settings:'pSettings'
+  };
+  const pages = Object.fromEntries(
+    Object.entries(pageFns).map(([k,v]) => [k, () => (window[v] ? window[v]() : '')])
+  );
   el.innerHTML = (pages[A.page] || pOverview)();
   if (A.page === 'notice') loadNotices();
   if (A.page === 'logs')   loadLogs();
