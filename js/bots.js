@@ -242,7 +242,37 @@ function pBotConfig() {
 
     <div class="card" style="margin-bottom:.75rem">
       <div class="card-header">
-        <span class="card-title">🚫 기업 블랙리스트 <span style="font-size:11px;font-weight:400;color:var(--text3)">— 모든 채널 차단</span></span>
+        <span class="card-title">🔍 공시 제목 필터 <span style="font-size:11px;font-weight:400;color:var(--text3)">— 제목에 포함 시 모든 채널 차단</span></span>
+      </div>
+      <div class="card-body">
+        <div class="form-group">
+          <label class="form-label">단어 목록 <span style="font-size:11px;color:var(--text3)">(쉼표로 구분)</span></label>
+          <textarea class="form-input" id="cfg-dart-title-filter" rows="3"
+            placeholder="자기주식,증권발행실적,투자설명서,합병등종료보고..."></textarea>
+          <div class="form-hint">공시 제목에 이 단어가 포함되면 등급에 관계없이 모든 채널에 발송하지 않습니다.</div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="saveDartLevel('dart_title_filter','cfg-dart-title-filter')">저장</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:.75rem">
+      <div class="card-header">
+        <span class="card-title">🏢 기업명 부분 필터 <span style="font-size:11px;font-weight:400;color:var(--text3)">— 기업명에 포함 시 차단</span></span>
+      </div>
+      <div class="card-body">
+        <div class="form-group">
+          <label class="form-label">단어 목록 <span style="font-size:11px;color:var(--text3)">(쉼표로 구분)</span></label>
+          <textarea class="form-input" id="cfg-dart-corp-filter" rows="3"
+            placeholder="홀딩스,지주,캐피탈,리츠..."></textarea>
+          <div class="form-hint">기업명에 이 단어가 포함되면 차단합니다. 블랙리스트는 정확한 기업명 일치, 여기는 부분 일치입니다.<br>예: <code>홀딩스</code> 입력 시 "삼성홀딩스", "XX홀딩스" 등 전체 차단</div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="saveDartLevel('dart_corp_filter','cfg-dart-corp-filter')">저장</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:.75rem">
+      <div class="card-header">
+        <span class="card-title">🚫 기업 블랙리스트 <span style="font-size:11px;font-weight:400;color:var(--text3)">— 정확한 기업명 일치 시 차단</span></span>
       </div>
       <div class="card-body">
         <div class="form-group">
@@ -356,19 +386,23 @@ async function loadSchedules() {
 }
 
 async function loadDartLevel() {
-  const keys = ['dart_urgent', 'dart_major', 'dart_skip', 'dart_blacklist'];
+  const keys = ['dart_urgent', 'dart_major', 'dart_skip', 'dart_blacklist', 'dart_title_filter', 'dart_corp_filter'];
   const { data } = await sb.from('app_config').select('key,value').in('key', keys);
   const map = {};
   (data || []).forEach(r => map[r.key] = r.value);
 
-  const urgentEl = document.getElementById('cfg-dart-urgent');
-  const majorEl  = document.getElementById('cfg-dart-major');
-  const skipEl   = document.getElementById('cfg-dart-skip');
-  const blEl     = document.getElementById('cfg-dart-blacklist');
-  if (urgentEl && map['dart_urgent'])    urgentEl.value = map['dart_urgent'];
-  if (majorEl  && map['dart_major'])     majorEl.value  = map['dart_major'];
-  if (skipEl   && map['dart_skip'])      skipEl.value   = map['dart_skip'];
-  if (blEl     && map['dart_blacklist']) blEl.value     = map['dart_blacklist'];
+  const els = {
+    'cfg-dart-urgent':       'dart_urgent',
+    'cfg-dart-major':        'dart_major',
+    'cfg-dart-skip':         'dart_skip',
+    'cfg-dart-blacklist':    'dart_blacklist',
+    'cfg-dart-title-filter': 'dart_title_filter',
+    'cfg-dart-corp-filter':  'dart_corp_filter',
+  };
+  Object.entries(els).forEach(([elId, key]) => {
+    const el = document.getElementById(elId);
+    if (el && map[key]) el.value = map[key];
+  });
 }
 
 async function saveDartLevel(key, elId) {
