@@ -123,10 +123,10 @@ async function selectWatchlistStock(code, name, industry, market) {
 
   if (mkt?.[0]) {
     const m = mkt[0];
-    const chgColor = m.price_change_rate > 0 ? 'var(--green)' : m.price_change_rate < 0 ? 'var(--red)' : 'var(--text2)';
+    const cc = m.price_change_rate > 0 ? 'var(--red)' : m.price_change_rate < 0 ? 'var(--blue)' : 'var(--text2)';
     document.getElementById('wl-auto-price').textContent = m.price ? m.price.toLocaleString()+'원' : '—';
     document.getElementById('wl-auto-chg').innerHTML = m.price_change_rate != null
-      ? `<span style="color:${chgColor}">${m.price_change_rate>0?'+':''}${m.price_change_rate.toFixed(2)}%</span>` : '—';
+      ? `<span style="color:${cc}">${m.price_change_rate>0?'+':''}${m.price_change_rate.toFixed(2)}%</span>` : '—';
     document.getElementById('wl-auto-cap').textContent = m.market_cap ? fmtCap(m.market_cap) : '—';
     document.getElementById('wl-auto-per').textContent = m.per ? m.per.toFixed(1) : '—';
     document.getElementById('wl-auto-pbr').textContent = m.pbr ? m.pbr.toFixed(2) : '—';
@@ -230,7 +230,7 @@ async function loadWatchlist() {
     const price   = mkt.price;
     const chg     = mkt.price_change_rate;
     const cap     = mkt.market_cap;
-    const chgColor = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--text3)';
+    const chgColor = chg > 0 ? 'var(--red)' : chg < 0 ? 'var(--blue)' : 'var(--text3)';
 
     // 목표가 괴리율
     const gapTarget = (w.target_price && price) ? ((w.target_price - price) / price * 100) : null;
@@ -530,6 +530,32 @@ async function renderWatchlistForm(id) {
         <button class="btn btn-primary" onclick="saveWatchlist(${id||'null'})">저장</button>
       </div>
     </div>`;
+
+  // ── 기존 종목 수정 시: 시장 데이터 자동 로드 + 시총 초기값 복원 ──
+  if (w.stock_code) {
+    // 시장 데이터 로드 (selectWatchlistStock 재활용)
+    await selectWatchlistStock(w.stock_code, w.corp_name, w.industry || '', '');
+
+    // 적정 시총 / 관심 시총 초기값 복원 (저장된 가격 기반으로 계산)
+    if (w.target_price && window._wlShares) {
+      const capEok = Math.round(w.target_price * window._wlShares / 1e8);
+      const el = document.getElementById('wl-target_cap');
+      if (el) {
+        el.value = capEok;
+        const hint = document.getElementById('wl-target-cap-hint');
+        if (hint) hint.innerHTML = `<span style="color:var(--tg)">≈ ${fmtCapEok(capEok)}</span>`;
+      }
+    }
+    if (w.watch_price && window._wlShares) {
+      const capEok = Math.round(w.watch_price * window._wlShares / 1e8);
+      const el = document.getElementById('wl-watch_cap');
+      if (el) {
+        el.value = capEok;
+        const hint = document.getElementById('wl-watch-cap-hint');
+        if (hint) hint.innerHTML = `<span style="color:var(--tg)">≈ ${fmtCapEok(capEok)}</span>`;
+      }
+    }
+  }
 }
 
 async function saveWatchlist(id) {
