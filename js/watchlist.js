@@ -1,46 +1,63 @@
 
+function fmtCapEok(eok) {
+  // 억 단위 입력값을 보기 쉽게 변환
+  if (eok == null || isNaN(eok)) return '—';
+  if (eok >= 10000) {
+    const jo = Math.floor(eok / 10000);
+    const rem = Math.round(eok % 10000);
+    return rem > 0 ? `${jo}조 ${rem.toLocaleString()}억` : `${jo}조`;
+  }
+  return `${eok.toLocaleString()}억`;
+}
+
+function fmtPriceKr(price) {
+  // 원 단위 주가를 보기 쉽게
+  if (price == null || isNaN(price)) return '—';
+  if (price >= 100000000) return `${(price/100000000).toFixed(2)}억원`;
+  if (price >= 10000) return `${price.toLocaleString()}원`;
+  return `${price.toLocaleString()}원`;
+}
+
 function syncWlPrice(from, val) {
   const shares = window._wlShares;
-  if (!shares || !val) {
-    document.getElementById('wl-target-cap-hint').textContent = '';
-    return;
-  }
+  const hint = document.getElementById('wl-target-cap-hint');
+  if (!shares || !val) { if (hint) hint.textContent = ''; return; }
+
   if (from === 'price') {
     const price = parseFloat(val);
     if (!isNaN(price)) {
       const capEok = Math.round(price * shares / 1e8);
       document.getElementById('wl-target_cap').value = capEok;
-      document.getElementById('wl-target-cap-hint').textContent = `≈ ${capEok >= 10000 ? (capEok/10000).toFixed(1)+'조' : capEok.toLocaleString()+'억'}`;
+      if (hint) hint.innerHTML = `<span style="color:var(--tg)">≈ ${fmtCapEok(capEok)}</span>`;
     }
   } else {
     const capEok = parseFloat(val);
     if (!isNaN(capEok)) {
       const price = Math.round(capEok * 1e8 / shares);
       document.getElementById('wl-target_price').value = price;
-      document.getElementById('wl-target-cap-hint').textContent = `≈ ${price.toLocaleString()}원`;
+      if (hint) hint.innerHTML = `<span style="color:var(--tg)">≈ ${fmtPriceKr(price)}</span>`;
     }
   }
 }
 
 function syncWlWatchPrice(from, val) {
   const shares = window._wlShares;
-  if (!shares || !val) {
-    document.getElementById('wl-watch-cap-hint').textContent = '';
-    return;
-  }
+  const hint = document.getElementById('wl-watch-cap-hint');
+  if (!shares || !val) { if (hint) hint.textContent = ''; return; }
+
   if (from === 'price') {
     const price = parseFloat(val);
     if (!isNaN(price)) {
       const capEok = Math.round(price * shares / 1e8);
       document.getElementById('wl-watch_cap').value = capEok;
-      document.getElementById('wl-watch-cap-hint').textContent = `≈ ${capEok >= 10000 ? (capEok/10000).toFixed(1)+'조' : capEok.toLocaleString()+'억'}`;
+      if (hint) hint.innerHTML = `<span style="color:var(--tg)">≈ ${fmtCapEok(capEok)}</span>`;
     }
   } else {
     const capEok = parseFloat(val);
     if (!isNaN(capEok)) {
       const price = Math.round(capEok * 1e8 / shares);
       document.getElementById('wl-watch_price').value = price;
-      document.getElementById('wl-watch-cap-hint').textContent = `≈ ${price.toLocaleString()}원`;
+      if (hint) hint.innerHTML = `<span style="color:var(--tg)">≈ ${fmtPriceKr(price)}</span>`;
     }
   }
 }
@@ -268,12 +285,14 @@ async function loadWatchlist() {
           <div style="background:var(--bg2);border-radius:8px;padding:8px 10px">
             <div style="font-size:10px;color:var(--text3);margin-bottom:2px">적정가</div>
             <div style="font-size:13px;font-weight:600">${w.target_price.toLocaleString()}원</div>
+            ${(cap && w.target_price) ? `<div style="font-size:10px;color:var(--text3)">시총 ≈ ${fmtCap(w.target_price * Math.round(cap / (price||1)))}</div>` : ''}
             ${gapTarget != null ? `<div style="font-size:11px;color:${gapTarget>0?'var(--green)':'var(--red)'}">${gapTarget>0?'▲':'▼'} ${Math.abs(gapTarget).toFixed(1)}% ${gapTarget>0?'상승여력':'하락위험'}</div>` : ''}
           </div>` : ''}
           ${w.watch_price ? `
           <div style="background:var(--bg2);border-radius:8px;padding:8px 10px">
             <div style="font-size:10px;color:var(--text3);margin-bottom:2px">관심가격</div>
             <div style="font-size:13px;font-weight:600">${w.watch_price.toLocaleString()}원</div>
+            ${(cap && w.watch_price) ? `<div style="font-size:10px;color:var(--text3)">시총 ≈ ${fmtCap(w.watch_price * Math.round(cap / (price||1)))}</div>` : ''}
             ${gapWatch != null ? `<div style="font-size:11px;color:${gapWatch<0?'var(--green)':'var(--text3)'}">${gapWatch<0?'✅ 관심가 도달':'현재가 -'+Math.abs(gapWatch).toFixed(1)+'%'}</div>` : ''}
           </div>` : ''}
           ${w.avg_price ? `
