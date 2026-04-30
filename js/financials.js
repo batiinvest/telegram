@@ -440,12 +440,25 @@ async function openFinTrend(stockCode, corpName) {
         type: 'bar',
       },
       combined: {
-        label: '매출액 / 영업이익 / 순이익',
-        datasets: [
-          { label: '매출액(억)', data: revData, backgroundColor: 'rgba(42,171,238,0.6)', borderRadius: 3 },
-          { label: '영업이익(억)', data: opData, backgroundColor: 'rgba(45,206,137,0.7)', borderRadius: 3 },
-          { label: '순이익(억)', data: netData, backgroundColor: 'rgba(255,193,7,0.6)', borderRadius: 3 },
-        ],
+        label: '동일 분기 연도별 비교 (YoY)',
+        datasets: (() => {
+          // Q별로 연도를 묶어서 grouped bar
+          const quarters = ['Q1','Q2','Q3','Q4'];
+          const yearColors = ['rgba(42,171,238,0.75)','rgba(45,206,137,0.75)','rgba(251,99,64,0.75)','rgba(162,89,255,0.75)'];
+          const years = [...new Set(chartSrc.map(r => r.bsns_year))];
+          // x축: Q1, Q2, Q3, Q4
+          // dataset: 연도별
+          return years.map((year, yi) => ({
+            label: `${year}년`,
+            data: quarters.map(q => {
+              const r = chartSrc.find(d => d.bsns_year === year && d.quarter === q);
+              return r?.revenue != null ? Math.round(r.revenue / 1e8) : null;
+            }),
+            backgroundColor: yearColors[yi % yearColors.length],
+            borderRadius: 3,
+          }));
+        })(),
+        labels: ['Q1','Q2','Q3','Q4'],
         type: 'bar',
       },
       margin: {
@@ -470,7 +483,7 @@ async function openFinTrend(stockCode, corpName) {
         <div style="display:flex;gap:6px">
           <button class="chip ${tab==='revenue'?'active':''}" onclick="window._finChartTab='revenue';renderFinTrendBody()">매출액</button>
           <button class="chip ${tab==='operating_profit'?'active':''}" onclick="window._finChartTab='operating_profit';renderFinTrendBody()">영업이익</button>
-          <button class="chip ${tab==='combined'?'active':''}" onclick="window._finChartTab='combined';renderFinTrendBody()">3지표</button>
+          <button class="chip ${tab==='combined'?'active':''}" onclick="window._finChartTab='combined';renderFinTrendBody()">분기비교</button>
           <button class="chip ${tab==='margin'?'active':''}" onclick="window._finChartTab='margin';renderFinTrendBody()">이익률</button>
         </div>
       </div>
@@ -530,7 +543,7 @@ async function openFinTrend(stockCode, corpName) {
 
     window._finChartInst = new Chart(ctx, {
       type: cfg.type,
-      data: { labels, datasets: cfg.datasets },
+      data: { labels: cfg.labels || labels, datasets: cfg.datasets },
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
