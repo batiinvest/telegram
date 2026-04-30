@@ -122,15 +122,22 @@ async function addIndustryAll() {
   const ind = document.getElementById('cmp-industry')?.value;
   if (!ind) { toast('산업을 먼저 선택해주세요.', 'error'); return; }
 
-  const rows = await fetchAllPages(
-    sb.from('companies').select('code,name,industry').eq('industry', ind).eq('active', true)
-  );
+  const { data: rows, error } = await sb.from('companies')
+    .select('code,name,industry')
+    .eq('industry', ind)
+    .eq('active', true)
+    .order('name');
+
+  if (error || !rows?.length) { toast('해당 산업 종목 없음', 'error'); return; }
 
   let added = 0;
   for (const r of rows) {
     const code = (r.code || '').split('.')[0];
     if (!code) continue;
-    if (CMP.selectedCodes.length >= 10) { toast('최대 10개까지 선택 가능합니다.', 'error'); break; }
+    if (CMP.selectedCodes.length >= 10) {
+      toast(`최대 10개까지 선택 가능합니다. (${added}개 추가됨)`, 'error');
+      break;
+    }
     if (!CMP.selectedCodes.find(s => s.code === code)) {
       CMP.selectedCodes.push({ code, name: r.name, industry: ind });
       added++;
@@ -138,6 +145,7 @@ async function addIndustryAll() {
   }
   renderCmpSelected();
   if (added > 0) toast(`${ind} ${added}개 종목 추가됨`, 'success');
+  else toast('이미 모두 추가된 종목입니다.', 'info');
 }
 
 // ── 종목 검색 자동완성 ──
