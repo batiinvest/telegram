@@ -111,8 +111,7 @@ function autoGenNotice() {
   const target    = document.getElementById('i-target')?.value || 'all';
   const parseMode = document.getElementById('i-parse-mode')?.value || 'Markdown';
 
-  // 대상 채팅방 결정
-  let rooms = A.rooms.filter(r => r.room_type !== 'industry'); // 기업방만
+  let rooms = A.rooms.filter(r => r.room_type !== 'industry');
   if (target.startsWith('room:')) {
     const id = parseInt(target.replace('room:', ''));
     const r = A.rooms.find(x => x.id === id);
@@ -125,95 +124,112 @@ function autoGenNotice() {
 
   if (!rooms.length) { toast('대상 채팅방 없음', 'error'); return; }
 
-  // 산업별로 그룹화
+  // 전체 발송 시 산업별 분리 권장 안내
+  if (target === 'all' && rooms.length > 20) {
+    toast('⚠️ 종목이 많아요. 산업별로 선택해서 발송하는 걸 권장합니다.', 'info');
+  }
+
+  // 산업별 그룹화
   const grouped = {};
   rooms.forEach(r => {
-    const cat = r.cat || '기타';
-    if (!grouped[cat]) grouped[cat] = { full: [], open: [] };
-    if (r.status === 'full' || (r.members || 0) >= (r.max_members || 1000)) {
-      grouped[cat].full.push(r);
-    } else {
-      grouped[cat].open.push(r);
-    }
+    if (!grouped[r.cat]) grouped[r.cat] = { full: [], open: [] };
+    const isFull = r.status === 'full' || (r.members||0) >= (r.max_members||1000);
+    grouped[r.cat][isFull ? 'full' : 'open'].push(r);
   });
 
   const INDUSTRY_EMOJI = {
-    '바이오': '💊', '반도체': '🔬', '2차전지': '🔋', '로봇': '🤖',
-    '조선': '🚢', '우주': '🚀', '신재생': '☀️', '테크': '💻',
-    '엔터': '🎵', '뷰티': '💄', '소비재': '🛒',
+    '바이오':'💊','반도체':'🔬','2차전지':'🔋','로봇':'🤖',
+    '조선':'🚢','우주':'🚀','신재생':'☀️','테크':'💻',
+    '엔터':'🎵','뷰티':'💄','소비재':'🛒',
   };
 
-  const linkFmt = (r) => {
+  const link = (r) => {
     if (!r.link) return r.name;
-    if (parseMode === 'Markdown') {
-      return `[${r.name}](${r.link})`;
-    } else {
-      return `<a href="${r.link}">${r.name}</a>`;
-    }
+    return parseMode === 'Markdown'
+      ? `[${r.name}](${r.link})`
+      : `<a href="${r.link}">${r.name}</a>`;
   };
-
-  const lines = [];
   const bold = (t) => parseMode === 'Markdown' ? `*${t}*` : `<b>${t}</b>`;
 
-  // 산업별 섹션 생성
-  Object.entries(grouped)
-    .sort((a, b) => {
-      // 선택한 산업이 있으면 해당 산업 먼저
-      if (target !== 'all' && !target.startsWith('room:')) {
-        if (a[0] === target) return -1;
-        if (b[0] === target) return 1;
-      }
-      return (b[1].full.length + b[1].open.length) - (a[1].full.length + a[1].open.length);
-    })
-    .forEach(([cat, { full, open }]) => {
-      const emoji = INDUSTRY_EMOJI[cat] || '📌';
-      const total = full.length + open.length;
+  const lines = [];
 
-      // 산업 헤더
-      lines.push(`${emoji} ${bold(cat + ' 종목 채팅방')} (${total}개)`);
+  // ── 상단 소개 헤더 ──
+  const totalRooms = rooms.length;
+  const openCount  = rooms.filter(r => r.status !== 'full' && (r.members||0) < (r.max_members||1000)).length;
+  const fullCount  = totalRooms - openCount;
 
-      // 산업 채팅방 링크 (있으면)
-      const industryRoom = A.rooms.find(r => r.room_type === 'industry' && r.cat === cat);
-      if (industryRoom?.link) {
-        const indLink = parseMode === 'Markdown'
-          ? `[${cat} 산업 채팅방 바로가기](${industryRoom.link})`
-          : `<a href="${industryRoom.link}">${cat} 산업 채팅방 바로가기</a>`;
-        lines.push(` ➤ ${indLink}`);
-      }
+  lines.push(`안녕하세요, ${bold('바티인베스트')}입니다 👋`);
+  lines.push('');
+  lines.push('건전한 투자 토론과 정보 공유를 위한 종목별 채팅방을 안내드립니다.');
+  lines.push(`현재 ${bold(totalRooms + '개')} 채팅방 운영 중 — 🟢 입장 가능 ${openCount}개 · 🔴 정원 마감 ${fullCount}개`);
+  lines.push('');
 
-      // 정원 마감
-      if (full.length) {
-        lines.push('');
-        lines.push('🔴 정원 마감');
-        // 3개씩 한 줄
-        for (let i = 0; i < full.length; i += 3) {
-          lines.push(full.slice(i, i+3).map(linkFmt).join('   '));
-        }
-      }
+  // 종합 채팅방 안내
+  const mainRoom = A.rooms.find(r => r.room_type === 'industry' && r.name?.includes('바티인베스트'));
+  if (mainRoom?.link) {
+    const mainLink = parseMode === 'Markdown'
+      ? `[📊 바티인베스트 종합 채팅방](${mainRoom.link})`
+      : `<a href="${mainRoom.link}">📊 바티인베스트 종합 채팅방</a>`;
+    lines.push(mainLink + ' — 시황·공시·리포트 실시간');
+    lines.push('');
+  }
 
-      // 입장 가능
-      if (open.length) {
-        lines.push('');
-        lines.push('🟢 입장 가능');
-        for (let i = 0; i < open.length; i += 3) {
-          lines.push(open.slice(i, i+3).map(linkFmt).join('   '));
-        }
-      }
+  lines.push('─'.repeat(22));
+  lines.push('');
 
-      lines.push('');
-      lines.push('─'.repeat(20));
-      lines.push('');
+  // ── 산업별 채팅방 목록 ──
+  const cats = Object.keys(grouped).sort((a,b) =>
+    (grouped[b].full.length + grouped[b].open.length) - (grouped[a].full.length + grouped[a].open.length)
+  );
+
+  cats.forEach((cat, idx) => {
+    const { full, open } = grouped[cat];
+    const emoji = INDUSTRY_EMOJI[cat] || '📌';
+    const total = full.length + open.length;
+    const industryRoom = A.rooms.find(r => r.room_type === 'industry' && r.cat === cat);
+
+    if (idx > 0) lines.push('');
+
+    lines.push(`${emoji} ${bold(cat)} (${total}개)`);
+    if (industryRoom?.link) {
+      const indLink = parseMode === 'Markdown'
+        ? `└ [${cat} 산업방](${industryRoom.link})`
+        : `└ <a href="${industryRoom.link}">${cat} 산업방</a>`;
+      lines.push(indLink);
+    }
+    lines.push('');
+
+    full.sort((a,b) => a.name.localeCompare(b.name,'ko')).forEach(r => {
+      lines.push(`🔴 ${link(r)}`);
     });
+    open.sort((a,b) => a.name.localeCompare(b.name,'ko')).forEach(r => {
+      lines.push(`🟢 ${link(r)}`);
+    });
+  });
 
-  // 하단 고정 문구
-  lines.push(`📬 신규 채팅방 개설 문의: @BatiInvestment`);
+  // ── 하단 안내 ──
+  lines.push('');
+  lines.push('─'.repeat(22));
+  lines.push('');
+  lines.push('✅ ' + bold('입장 안내'));
+  lines.push('· 승인 후 1~2일 내 순차 입장');
+  lines.push('· 3일 이상 미접속 시 자동 퇴장');
+  lines.push('· 후원자 우선 입장: buymeacoffee.com/batiinvest');
+  lines.push('');
+  lines.push('📬 신규 채팅방 개설 문의: @BatiInvestment');
 
   const text = lines.join('\n').trim();
+
+  // 길이 경고
+  if (text.length > 3500) {
+    toast(`⚠️ 메시지가 ${text.length}자입니다. 텔레그램 한도(4096자)에 근접해요. 산업별로 나눠 발송을 권장합니다.`, 'error');
+  }
+
   const textarea = document.getElementById('i-content');
   if (textarea) {
     textarea.value = text;
     prev(text, 'i-prev');
-    toast('공지 자동 생성 완료 ✨', 'success');
+    toast(`공지 생성 완료 ✨ (${text.length}자)`, 'success');
   }
 }
 const sendInline = () => doNotice(document.getElementById('i-content').value.trim(), document.getElementById('i-target').value, 'i-btn', 'i-prog');
