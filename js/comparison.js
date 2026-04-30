@@ -36,13 +36,22 @@ function pComparison() {
 
       <!-- 산업 선택 -->
       <div class="card">
-        <div class="card-header"><span class="card-title">산업 선택</span></div>
+        <div class="card-header"><span class="card-title">산업 / 테마 선택</span></div>
         <div style="padding:.75rem;display:flex;flex-direction:column;gap:6px">
           <select class="form-select" id="cmp-industry" onchange="onCmpIndustryChange()" style="width:100%">
             <option value="">-- 산업 선택 --</option>
             ${INDUSTRIES.map(i=>`<option value="${i}">${i}</option>`).join('')}
           </select>
-          <button class="btn btn-sm btn-primary" onclick="addIndustryAll()" style="width:100%">산업 전체 추가</button>
+          <!-- 테마(sub_industry) 선택 — 산업 선택 후 표시 -->
+          <div id="cmp-theme-wrap" style="display:none;flex-direction:column;gap:6px">
+            <select class="form-select" id="cmp-theme" style="width:100%">
+              <option value="">-- 테마 선택 (선택 시 해당 테마만) --</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm btn-primary" onclick="addIndustryAll()" style="flex:1">전체 추가</button>
+            <button class="btn btn-sm" onclick="addThemeOnly()" style="flex:1" id="cmp-theme-btn" disabled>테마만 추가</button>
+          </div>
         </div>
       </div>
 
@@ -112,10 +121,77 @@ function pComparison() {
   </div>`;
 }
 
-// ── 산업 변경 → 해당 산업 종목 드롭다운 표시 ──
+// ── 산업 변경 → 테마(sub_industry) 목록 로드 ──
 async function onCmpIndustryChange() {
   const ind = document.getElementById('cmp-industry')?.value;
   CMP.industry = ind;
+  const themeWrap = document.getElementById('cmp-theme-wrap');
+  const themeEl   = document.getElementById('cmp-theme');
+  const themeBtn  = document.getElementById('cmp-theme-btn');
+
+  if (!ind) {
+    themeWrap.style.display = 'none';
+    return;
+  }
+
+  // 해당 산업의 sub_industry 목록 조회
+  const { data: rows } = await sb.from('companies')
+    .select('sub_industry')
+    .eq('industry', ind)
+    .eq('active', true)
+    .not('sub_industry', 'is', null);
+
+  const themes = [...new Set(
+    (rows || []).map(r => r.sub_industry).filter(v => v && v.trim())
+  )].sort();
+
+  if (!themes.length) {
+    themeWrap.style.display = 'none';
+    return;
+  }
+
+  themeEl.innerHTML = `<option value="">-- 테마 선택 (선택 시 해당 테마만) --</option>`
+    + themes.map(t => `<option value="${t}">${t}</option>`).join('');
+  themeWrap.style.display = 'flex';
+
+  // 테마 선택 시 버튼 활성화
+  themeEl.onchange = () => {
+    themeBtn.disabled = !themeEl.value;
+  };
+}
+
+// ── 테마만 추가 ──
+async function addThemeOnly() {
+  const ind   = document.getElementById('cmp-industry')?.value;
+  const theme = document.getElementById('cmp-theme')?.value;
+  if (!ind)   { toast('산업을 먼저 선택해주세요.', 'error'); return; }
+  if (!theme) { toast('테마를 선택해주세요.', 'error'); return; }
+
+  const { data: rows, error } = await sb.from('companies')
+    .select('code,name,industry,sub_industry')
+    .eq('industry', ind)
+    .eq('sub_industry', theme)
+    .eq('active', true)
+    .order('name');
+
+  if (error || !rows?.length) { toast('해당 테마 종목 없음', 'error'); return; }
+
+  let added = 0;
+  for (const r of rows) {
+    const code = (r.code || '').split('.')[0];
+    if (!code) continue;
+    if (CMP.selectedCodes.length >= 10) {
+      toast(`최대 10개까지 선택 가능합니다. (${added}개 추가됨)`, 'error');
+      break;
+    }
+    if (!CMP.selectedCodes.find(s => s.code === code)) {
+      CMP.selectedCodes.push({ code, name: r.name, industry: ind, subIndustry: theme });
+      added++;
+    }
+  }
+  renderCmpSelected();
+  if (added > 0) toast(`${theme} ${added}개 종목 추가됨`, 'success');
+  else toast('이미 모두 추가된 종목입니다.', 'info');
 }
 
 // ── 산업 전체 추가 ──
@@ -232,7 +308,10 @@ function renderCmpSelected() {
   el.innerHTML = CMP.selectedCodes.map((s, i) => `
     <div style="display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:var(--radius-sm);background:var(--bg3);margin-bottom:4px">
       <span style="width:10px;height:10px;border-radius:50%;background:${CMP_COLORS[i%CMP_COLORS.length]};flex-shrink:0"></span>
-      <span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.name}</div>
+        ${s.subIndustry ? `<div style="font-size:10px;color:var(--text3)">${s.subIndustry}</div>` : ''}
+      </div>
       <span style="font-size:10px;color:var(--text3)">${s.code}</span>
       <button onclick="removeCmpStock('${s.code}')"
         style="background:none;border:none;color:var(--text3);cursor:pointer;padding:0 2px;font-size:14px;line-height:1">×</button>
