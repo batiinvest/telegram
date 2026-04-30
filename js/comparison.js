@@ -10,15 +10,15 @@ const CMP = {
 };
 
 const CMP_METRICS = [
-  { key: 'revenue',          label: '매출액',      unit: '억', scale: 1e8 },
-  { key: 'operating_profit', label: '영업이익',    unit: '억', scale: 1e8 },
-  { key: 'net_income',       label: '순이익',      unit: '억', scale: 1e8 },
-  { key: 'operating_margin', label: '영업이익률',  unit: '%',  scale: 1 },
-  { key: 'roe',              label: 'ROE',          unit: '%',  scale: 1 },
-  { key: 'roa',              label: 'ROA',          unit: '%',  scale: 1 },
-  { key: 'debt_ratio',       label: '부채비율',    unit: '%',  scale: 1 },
-  { key: 'total_assets',     label: '자산총계',    unit: '억', scale: 1e8 },
-  { key: 'operating_cashflow', label: '영업현금흐름', unit: '억', scale: 1e8 },
+  { key: 'revenue',            label: '매출액',      unit: '억', scale: 1e8, chartType: 'bar'  },
+  { key: 'operating_profit',   label: '영업이익',    unit: '억', scale: 1e8, chartType: 'bar'  },
+  { key: 'net_income',         label: '순이익',      unit: '억', scale: 1e8, chartType: 'bar'  },
+  { key: 'operating_margin',   label: '영업이익률',  unit: '%',  scale: 1,   chartType: 'line' },
+  { key: 'roe',                label: 'ROE',          unit: '%',  scale: 1,   chartType: 'line' },
+  { key: 'roa',                label: 'ROA',          unit: '%',  scale: 1,   chartType: 'line' },
+  { key: 'debt_ratio',         label: '부채비율',    unit: '%',  scale: 1,   chartType: 'line' },
+  { key: 'total_assets',       label: '자산총계',    unit: '억', scale: 1e8, chartType: 'bar'  },
+  { key: 'operating_cashflow', label: '영업현금흐름', unit: '억', scale: 1e8, chartType: 'bar'  },
 ];
 
 // Chart.js 색상 팔레트
@@ -382,7 +382,7 @@ async function runComparison() {
           </div>
         </div>
         <div style="padding:1rem">
-          <canvas id="cmp-chart" style="max-height:380px"></canvas>
+          <canvas id="cmp-chart" style="max-height:400px;min-height:280px"></canvas>
         </div>
       </div>
 
@@ -532,9 +532,37 @@ async function fetchCmpMetricAndRender(metricKey, canvas, labels, metaDef) {
 function drawCmpChart(canvas, datasets, labels, metaDef) {
   if (_cmpChartInstance) { _cmpChartInstance.destroy(); _cmpChartInstance = null; }
 
+  const isBar = metaDef.chartType === 'bar';
+
+  // bar 차트용 데이터셋: fill, borderRadius 등 추가
+  const styledDatasets = datasets.map((ds, i) => {
+    const color = CMP_COLORS[i % CMP_COLORS.length];
+    if (isBar) {
+      return {
+        ...ds,
+        backgroundColor: color + 'cc',
+        borderColor: color,
+        borderWidth: 1,
+        borderRadius: 3,
+        borderSkipped: false,
+        fill: false,
+      };
+    }
+    return {
+      ...ds,
+      backgroundColor: color + '22',
+      borderColor: color,
+      borderWidth: 2,
+      pointRadius: 4,
+      pointHoverRadius: 6,
+      tension: 0.3,
+      fill: false,
+    };
+  });
+
   _cmpChartInstance = new Chart(canvas, {
-    type: 'line',
-    data: { labels, datasets },
+    type: isBar ? 'bar' : 'line',
+    data: { labels, datasets: styledDatasets },
     options: {
       responsive: true,
       maintainAspectRatio: true,
@@ -554,6 +582,7 @@ function drawCmpChart(canvas, datasets, labels, metaDef) {
             label: ctx => {
               const v = ctx.parsed.y;
               if (v == null) return `${ctx.dataset.label}: —`;
+              const sign = v > 0 ? '' : '';
               return `${ctx.dataset.label}: ${v.toLocaleString()}${metaDef.unit}`;
             }
           }
@@ -563,13 +592,27 @@ function drawCmpChart(canvas, datasets, labels, metaDef) {
         x: {
           ticks: { color: '#555a70', font: { size: 11 } },
           grid: { color: 'rgba(255,255,255,.04)' },
+          // bar 차트는 grouped
+          ...(isBar && datasets.length > 1 ? {} : {}),
         },
         y: {
           ticks: {
             color: '#555a70', font: { size: 11 },
-            callback: v => v.toLocaleString() + metaDef.unit,
+            callback: v => {
+              if (Math.abs(v) >= 10000) return (v/10000).toFixed(0) + '만' + metaDef.unit;
+              return v.toLocaleString() + metaDef.unit;
+            },
           },
           grid: { color: 'rgba(255,255,255,.06)' },
+          // 음수 표현을 위해 0 기준선 강조
+          ...(isBar ? {
+            grid: {
+              color: ctx => ctx.tick.value === 0
+                ? 'rgba(255,255,255,.25)'
+                : 'rgba(255,255,255,.06)',
+              lineWidth: ctx => ctx.tick.value === 0 ? 2 : 1,
+            }
+          } : {}),
         },
       },
     },
