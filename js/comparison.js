@@ -32,7 +32,7 @@ function pComparison() {
   <div style="display:grid;grid-template-columns:300px 1fr;gap:12px;align-items:start">
 
     <!-- 좌측 패널: 종목 선택 -->
-    <div style="position:sticky;top:1rem;display:flex;flex-direction:column;gap:10px">
+    <div style="position:sticky;top:1rem;display:flex;flex-direction:column;gap:10px;overflow:visible">
 
       <!-- 산업 선택 -->
       <div class="card">
@@ -47,17 +47,18 @@ function pComparison() {
       </div>
 
       <!-- 종목 검색 -->
-      <div class="card">
+      <div class="card" style="overflow:visible">
         <div class="card-header"><span class="card-title">종목 검색</span></div>
-        <div style="padding:.75rem;display:flex;flex-direction:column;gap:6px">
+        <div style="padding:.75rem;display:flex;flex-direction:column;gap:6px;overflow:visible">
           <div style="position:relative">
             <input class="form-input" id="cmp-search" placeholder="종목명 검색..."
               oninput="onCmpSearch(this.value)" autocomplete="off"
               style="width:100%;box-sizing:border-box">
             <div id="cmp-dropdown" style="
-              display:none;position:absolute;top:100%;left:0;right:0;z-index:100;
+              display:none;position:absolute;top:100%;left:0;right:0;z-index:9999;
               background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius-sm);
-              max-height:200px;overflow-y:auto;margin-top:2px"></div>
+              max-height:220px;overflow-y:auto;margin-top:2px;
+              box-shadow:0 8px 24px rgba(0,0,0,.4)"></div>
           </div>
         </div>
       </div>
