@@ -403,58 +403,109 @@ async function runComparison() {
         </div>
       </div>
 
-      <!-- 최신 분기 비교 테이블 -->
-      <div class="card">
-        <div class="card-header"><span class="card-title">최신 분기 재무 지표 비교</span></div>
-        <div style="overflow-x:auto">
-          <table style="width:100%;border-collapse:collapse;font-size:13px">
-            <thead>
-              <tr>
-                <th style="padding:8px 12px;text-align:left;font-size:11px;color:var(--text3);border-bottom:1px solid var(--border)">종목</th>
-                ${CMP_METRICS.map(m=>`<th style="padding:8px 12px;text-align:right;font-size:11px;color:var(--text3);border-bottom:1px solid var(--border)">${m.label}</th>`).join('')}
-              </tr>
-            </thead>
-            <tbody>
-              ${CMP.selectedCodes.map((s, i) => {
-                const rows = stockDataMap[s.code] || [];
-                const latest = rows[0];
-                const color = CMP_COLORS[i % CMP_COLORS.length];
-                if (!latest) return `<tr><td colspan="${CMP_METRICS.length+1}" style="padding:8px 12px;color:var(--text3);font-size:12px">${s.name} — 재무 데이터 없음</td></tr>`;
-                return `<tr style="border-bottom:1px solid var(--border)">
-                  <td style="padding:8px 12px">
-                    <div style="display:flex;align-items:center;gap:6px">
-                      <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></span>
-                      <div>
-                        <div style="font-weight:500">${s.name}</div>
-                        <div style="font-size:11px;color:var(--text3)">${latest.bsns_year} ${latest.quarter}</div>
-                      </div>
-                    </div>
-                  </td>
-                  ${CMP_METRICS.map(m => {
-                    const v = latest[m.key];
-                    if (v == null) return `<td style="padding:8px 12px;text-align:right;color:var(--text3)">—</td>`;
-                    const formatted = m.scale === 1
-                      ? v.toFixed(1) + m.unit
-                      : fmtCap(v * 1); // 이미 원단위
-                    const isHighlight = m.key === CMP.metric;
-                    return `<td style="padding:8px 12px;text-align:right;${isHighlight?`color:${color};font-weight:600`:''}">${formatted}</td>`;
-                  }).join('')}
-                </tr>`;
-              }).join('')}
-            </tbody>
-          </table>
+
+      <!-- 지표별 분기별 상세 테이블 -->
+      <div class="card" id="cmp-detail-card">
+        <div class="card-header">
+          <span class="card-title" id="cmp-detail-title">분기별 상세</span>
+          <span style="font-size:11px;color:var(--text3)">위 지표 탭 클릭 시 전환</span>
         </div>
+        <div id="cmp-detail-body" style="overflow-x:auto"></div>
       </div>`;
 
-    // 차트 렌더링
+    // stockDataMap 전역 저장
+    window._cmpStockDataMap = stockDataMap;
+    window._cmpSortedLabels = sortedLabels;
+
+    // 차트 + 상세 테이블 렌더링
     window._cmpChartDatasets = datasets;
     window._cmpChartLabels   = sortedLabels;
     renderCmpChart(metric);
+    renderCmpDetailTable(metric);
 
   } catch(e) {
     el.innerHTML = `<div style="padding:1rem;color:var(--red)">${e.message}</div>`;
     console.error('[비교분석]', e);
   }
+}
+
+// ── 지표별 분기별 상세 테이블 ──
+function renderCmpDetailTable(metricKey) {
+  const body  = document.getElementById('cmp-detail-body');
+  const title = document.getElementById('cmp-detail-title');
+  if (!body || !window._cmpStockDataMap || !window._cmpSortedLabels) return;
+
+  const metaDef = CMP_METRICS.find(m => m.key === metricKey) || CMP_METRICS[0];
+  const labels  = window._cmpSortedLabels;
+  if (title) title.textContent = `${metaDef.label} — 분기별 비교`;
+
+  const fmtVal = (v) => {
+    if (v == null) return `<span style="color:var(--text3)">—</span>`;
+    if (metaDef.scale === 1) {
+      const color = metaDef.key === 'debt_ratio'
+        ? (v > 200 ? 'var(--red)' : v > 100 ? 'var(--yellow)' : 'var(--green)')
+        : (v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--text2)');
+      return `<span style="color:${color};font-weight:500">${v.toFixed(1)}${metaDef.unit}</span>`;
+    }
+    const eok = Math.round(v / 1e8);
+    const color = eok >= 0 ? 'var(--text1)' : 'var(--red)';
+    return `<span style="color:${color}">${eok.toLocaleString()}억</span>`;
+  };
+
+  const calcQoQ = (cur, prev) => {
+    if (cur == null || prev == null || prev === 0) return null;
+    return ((cur - prev) / Math.abs(prev) * 100).toFixed(1);
+  };
+
+  const stockRowMap = {};
+  CMP.selectedCodes.forEach(s => {
+    stockRowMap[s.code] = {};
+    (window._cmpStockDataMap[s.code] || []).forEach(r => {
+      stockRowMap[s.code][`${r.bsns_year} ${r.quarter}`] = r[metricKey];
+    });
+  });
+
+  body.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:500px">
+      <thead>
+        <tr style="background:var(--bg3)">
+          <th style="padding:8px 12px;text-align:left;font-size:11px;color:var(--text3);
+            border-bottom:1px solid var(--border);position:sticky;left:0;background:var(--bg3);min-width:120px">종목</th>
+          ${labels.map(lbl => `
+            <th style="padding:8px 12px;text-align:right;font-size:11px;color:var(--text3);
+              border-bottom:1px solid var(--border);white-space:nowrap">${lbl}</th>
+          `).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${CMP.selectedCodes.map((s, i) => {
+          const color  = CMP_COLORS[i % CMP_COLORS.length];
+          const rowMap = stockRowMap[s.code] || {};
+          return `<tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:8px 12px;position:sticky;left:0;background:var(--bg2);min-width:120px">
+              <div style="display:flex;align-items:center;gap:6px;white-space:nowrap">
+                <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></span>
+                <span style="font-weight:500;font-size:12px">${s.name}</span>
+              </div>
+            </td>
+            ${labels.map((lbl, li) => {
+              const cur  = rowMap[lbl];
+              const prev = li > 0 ? rowMap[labels[li-1]] : null;
+              const qoq  = calcQoQ(cur, prev);
+              const qoqColor = qoq != null
+                ? (parseFloat(qoq) > 0 ? 'var(--red)' : parseFloat(qoq) < 0 ? 'var(--blue)' : 'var(--text3)')
+                : '';
+              const qoqStr = qoq != null && li > 0
+                ? `<div style="font-size:10px;color:${qoqColor};margin-top:2px">${parseFloat(qoq) > 0 ? '▲' : '▼'}${Math.abs(qoq)}%</div>`
+                : '';
+              return `<td style="padding:6px 12px;text-align:right;vertical-align:top">
+                <div>${fmtVal(cur)}</div>${qoqStr}
+              </td>`;
+            }).join('')}
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
 }
 
 // ── Chart.js 차트 렌더링 ──
@@ -489,12 +540,14 @@ function renderCmpChart(metricKey) {
   }
 
   drawCmpChart(canvas, window._cmpMetricCache[metricKey], labels, metaDef);
+  renderCmpDetailTable(metricKey);
 }
 
 async function fetchCmpMetricAndRender(metricKey, canvas, labels, metaDef) {
   if (!window._cmpMetricCache) window._cmpMetricCache = {};
   if (window._cmpMetricCache[metricKey]) {
     drawCmpChart(canvas, window._cmpMetricCache[metricKey], labels, metaDef);
+    renderCmpDetailTable(metricKey);
     return;
   }
 
