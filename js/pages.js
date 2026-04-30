@@ -118,13 +118,39 @@ function pRooms() {
 
 function pNotice() {
   if (!canEdit()) return `<div style="padding:2rem;text-align:center;color:var(--text3);font-size:13px">발송 권한이 없습니다 (viewer)</div>`;
+
+  const roomOptions = [...A.rooms]
+    .sort((a,b) => a.name.localeCompare(b.name, 'ko'))
+    .map(r => `<option value="room:${r.id}">[${r.cat}] ${r.name}</option>`)
+    .join('');
+
   return `
   <div class="card" style="margin-bottom:1rem"><div class="card-header"><span class="card-title">새 공지 작성</span></div><div class="card-body">
-    <div class="form-group" style="max-width:220px"><label class="form-label">대상</label>
-      <select class="form-select" id="i-target"><option value="all">전체 (${A.rooms.length}개)</option><option value="open">입장 가능</option><option value="바이오">바이오</option><option value="뷰티">뷰티</option><option value="로봇">로봇</option><option value="2차전지">2차전지</option><option value="테크">테크</option><option value="반도체">반도체</option><option value="신재생">신재생</option></select>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:1rem">
+      <div class="form-group" style="margin:0;min-width:220px">
+        <label class="form-label">발송 대상</label>
+        <select class="form-select" id="i-target" onchange="onNoticeTargetChange()">
+          <optgroup label="── 그룹 발송 ──">
+            <option value="all">전체 (${A.rooms.length}개)</option>
+            <option value="open">입장 가능</option>
+            ${INDUSTRIES.map(i=>`<option value="${i}">${i}</option>`).join('')}
+          </optgroup>
+          <optgroup label="── 개별 채팅방 ──">
+            ${roomOptions}
+          </optgroup>
+        </select>
+      </div>
+      <div class="form-group" style="margin:0">
+        <label class="form-label">발송 형식</label>
+        <select class="form-select" id="i-parse-mode">
+          <option value="HTML">HTML</option>
+          <option value="Markdown">Markdown (URL 자동 링크)</option>
+        </select>
+      </div>
+      <div style="align-self:flex-end;font-size:12px;color:var(--text3)" id="i-target-info"></div>
     </div>
-    <div class="form-group"><label class="form-label">내용</label><textarea class="form-input" id="i-content" rows="5" oninput="prev(this.value,'i-prev')"></textarea></div>
-    <div class="form-group"><label class="form-label">미리보기</label><div id="i-prev" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;min-height:36px;color:var(--text2)"></div></div>
+    <div class="form-group"><label class="form-label">내용</label><textarea class="form-input" id="i-content" rows="8" oninput="prev(this.value,'i-prev')"></textarea></div>
+    <div class="form-group"><label class="form-label">미리보기</label><div id="i-prev" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;min-height:36px;color:var(--text2);white-space:pre-wrap"></div></div>
     <div id="i-prog" class="hidden" style="font-size:12px;padding:8px;background:var(--bg3);border-radius:var(--radius-sm);color:var(--text2);margin-bottom:.75rem"></div>
     <div style="display:flex;justify-content:flex-end"><button class="btn btn-primary" id="i-btn" onclick="sendInline()">발송 + DB 저장</button></div>
   </div></div>

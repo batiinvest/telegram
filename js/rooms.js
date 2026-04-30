@@ -49,16 +49,35 @@ async function saveEdit(id) {
 async function doNotice(content, target, btnId, progId) {
   if (!canEdit()) { toast('권한이 없습니다.', 'error'); return; }
   if (!content) { toast('내용 입력 필요', 'error'); return; }
+
+  const parseMode = document.getElementById('i-parse-mode')?.value || 'HTML';
+
   let targets = A.rooms;
-  if (target === 'open') targets = targets.filter(r => r.status === 'open');
-  else if (target !== 'all') targets = targets.filter(r => r.cat === target);
-  if (!confirm(`${targets.length}개에 발송?`)) return;
+  // room:ID 형식 — 개별 채팅방 발송
+  if (target.startsWith('room:')) {
+    const id = parseInt(target.replace('room:', ''));
+    const r = A.rooms.find(x => x.id === id);
+    if (!r) { toast('채팅방을 찾을 수 없습니다.', 'error'); return; }
+    targets = [r];
+  } else if (target === 'open') {
+    targets = targets.filter(r => r.status === 'open');
+  } else if (target !== 'all') {
+    targets = targets.filter(r => r.cat === target);
+  }
+
+  if (!confirm(`${targets.length}개 채팅방에 발송?\n형식: ${parseMode}`)) return;
+
   const btn = document.getElementById(btnId), prog = document.getElementById(progId);
   btn.disabled = true; prog.classList.remove('hidden');
   let ok = 0;
   for (let i = 0; i < targets.length; i++) {
     prog.innerHTML = `<span class="loading"></span>${i+1}/${targets.length} — ${targets[i].name}`;
-    try { await tgSend(targets[i].chat_id, content); ok++; } catch {}
+    try {
+      await tg('sendMessage', { chat_id: targets[i].chat_id, text: content, parse_mode: parseMode });
+      ok++;
+    } catch(e) {
+      console.error(`[공지실패] ${targets[i].name}:`, e.message);
+    }
     await new Promise(r => setTimeout(r, 300));
   }
   await DB('notice_history').insert([{ target, content, sent_count: targets.length, ok_count: ok, sent_by: A.user.id }]);
@@ -66,6 +85,25 @@ async function doNotice(content, target, btnId, progId) {
   btn.disabled = false;
   toast(`발송 완료: ${ok}/${targets.length}`, 'success');
   setTimeout(() => { prog.classList.add('hidden'); if (A.page === 'notice') loadNotices(); }, 3000);
+}
+
+// 대상 변경 시 발송 개수 표시
+function onNoticeTargetChange() {
+  const target = document.getElementById('i-target')?.value;
+  const info   = document.getElementById('i-target-info');
+  if (!info) return;
+  if (!target) { info.textContent = ''; return; }
+  if (target.startsWith('room:')) {
+    const id = parseInt(target.replace('room:', ''));
+    const r = A.rooms.find(x => x.id === id);
+    info.textContent = r ? `→ ${r.name} 1개` : '';
+  } else if (target === 'all') {
+    info.textContent = `→ 전체 ${A.rooms.length}개`;
+  } else if (target === 'open') {
+    info.textContent = `→ ${A.rooms.filter(r=>r.status==='open').length}개`;
+  } else {
+    info.textContent = `→ ${A.rooms.filter(r=>r.cat===target).length}개`;
+  }
 }
 
 const sendNoticeModal = () => doNotice(document.getElementById('n-content').value.trim(), document.getElementById('n-target').value, 'n-btn', 'n-prog');
