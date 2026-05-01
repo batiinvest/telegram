@@ -76,7 +76,7 @@ async function loadInvestment() {
 
   // 3) 모니터링 종목 시장 데이터
   const { data: mktRows, error } = await sb.from('market_data')
-    .select('stock_code,corp_name,price,price_change_rate,market_cap,industry')
+    .select('stock_code,corp_name,price,price_change_rate,market_cap,market')
     .eq('base_date', maxDate)
     .order('price_change_rate', { ascending: false });
 
@@ -100,7 +100,7 @@ async function loadInvestment() {
     <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border)">
       <span style="width:16px;font-size:11px;color:var(--text3);font-weight:600">${i+1}</span>
       <span style="flex:1;font-size:13px;font-weight:500">${r.corp_name}</span>
-      <span style="font-size:11px;color:var(--text3)">${r.industry||''}</span>
+      <span style="font-size:11px;color:var(--text3)">${r.market||''}</span>
       <span style="font-size:13px;font-weight:600;color:${chgColor(r.price_change_rate)}">${chgStr(r.price_change_rate)}</span>
     </div>`;
 
