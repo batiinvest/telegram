@@ -2,7 +2,7 @@
 :root {
   --bg:#0f1117; --bg2:#1a1d27; --bg3:#222535;
   --border:rgba(255,255,255,0.08); --border2:rgba(255,255,255,0.14);
-  --text:#e8eaf0; --text2:#8b90a7; --text3:#555a70;
+  --text:#f0f2f8; --text2:#a8adc4; --text3:#6e7491;
   --tg:#2AABEE; --tg2:#1e96d3; --green:#2dce89; --red:#f5365c; --yellow:#fb6340;
   --radius:10px; --radius-sm:6px;
 }
@@ -27,10 +27,10 @@ body { background:var(--bg); color:var(--text); font-family:'Pretendard','Apple 
 .logo-text { font-size:13px; font-weight:600; }
 .logo-sub { font-size:11px; color:var(--text3); }
 .nav { padding:.75rem 0; flex:1; overflow-y:auto; }
-.nav-sec { padding:.75rem 1.25rem .25rem; font-size:10px; font-weight:600; color:var(--text2); text-transform:uppercase; letter-spacing:.1em; }
-.nav-item { display:flex; align-items:center; gap:10px; padding:9px 1.25rem; cursor:pointer; font-size:13px; color:var(--text); border-left:2px solid transparent; transition:all .15s; user-select:none; opacity:.75; }
+.nav-sec { padding:.75rem 1.25rem .25rem; font-size:10px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.1em; }
+.nav-item { display:flex; align-items:center; gap:10px; padding:9px 1.25rem; cursor:pointer; font-size:13px; color:var(--text); border-left:2px solid transparent; transition:all .15s; user-select:none; opacity:.7; }
 .nav-item:hover { color:var(--text); background:rgba(255,255,255,.05); opacity:1; }
-.nav-item.active { color:var(--tg); background:rgba(42,171,238,.08); border-left-color:var(--tg); font-weight:500; opacity:1; }
+.nav-item.active { color:var(--tg); background:rgba(42,171,238,.08); border-left-color:var(--tg); font-weight:500; }
 .nav-item.disabled { opacity:.3; cursor:not-allowed; pointer-events:none; }
 .nav-item svg { width:15px; height:15px; flex-shrink:0; opacity:.8; }
 .nav-badge { margin-left:auto; background:var(--tg); color:#fff; font-size:10px; font-weight:700; padding:1px 6px; border-radius:100px; }
@@ -60,7 +60,7 @@ body { background:var(--bg); color:var(--text); font-family:'Pretendard','Apple 
 /* ── Cards / Metrics ── */
 .metrics-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:1.5rem; }
 .metric-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:1rem 1.125rem; }
-.metric-label { font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:6px; }
+.metric-label { font-size:11px; color:var(--text2); text-transform:uppercase; letter-spacing:.06em; margin-bottom:6px; }
 .metric-value { font-size:26px; font-weight:600; line-height:1.1; }
 .metric-sub { font-size:11px; color:var(--text3); margin-top:4px; }
 .card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:1rem; }
@@ -71,7 +71,7 @@ body { background:var(--bg); color:var(--text); font-family:'Pretendard','Apple 
 /* ── Table ── */
 .table-wrap { overflow-x:auto; }
 table { width:100%; border-collapse:collapse; font-size:13px; }
-th { text-align:left; padding:9px 12px; font-size:11px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.06em; border-bottom:1px solid var(--border); white-space:nowrap; }
+th { text-align:left; padding:9px 12px; font-size:11px; font-weight:600; color:var(--text2); text-transform:uppercase; letter-spacing:.06em; border-bottom:1px solid var(--border); white-space:nowrap; }
 td { padding:10px 12px; border-bottom:1px solid var(--border); vertical-align:middle; }
 tr:last-child td { border-bottom:none; }
 tr:hover td { background:rgba(255,255,255,.02); }
@@ -123,7 +123,7 @@ a:hover { text-decoration:underline; }
 
 /* ── Forms ── */
 .form-group { margin-bottom:1rem; }
-.form-label { display:block; font-size:12px; color:var(--text2); margin-bottom:6px; font-weight:500; }
+.form-label { display:block; font-size:12px; color:var(--text); margin-bottom:6px; font-weight:500; }
 .form-input { width:100%; padding:8px 12px; font-size:13px; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--bg3); color:var(--text); font-family:inherit; }
 .form-input:focus { outline:none; border-color:var(--tg); }
 .form-input::placeholder { color:var(--text3); }
