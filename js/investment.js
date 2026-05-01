@@ -1,17 +1,27 @@
 // investment.js — 오늘의 시황 페이지
 // 의존: config.js (fmtCap, chgColor, chgStr, loadingHTML), Chart.js
 
-// ── 흐름 차트 상태 ──
-const INV = {
-  group:  'global',  // 'global' | 'domestic' | 'fx' | 'commodity'
-  period: 7,        // 7 | 30 | 90
-};
+// ── 전체 지표 정의 ──
+const INV_ALL_METRICS = [
+  { col:'sp500',   name:'S&P500',   group:'미국',   color:'#2AABEE' },
+  { col:'nasdaq',  name:'나스닥',    group:'미국',   color:'#4a9eff' },
+  { col:'dow',     name:'다우',      group:'미국',   color:'#a259ff' },
+  { col:'kospi',   name:'코스피',    group:'한국',   color:'#2dce89' },
+  { col:'kosdaq',  name:'코스닥',    group:'한국',   color:'#00d4aa' },
+  { col:'kospi200',name:'코스피200', group:'한국',   color:'#ffd600' },
+  { col:'usd_krw', name:'USD/KRW', group:'환율',   color:'#fb6340' },
+  { col:'jpy_krw', name:'JPY/KRW', group:'환율',   color:'#f5365c' },
+  { col:'eur_krw', name:'EUR/KRW', group:'환율',   color:'#ffc107' },
+  { col:'wti',     name:'WTI',      group:'원자재', color:'#ff6b9d' },
+  { col:'gold',    name:'금',        group:'원자재', color:'#ffd700' },
+  { col:'vix',     name:'VIX',      group:'기타',   color:'#8b90a7' },
+  { col:'us10y',   name:'미 금리',  group:'기타',   color:'#6e7491' },
+];
 
-const INV_GROUPS = {
-  global:    { label: '미국 지수',  cols: ['sp500','nasdaq','dow'],           names: ['S&P500','나스닥','다우'] },
-  domestic:  { label: '국내 시장',  cols: ['kospi','kosdaq','kospi200'],      names: ['코스피','코스닥','코스피200'] },
-  fx:        { label: '환율',       cols: ['usd_krw','jpy_krw','eur_krw','cny_krw'], names: ['USD/KRW','JPY/KRW','EUR/KRW','CNY/KRW'] },
-  commodity: { label: '원자재',     cols: ['wti','gold','gas','copper'],       names: ['WTI','금','천연가스','구리'] },
+// 기본 선택: 미국 + 한국 주요 지수
+const INV = {
+  selected: new Set(['sp500','nasdaq','kospi','kosdaq']),
+  period:   7,
 };
 
 const INV_COLORS = ['#2AABEE','#2dce89','#fb6340','#ffd600','#a259ff'];
@@ -53,31 +63,38 @@ function pInvestment() {
 
   <!-- 흐름 비교 차트 -->
   <div class="card" style="margin-bottom:1.25rem">
-    <div class="card-header" style="flex-wrap:wrap;gap:8px">
-      <span class="card-title">📈 흐름 비교</span>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-        <div style="display:flex;gap:4px">
-          ${Object.entries(INV_GROUPS).map(([k,v])=>`
-            <button class="chip ${k==='global'?'active':''}" data-inv-group="${k}"
-              onclick="setInvGroup('${k}')" style="font-size:11px;padding:2px 8px">${v.label}</button>
-          `).join('')}
-        </div>
-        <div style="display:flex;gap:4px">
-          ${[{d:7,l:'1주'},{d:30,l:'1달'},{d:90,l:'3달'}].map(({d,l})=>`
-            <button class="chip ${d===7?'active':''}" data-inv-period="${d}"
-              onclick="setInvPeriod(${d})" style="font-size:11px;padding:2px 8px">${l}</button>
-          `).join('')}
-        </div>
+    <div class="card-header" style="flex-wrap:wrap;gap:8px;align-items:flex-start">
+      <div>
+        <span class="card-title">📈 흐름 비교</span>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">시작일 = 100 기준 정규화 · 원하는 지표를 선택해 비교</div>
+      </div>
+      <div style="display:flex;gap:4px;margin-left:auto">
+        ${[{d:7,l:'1주'},{d:30,l:'1달'},{d:90,l:'3달'}].map(({d,l})=>`
+          <button class="chip ${d===7?'active':''}" data-inv-period="${d}"
+            onclick="setInvPeriod(${d})" style="font-size:11px;padding:2px 8px">${l}</button>
+        `).join('')}
       </div>
     </div>
-    <div style="padding:1rem;position:relative;height:260px">
+
+    <!-- 지표 선택 체크박스 -->
+    <div style="padding:.75rem 1rem;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:6px" id="inv-metric-checks">
+      ${INV_ALL_METRICS.map(m => `
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;padding:3px 8px;border-radius:100px;border:1px solid var(--border);font-size:12px;user-select:none"
+          id="inv-lbl-${m.col}">
+          <input type="checkbox" style="display:none" id="inv-chk-${m.col}"
+            onchange="toggleInvMetric('${m.col}')" ${['sp500','nasdaq','kospi','kosdaq'].includes(m.col)?'checked':''}>
+          <span style="width:8px;height:8px;border-radius:50%;background:${m.color};flex-shrink:0"></span>
+          <span>${m.name}</span>
+          <span style="font-size:10px;color:var(--text3)">${m.group}</span>
+        </label>
+      `).join('')}
+    </div>
+
+    <div style="padding:1rem;position:relative;height:280px">
       <canvas id="inv-trend-chart"></canvas>
       <div id="inv-trend-empty" style="display:none;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:13px">
         데이터 수집 중... (매일 09:00, 16:10 업데이트)
       </div>
-    </div>
-    <div style="padding:4px 1rem 12px;font-size:11px;color:var(--text3)">
-      * 시작일 기준 100으로 정규화하여 상대적 흐름을 비교합니다
     </div>
   </div>
 
@@ -192,11 +209,37 @@ async function loadMacroData() {
 // ── 흐름 비교 차트 ──
 let _invTrendChart = null;
 
-function setInvGroup(group) {
-  INV.group = group;
-  document.querySelectorAll('[data-inv-group]').forEach(b =>
-    b.classList.toggle('active', b.dataset.invGroup === group));
+// ── 체크박스 토글 ──
+function toggleInvMetric(col) {
+  if (INV.selected.has(col)) {
+    INV.selected.delete(col);
+  } else {
+    if (INV.selected.size >= 8) { toast('최대 8개까지 선택 가능합니다.', 'info'); return; }
+    INV.selected.add(col);
+  }
+  // 체크박스 라벨 active 스타일
+  const lbl = document.getElementById('inv-lbl-' + col);
+  const chk = document.getElementById('inv-chk-' + col);
+  const m   = INV_ALL_METRICS.find(x => x.col === col);
+  if (lbl && m) {
+    lbl.style.background    = INV.selected.has(col) ? m.color + '22' : '';
+    lbl.style.borderColor   = INV.selected.has(col) ? m.color : 'var(--border)';
+    lbl.style.color         = INV.selected.has(col) ? m.color : '';
+  }
   loadTrendChart();
+}
+
+// 초기 체크박스 스타일 적용
+function initInvCheckboxStyles() {
+  INV_ALL_METRICS.forEach(m => {
+    const lbl = document.getElementById('inv-lbl-' + m.col);
+    if (!lbl) return;
+    if (INV.selected.has(m.col)) {
+      lbl.style.background  = m.color + '22';
+      lbl.style.borderColor = m.color;
+      lbl.style.color       = m.color;
+    }
+  });
 }
 
 function setInvPeriod(period) {
@@ -211,8 +254,16 @@ async function loadTrendChart() {
   const empty  = document.getElementById('inv-trend-empty');
   if (!canvas) return;
 
-  const grp = INV_GROUPS[INV.group];
-  const cols = ['base_date', ...grp.cols].join(',');
+  initInvCheckboxStyles();
+
+  if (!INV.selected.size) {
+    canvas.style.display = 'none';
+    if (empty) { empty.style.display = 'flex'; empty.textContent = '지표를 선택해주세요.'; }
+    return;
+  }
+
+  const selectedMetrics = INV_ALL_METRICS.filter(m => INV.selected.has(m.col));
+  const cols = ['base_date', ...selectedMetrics.map(m => m.col)].join(',');
 
   const { data: rows } = await sb.from('macro_data')
     .select(cols)
@@ -221,7 +272,7 @@ async function loadTrendChart() {
 
   if (!rows?.length) {
     canvas.style.display = 'none';
-    if (empty) empty.style.display = 'flex';
+    if (empty) { empty.style.display = 'flex'; empty.textContent = '데이터 수집 중... (매일 09:00, 16:10 업데이트)'; }
     return;
   }
   canvas.style.display = 'block';
@@ -230,16 +281,15 @@ async function loadTrendChart() {
   const labels = rows.map(r => r.base_date);
 
   // 100 기준 정규화
-  const datasets = grp.cols.map((col, i) => {
-    const values = rows.map(r => r[col]);
+  const datasets = selectedMetrics.map(m => {
+    const values = rows.map(r => r[m.col]);
     const base   = values.find(v => v != null);
     const normalized = values.map(v => v != null && base ? Math.round(v / base * 10000) / 100 : null);
-    const color = INV_COLORS[i % INV_COLORS.length];
     return {
-      label:           grp.names[i],
+      label:           m.name,
       data:            normalized,
-      borderColor:     color,
-      backgroundColor: color + '15',
+      borderColor:     m.color,
+      backgroundColor: m.color + '15',
       borderWidth:     2,
       pointRadius:     2,
       pointHoverRadius:5,
