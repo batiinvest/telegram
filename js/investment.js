@@ -92,6 +92,30 @@ function pInvestment() {
     </div>
   </div>
 
+  <!-- 실적 급등 종목 -->
+  <div class="card" style="margin-bottom:1.25rem">
+    <div class="card-header" style="flex-wrap:wrap;gap:8px">
+      <span class="card-title">🚀 최근 실적 급등 종목</span>
+      <div style="display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12px">
+        <span style="color:var(--text3)">전분기 대비</span>
+        <input type="number" id="inv-qoq-threshold" value="20" min="0" max="200" step="5"
+          style="width:56px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
+        <span style="color:var(--text3)">% / 전년동기 대비</span>
+        <input type="number" id="inv-yoy-threshold" value="20" min="0" max="200" step="5"
+          style="width:56px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
+        <span style="color:var(--text3)">% 이상</span>
+        <button class="chip" onclick="loadEarningsSurge()" style="font-size:11px;padding:2px 8px">적용</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:4px;padding:.5rem 1rem;border-bottom:1px solid var(--border)">
+      <button class="chip active" data-earnings="revenue" onclick="setEarningsMetric(this,'revenue')" style="font-size:11px">매출액</button>
+      <button class="chip" data-earnings="operating_profit" onclick="setEarningsMetric(this,'operating_profit')" style="font-size:11px">영업이익</button>
+    </div>
+    <div id="inv-earnings-list" style="padding:.5rem 0">
+      <div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>
+    </div>
+  </div>
+
   <!-- 전체 종목 동향 -->
   <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">📊 전체 종목 동향</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:1.25rem" id="inv-total-summary">
@@ -141,6 +165,7 @@ function mkIndexCard(label, value, chg, unit, sub) {
 async function loadInvestment() {
   loadMacroData();
   loadTrendChart();
+  loadEarningsSurge();
 
   const { data: dateRow } = await sb.from('market_data')
     .select('base_date').order('base_date', { ascending: false }).limit(1);
@@ -303,6 +328,100 @@ async function loadMarketOverview(maxDate) {
       </div>
     </div>`;
   }).join('');
+}
+
+// ── 실적 급등 종목 ──
+let _earningsMetric = 'revenue';
+
+function setEarningsMetric(el, metric) {
+  _earningsMetric = metric;
+  document.querySelectorAll('[data-earnings]').forEach(b =>
+    b.classList.toggle('active', b.dataset.earnings === metric));
+  loadEarningsSurge();
+}
+
+async function loadEarningsSurge() {
+  const el = document.getElementById('inv-earnings-list');
+  if (!el) return;
+  el.innerHTML = `<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>`;
+
+  const qoqThreshold = parseFloat(document.getElementById('inv-qoq-threshold')?.value || 20);
+  const yoyThreshold = parseFloat(document.getElementById('inv-yoy-threshold')?.value || 20);
+  const metric = _earningsMetric;
+  const metricLabel = metric === 'revenue' ? '매출액' : '영업이익';
+
+  // 설정값 저장
+  try {
+    await sb.from('app_config').upsert([
+      { key: 'earnings_qoq_threshold', value: String(qoqThreshold), description: '전분기 대비 급등 기준 (%)' },
+      { key: 'earnings_yoy_threshold', value: String(yoyThreshold), description: '전년동기 대비 급등 기준 (%)' },
+    ], { onConflict: 'key' });
+  } catch(e) {}
+
+  // 최근 2개 분기 조회 (모니터링 종목만)
+  const { data: rows } = await sb.from('financials')
+    .select(`corp_name, stock_code, bsns_year, quarter, ${metric}, revenue_yoy, op_profit_yoy, revenue_qoq, op_profit_qoq`)
+    .eq('fs_div', 'CFS')
+    .not(metric, 'is', null)
+    .order('bsns_year', { ascending: false })
+    .order('quarter', { ascending: false })
+    .limit(2000);
+
+  if (!rows?.length) {
+    el.innerHTML = `<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px">데이터 없음</div>`;
+    return;
+  }
+
+  // 종목별 최신 분기만 추출
+  const latestMap = {};
+  rows.forEach(r => {
+    if (!latestMap[r.stock_code]) latestMap[r.stock_code] = r;
+  });
+
+  const yoyCol = metric === 'revenue' ? 'revenue_yoy' : 'op_profit_yoy';
+  const qoqCol = metric === 'revenue' ? 'revenue_qoq' : 'op_profit_qoq';
+
+  // 기준 초과 종목 필터 (QoQ 또는 YoY)
+  const surges = Object.values(latestMap)
+    .filter(r => {
+      const yoy = r[yoyCol];
+      const qoq = r[qoqCol];
+      return (yoy != null && yoy >= yoyThreshold) || (qoq != null && qoq >= qoqThreshold);
+    })
+    .sort((a, b) => {
+      const aMax = Math.max(a[yoyCol] ?? -999, a[qoqCol] ?? -999);
+      const bMax = Math.max(b[yoyCol] ?? -999, b[qoqCol] ?? -999);
+      return bMax - aMax;
+    })
+    .slice(0, 20);
+
+  if (!surges.length) {
+    el.innerHTML = `<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px">
+      기준(QoQ ${qoqThreshold}% / YoY ${yoyThreshold}% 이상) 충족 종목 없음
+    </div>`;
+    return;
+  }
+
+  const chgBadge = (v, label) => {
+    if (v == null) return '';
+    const color = v > 0 ? 'var(--red)' : v < 0 ? 'var(--blue)' : 'var(--text3)';
+    const arrow = v > 0 ? '▲' : '▼';
+    return `<span style="font-size:11px;color:${color};margin-left:4px">${label} ${arrow}${Math.abs(v).toFixed(1)}%</span>`;
+  };
+
+  el.innerHTML = surges.map((r, i) => `
+    <div style="display:flex;align-items:center;gap:8px;padding:7px 14px;border-bottom:1px solid var(--border)">
+      <span style="width:20px;font-size:11px;color:var(--text3);font-weight:600">${i+1}</span>
+      <div style="flex:1">
+        <span style="font-size:13px;font-weight:600">${r.corp_name}</span>
+        <span style="font-size:11px;color:var(--text3);margin-left:6px">${r.bsns_year} ${r.quarter}</span>
+      </div>
+      <div style="font-size:13px;font-weight:600;color:var(--text1)">${fmtCap(r[metric])}</div>
+      <div style="min-width:160px;text-align:right">
+        ${chgBadge(r[qoqCol], 'QoQ')}
+        ${chgBadge(r[yoyCol], 'YoY')}
+      </div>
+    </div>`).join('');
 }
 
 // ── 매크로 카드 ──
