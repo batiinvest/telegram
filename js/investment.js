@@ -202,27 +202,23 @@ async function loadMarketOverview(maxDate) {
   const rows = (all||[]).filter(r => r.price_change_rate != null);
   if (!rows.length) return;
 
-  // companies에서 industry 정보 조회
-  const codes = rows.map(r => r.stock_code);
+  // companies 전체에서 industry 매핑 (URL 길이 제한 우회)
   let industryMap = {};
-  if (codes.length) {
-    const { data: companies } = await sb.from('companies')
-      .select('code,industry')
-      .in('code', codes.map(c => c + '.KS').concat(codes.map(c => c + '.KQ')));
-    (companies||[]).forEach(c => {
-      const code = c.code.replace(/\.(KS|KQ)$/, '');
-      industryMap[code] = c.industry;
-    });
-    // 직접 매칭도 시도
-    if (!Object.keys(industryMap).length) {
-      const { data: companies2 } = await sb.from('companies')
-        .select('code,industry');
-      (companies2||[]).forEach(c => {
+  try {
+    let compAll = [], from = 0;
+    while (true) {
+      const { data: comp } = await sb.from('companies')
+        .select('code,industry')
+        .range(from, from + 999);
+      if (!comp?.length) break;
+      comp.forEach(c => {
         const code = c.code.replace(/\.(KS|KQ)$/, '');
-        industryMap[code] = c.industry;
+        if (c.industry) industryMap[code] = c.industry;
       });
+      if (comp.length < 1000) break;
+      from += 1000;
     }
-  }
+  } catch(e) { /* industry 없이 진행 */ }
 
   const enriched = rows.map(r => ({
     ...r,
