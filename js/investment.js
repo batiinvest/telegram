@@ -92,6 +92,17 @@ function pInvestment() {
     </div>
   </div>
 
+  <!-- 오늘 실적 공시 종목 -->
+  <div class="card" style="margin-bottom:1.25rem">
+    <div class="card-header">
+      <span class="card-title">📋 오늘 실적 공시 종목</span>
+      <span id="inv-disclosure-date" style="font-size:11px;color:var(--text3);margin-left:8px"></span>
+    </div>
+    <div id="inv-disclosure-list" style="padding:.5rem 0">
+      <div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>
+    </div>
+  </div>
+
   <!-- 실적 급등 종목 -->
   <div class="card" style="margin-bottom:1.25rem">
     <div class="card-header" style="flex-wrap:wrap;gap:8px">
@@ -165,6 +176,7 @@ function mkIndexCard(label, value, chg, unit, sub) {
 async function loadInvestment() {
   loadMacroData();
   loadTrendChart();
+  loadTodayDisclosures();
   loadEarningsSurge();
 
   const { data: dateRow } = await sb.from('market_data')
@@ -328,6 +340,60 @@ async function loadMarketOverview(maxDate) {
       </div>
     </div>`;
   }).join('');
+}
+
+// ── 오늘 실적 공시 목록 ──
+async function loadTodayDisclosures() {
+  const el     = document.getElementById('inv-disclosure-list');
+  const dateEl = document.getElementById('inv-disclosure-date');
+  if (!el) return;
+
+  const { data: cfg } = await sb.from('app_config')
+    .select('value,description')
+    .eq('key', 'today_earnings_corps')
+    .single();
+
+  if (!cfg?.value) {
+    el.innerHTML = `<div style="padding:1.25rem;text-align:center;color:var(--text3);font-size:12px">
+      오늘 공시 데이터 없음 (매일 18:30 업데이트)
+    </div>`;
+    return;
+  }
+
+  let corps = [];
+  try { corps = JSON.parse(cfg.value); } catch { }
+
+  if (!corps.length) {
+    el.innerHTML = `<div style="padding:1.25rem;text-align:center;color:var(--text3);font-size:12px">오늘 실적 공시 없음</div>`;
+    return;
+  }
+
+  // 날짜 표시 (description에서 추출)
+  if (dateEl && cfg.description) {
+    dateEl.textContent = cfg.description.replace(' 실적 공시 종목 목록', '') + ' 기준';
+  }
+
+  // 보고서 종류별 배지 색상
+  const reprtColor = (nm) => {
+    if (nm.includes('사업보고서')) return { bg:'rgba(42,171,238,.15)', color:'#2AABEE', label:'연간' };
+    if (nm.includes('반기'))      return { bg:'rgba(45,206,137,.15)', color:'#2dce89', label:'반기' };
+    if (nm.includes('분기'))      return { bg:'rgba(251,99,64,.15)',  color:'#fb6340', label:'분기' };
+    return                               { bg:'rgba(139,144,167,.15)', color:'#8b90a7', label:'공시' };
+  };
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;padding:.75rem 1rem">
+      ${corps.map(c => {
+        const badge = reprtColor(c.report_nm || '');
+        return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg3);border-radius:var(--radius-sm);border:1px solid var(--border)">
+          <span style="font-size:10px;padding:2px 6px;border-radius:100px;background:${badge.bg};color:${badge.color};font-weight:600;white-space:nowrap">${badge.label}</span>
+          <span style="font-size:13px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.corp_name}</span>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="padding:4px 1rem 8px;font-size:11px;color:var(--text3)">
+      총 ${corps.length}개 종목 공시 · 재무 데이터 수집 완료
+    </div>`;
 }
 
 // ── 실적 급등 종목 ──
