@@ -24,137 +24,138 @@ const INV = {
 
 // ── 페이지 HTML ──
 function pInvestment() {
+  window._invTab = window._invTab || 'market';
   return `
+  <!-- 탭 헤더 -->
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:8px">
-    <div style="font-size:12px;color:var(--text3)" id="inv-date"></div>
-    <button class="btn btn-sm" onclick="loadInvestment()">🔄 새로고침</button>
-  </div>
-
-  <!-- 글로벌 지수 -->
-  <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">🌍 글로벌 지수</div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:1.25rem" id="inv-global">
-    ${['','','','',''].map(()=>'<div class="card" style="padding:12px 14px;min-height:70px"></div>').join('')}
-  </div>
-
-  <!-- 국내 시장 -->
-  <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">🇰🇷 국내 시장</div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:1.25rem" id="inv-domestic">
-    ${['','',''].map(()=>'<div class="card" style="padding:12px 14px;min-height:70px"></div>').join('')}
-  </div>
-
-  <!-- 환율 / 원자재 -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:1.25rem">
-    <div>
-      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">💱 환율</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px" id="inv-fx">
-        ${['','','',''].map(()=>'<div class="card" style="padding:12px 14px;min-height:70px"></div>').join('')}
-      </div>
+    <div style="display:flex;gap:6px">
+      <button class="chip ${window._invTab==='market'?'active':''}" onclick="setInvTab('market')">📊 시황</button>
+      <button class="chip ${window._invTab==='disclosure'?'active':''}" onclick="setInvTab('disclosure')">📋 공시</button>
     </div>
-    <div>
-      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">🛢️ 원자재</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px" id="inv-commodity">
-        ${['','','',''].map(()=>'<div class="card" style="padding:12px 14px;min-height:70px"></div>').join('')}
-      </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="font-size:12px;color:var(--text3)" id="inv-date"></div>
+      <button class="btn btn-sm" onclick="loadInvestment()">🔄 새로고침</button>
     </div>
   </div>
 
-  <!-- 흐름 비교 차트 -->
-  <div class="card" style="margin-bottom:1.25rem">
-    <div class="card-header" style="flex-wrap:wrap;gap:8px;align-items:flex-start">
+  <!-- 시황 탭 -->
+  <div id="inv-tab-market" style="display:${window._invTab==='market'?'block':'none'}">
+    <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">🌍 글로벌 지수</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:1.25rem" id="inv-global">
+      ${['','','','',''].map(()=>'<div class="card" style="padding:12px 14px;min-height:70px"></div>').join('')}
+    </div>
+
+    <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">🇰🇷 국내 시장</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:1.25rem" id="inv-domestic">
+      ${['','',''].map(()=>'<div class="card" style="padding:12px 14px;min-height:70px"></div>').join('')}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:1.25rem">
       <div>
-        <span class="card-title">📈 흐름 비교</span>
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">시작일 = 100 기준 정규화 · 원하는 지표를 선택해 비교</div>
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">💱 환율</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px" id="inv-fx">
+          ${['','','',''].map(()=>'<div class="card" style="padding:12px 14px;min-height:70px"></div>').join('')}
+        </div>
       </div>
-      <div style="display:flex;gap:4px;margin-left:auto">
-        ${[{d:7,l:'1주'},{d:30,l:'1달'},{d:90,l:'3달'}].map(({d,l})=>`
-          <button class="chip ${d===7?'active':''}" data-inv-period="${d}"
-            onclick="setInvPeriod(${d})" style="font-size:11px;padding:2px 8px">${l}</button>
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">🛢️ 원자재</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px" id="inv-commodity">
+          ${['','','',''].map(()=>'<div class="card" style="padding:12px 14px;min-height:70px"></div>').join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:1.25rem">
+      <div class="card-header" style="flex-wrap:wrap;gap:8px;align-items:flex-start">
+        <div>
+          <span class="card-title">📈 흐름 비교</span>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">시작일 = 100 기준 정규화 · 원하는 지표를 선택해 비교</div>
+        </div>
+        <div style="display:flex;gap:4px;margin-left:auto">
+          ${[{d:7,l:'1주'},{d:30,l:'1달'},{d:90,l:'3달'}].map(({d,l})=>`
+            <button class="chip ${d===7?'active':''}" data-inv-period="${d}"
+              onclick="setInvPeriod(${d})" style="font-size:11px;padding:2px 8px">${l}</button>
+          `).join('')}
+        </div>
+      </div>
+      <div style="padding:.75rem 1rem;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:6px" id="inv-metric-checks">
+        ${INV_ALL_METRICS.map(m => `
+          <label style="display:flex;align-items:center;gap:5px;cursor:pointer;padding:3px 8px;border-radius:100px;border:1px solid var(--border);font-size:12px;user-select:none"
+            id="inv-lbl-${m.col}">
+            <input type="checkbox" style="display:none" id="inv-chk-${m.col}"
+              onchange="toggleInvMetric('${m.col}')" ${['sp500','nasdaq','kospi','kosdaq'].includes(m.col)?'checked':''}>
+            <span style="width:8px;height:8px;border-radius:50%;background:${m.color};flex-shrink:0"></span>
+            <span>${m.name}</span>
+            <span style="font-size:10px;color:var(--text3)">${m.group}</span>
+          </label>
         `).join('')}
       </div>
+      <div style="padding:1rem;position:relative;height:280px">
+        <canvas id="inv-trend-chart"></canvas>
+        <div id="inv-trend-empty" style="display:none;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:13px">
+          데이터 수집 중... (매일 09:00, 16:10 업데이트)
+        </div>
+      </div>
     </div>
-    <div style="padding:.75rem 1rem;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:6px" id="inv-metric-checks">
-      ${INV_ALL_METRICS.map(m => `
-        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;padding:3px 8px;border-radius:100px;border:1px solid var(--border);font-size:12px;user-select:none;transition:all .15s"
-          id="inv-lbl-${m.col}">
-          <input type="checkbox" style="display:none" id="inv-chk-${m.col}"
-            onchange="toggleInvMetric('${m.col}')" ${['sp500','nasdaq','kospi','kosdaq'].includes(m.col)?'checked':''}>
-          <span style="width:8px;height:8px;border-radius:50%;background:${m.color};flex-shrink:0"></span>
-          <span>${m.name}</span>
-          <span style="font-size:10px;color:var(--text3);margin-left:2px">${m.group}</span>
-        </label>
-      `).join('')}
-    </div>
-    <div style="padding:1rem;position:relative;height:280px">
-      <canvas id="inv-trend-chart"></canvas>
-      <div id="inv-trend-empty" style="display:none;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:13px">
-        데이터 수집 중... (매일 09:00, 16:10 업데이트)
+
+    <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">📊 전체 종목 동향</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:1rem" id="inv-total-summary"></div>
+    <div id="inv-industry-grid" style="margin-bottom:1.25rem"></div>
+
+    <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">⭐ 모니터링 종목 현황</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:1rem" id="inv-summary"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="card">
+        <div class="card-header"><span class="card-title">🔴 급등 Top 5</span></div>
+        <div id="inv-surge" style="padding:.5rem 0"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">🔵 급락 Top 5</span></div>
+        <div id="inv-drop" style="padding:.5rem 0"></div>
       </div>
     </div>
   </div>
 
-  <!-- 오늘 실적 공시 종목 -->
-  <div class="card" style="margin-bottom:1.25rem">
-    <div class="card-header">
-      <span class="card-title">📋 오늘 실적 공시 종목</span>
-      <span id="inv-disclosure-date" style="font-size:11px;color:var(--text3);margin-left:8px"></span>
-    </div>
-    <div id="inv-disclosure-list" style="padding:.5rem 0">
-      <div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>
-    </div>
-  </div>
+  <!-- 공시 탭 -->
+  <div id="inv-tab-disclosure" style="display:${window._invTab==='disclosure'?'block':'none'}">
 
-  <!-- 실적 급등 종목 -->
-  <div class="card" style="margin-bottom:1.25rem">
-    <div class="card-header" style="flex-wrap:wrap;gap:8px">
-      <span class="card-title">🚀 최근 실적 급등 종목</span>
-      <div style="display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12px">
-        <span style="color:var(--text3)">전분기 대비</span>
-        <input type="number" id="inv-qoq-threshold" value="20" min="0" max="200" step="5"
-          style="width:56px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-        <span style="color:var(--text3)">% / 전년동기 대비</span>
-        <input type="number" id="inv-yoy-threshold" value="20" min="0" max="200" step="5"
-          style="width:56px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-        <span style="color:var(--text3)">% 이상</span>
-        <button class="chip" onclick="loadEarningsSurge()" style="font-size:11px;padding:2px 8px">적용</button>
+    <!-- 오늘 실적 공시 -->
+    <div class="card" style="margin-bottom:1.25rem">
+      <div class="card-header">
+        <span class="card-title">📋 오늘 실적 공시 종목</span>
+        <span id="inv-disclosure-date" style="font-size:11px;color:var(--text3);margin-left:8px"></span>
+      </div>
+      <div id="inv-disclosure-list" style="padding:.5rem 0">
+        <div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>
       </div>
     </div>
-    <div style="display:flex;gap:4px;padding:.5rem 1rem;border-bottom:1px solid var(--border)">
-      <button class="chip active" data-earnings="revenue" onclick="setEarningsMetric(this,'revenue')" style="font-size:11px">매출액</button>
-      <button class="chip" data-earnings="operating_profit" onclick="setEarningsMetric(this,'operating_profit')" style="font-size:11px">영업이익</button>
-    </div>
-    <div id="inv-earnings-list" style="padding:.5rem 0">
-      <div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>
-    </div>
-  </div>
 
-  <!-- 전체 종목 동향 -->
-  <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">📊 전체 종목 동향</div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:1.25rem" id="inv-total-summary">
-    ${['','','','',''].map(()=>'<div class="metric-card" style="min-height:60px"></div>').join('')}
-  </div>
-
-  <!-- 산업별 동향 -->
-  <div class="card" style="margin-bottom:1.25rem">
-    <div class="card-header">
-      <span class="card-title">🏭 산업별 동향</span>
-    </div>
-    <div id="inv-industry-grid" style="padding:.5rem 0"></div>
-  </div>
-
-  <!-- 모니터링 종목 -->
-  <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">⭐ 모니터링 종목</div>
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:1rem" id="inv-summary"></div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-    <div class="card">
-      <div class="card-header"><span class="card-title">🔴 급등 Top 5</span></div>
-      <div id="inv-surge" style="padding:.5rem 0"></div>
-    </div>
-    <div class="card">
-      <div class="card-header"><span class="card-title">🔵 급락 Top 5</span></div>
-      <div id="inv-drop" style="padding:.5rem 0"></div>
+    <!-- 실적 급등 종목 -->
+    <div class="card" style="margin-bottom:1.25rem">
+      <div class="card-header" style="flex-wrap:wrap;gap:8px">
+        <span class="card-title">🚀 실적 급등 종목</span>
+        <div style="display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12px">
+          <span style="color:var(--text3)">전분기 대비</span>
+          <input type="number" id="inv-qoq-threshold" value="20" min="0" max="200" step="5"
+            style="width:56px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
+          <span style="color:var(--text3)">% / 전년동기 대비</span>
+          <input type="number" id="inv-yoy-threshold" value="20" min="0" max="200" step="5"
+            style="width:56px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
+          <span style="color:var(--text3)">% 이상</span>
+          <button class="chip" onclick="loadEarningsSurge()" style="font-size:11px;padding:2px 8px">적용</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:4px;padding:.5rem 1rem;border-bottom:1px solid var(--border)">
+        <button class="chip active" data-earnings="revenue" onclick="setEarningsMetric(this,'revenue')" style="font-size:11px">매출액</button>
+        <button class="chip" data-earnings="operating_profit" onclick="setEarningsMetric(this,'operating_profit')" style="font-size:11px">영업이익</button>
+      </div>
+      <div id="inv-earnings-list" style="padding:.5rem 0">
+        <div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>
+      </div>
     </div>
   </div>`;
 }
+
 
 // ── 지수 카드 ──
 function mkIndexCard(label, value, chg, unit, sub) {
@@ -172,12 +173,30 @@ function mkIndexCard(label, value, chg, unit, sub) {
   </div>`;
 }
 
+// ── 탭 전환 ──
+function setInvTab(tab) {
+  window._invTab = tab;
+  document.querySelectorAll('.chip[onclick*="setInvTab"]').forEach(b =>
+    b.classList.toggle('active', b.textContent.includes(tab === 'market' ? '시황' : '공시')));
+  document.getElementById('inv-tab-market').style.display     = tab === 'market'     ? 'block' : 'none';
+  document.getElementById('inv-tab-disclosure').style.display = tab === 'disclosure' ? 'block' : 'none';
+  if (tab === 'disclosure') {
+    loadTodayDisclosures();
+    loadEarningsSurge();
+  }
+}
+
 // ── 메인 로드 ──
 async function loadInvestment() {
   loadMacroData();
   loadTrendChart();
-  loadTodayDisclosures();
-  loadEarningsSurge();
+  loadMarketOverview(maxDate);
+
+  // 공시 탭이 활성화된 경우에만 로드
+  if (window._invTab === 'disclosure') {
+    loadTodayDisclosures();
+    loadEarningsSurge();
+  }
 
   const { data: dateRow } = await sb.from('market_data')
     .select('base_date').order('base_date', { ascending: false }).limit(1);
