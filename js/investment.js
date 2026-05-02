@@ -124,9 +124,17 @@ function pInvestment() {
       <div class="card-header">
         <span class="card-title">📋 오늘 실적 공시 종목</span>
         <span id="inv-disclosure-date" style="font-size:11px;color:var(--text3);margin-left:8px"></span>
+        <button id="inv-disclosure-expand-btn" class="btn btn-sm" style="margin-left:auto;font-size:12px"
+          onclick="toggleAllDisclosures()">+ 전체 공시</button>
       </div>
       <div id="inv-disclosure-list" style="padding:.5rem 0">
         <div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>
+      </div>
+      <!-- 전체 공시 펼침 영역 -->
+      <div id="inv-all-disclosure" style="display:none;border-top:1px solid var(--border)">
+        <div id="inv-all-disclosure-list" style="padding:.5rem 0">
+          <div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>
+        </div>
       </div>
     </div>
 
@@ -375,6 +383,97 @@ async function loadMarketOverview(maxDate) {
       </div>
     </div>`;
   }).join('');
+}
+
+// ── 전체 공시 토글 ──
+let _allDiscLoaded = false;
+
+function toggleAllDisclosures() {
+  const panel = document.getElementById('inv-all-disclosure');
+  const btn   = document.getElementById('inv-disclosure-expand-btn');
+  if (!panel) return;
+
+  const isOpen = panel.style.display !== 'none';
+  panel.style.display = isOpen ? 'none' : 'block';
+  btn.textContent = isOpen ? '+ 전체 공시' : '− 전체 공시';
+
+  if (!isOpen && !_allDiscLoaded) {
+    _allDiscLoaded = true;
+    loadAllDisclosures();
+  }
+}
+
+async function loadAllDisclosures() {
+  const el = document.getElementById('inv-all-disclosure-list');
+  if (!el) return;
+
+  const { data: cfg } = await sb.from('app_config')
+    .select('value').eq('key', 'today_all_disclosures').single();
+
+  if (!cfg?.value) {
+    el.innerHTML = `<div style="padding:1.25rem;text-align:center;color:var(--text3);font-size:12px">전체 공시 데이터 없음 (매일 18:30 업데이트)</div>`;
+    return;
+  }
+
+  let all = [];
+  try { all = JSON.parse(cfg.value); } catch { }
+
+  if (!all.length) {
+    el.innerHTML = `<div style="padding:1.25rem;text-align:center;color:var(--text3);font-size:12px">오늘 공시 없음</div>`;
+    return;
+  }
+
+  // 카테고리 분류
+  const CATEGORIES = [
+    { label: '사업보고서',  color: '#2AABEE', bg: 'rgba(42,171,238,.12)', match: '사업보고서' },
+    { label: '반기보고서',  color: '#2dce89', bg: 'rgba(45,206,137,.12)', match: '반기보고서' },
+    { label: '분기보고서',  color: '#fb6340', bg: 'rgba(251,99,64,.12)',  match: '분기보고서' },
+    { label: '주요사항보고', color: '#ffd600', bg: 'rgba(255,214,0,.12)', match: '주요사항보고' },
+    { label: '임원/주식',   color: '#a259ff', bg: 'rgba(162,89,255,.12)', match: ['임원', '주요주주'] },
+    { label: '공정공시',    color: '#00d4aa', bg: 'rgba(0,212,170,.12)', match: '공정공시' },
+    { label: '기타',        color: '#8b90a7', bg: 'rgba(139,144,167,.12)', match: null },
+  ];
+
+  const categorized = {};
+  CATEGORIES.forEach(c => categorized[c.label] = []);
+
+  all.forEach(d => {
+    const nm = d.report_nm || '';
+    let matched = false;
+    for (const cat of CATEGORIES.slice(0, -1)) {
+      const matches = Array.isArray(cat.match)
+        ? cat.match.some(m => nm.includes(m))
+        : nm.includes(cat.match);
+      if (matches) {
+        categorized[cat.label].push(d);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) categorized['기타'].push(d);
+  });
+
+  const catHTML = CATEGORIES.map(cat => {
+    const items = categorized[cat.label];
+    if (!items.length) return '';
+    return `
+      <div style="padding:.75rem 1rem">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:100px;background:${cat.bg};color:${cat.color}">${cat.label}</span>
+          <span style="font-size:11px;color:var(--text3)">${items.length}건</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px">
+          ${items.map(d => `
+            <div style="padding:5px 10px;background:var(--bg3);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${d.report_nm}">
+              ${d.corp_name}
+            </div>`).join('')}
+        </div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    ${catHTML}
+    <div style="padding:4px 1rem 10px;font-size:11px;color:var(--text3)">총 ${all.length}건</div>`;
 }
 
 // ── 오늘 실적 공시 목록 ──
