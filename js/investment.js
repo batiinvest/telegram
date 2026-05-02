@@ -536,19 +536,34 @@ async function loadEarningsSurge() {
     return `<span style="font-size:11px;color:${color};margin-left:4px">${label} ${arrow}${Math.abs(v).toFixed(1)}%</span>`;
   };
 
-  el.innerHTML = surges.map((r, i) => `
-    <div style="display:flex;align-items:center;gap:8px;padding:7px 14px;border-bottom:1px solid var(--border)">
-      <span style="width:20px;font-size:11px;color:var(--text3);font-weight:600">${i+1}</span>
-      <div style="flex:1">
-        <span style="font-size:13px;font-weight:600">${r.corp_name}</span>
-        <span style="font-size:11px;color:var(--text3);margin-left:6px">${r.bsns_year} ${r.quarter}</span>
-      </div>
-      <div style="font-size:13px;font-weight:600;color:var(--text1)">${fmtCap(r[metric])}</div>
-      <div style="min-width:160px;text-align:right">
-        ${chgBadge(r[qoqCol], 'QoQ')}
-        ${chgBadge(r[yoyCol], 'YoY')}
-      </div>
-    </div>`).join('');
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;padding:.75rem 1rem">
+      ${surges.map((r, i) => {
+        const qoq = r[qoqCol];
+        const yoy = r[yoyCol];
+        const qoqColor = qoq > 0 ? 'var(--red)' : 'var(--blue)';
+        const yoyColor = yoy > 0 ? 'var(--red)' : 'var(--blue)';
+        return `
+        <div class="card" style="padding:12px 14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:13px;font-weight:600">${r.corp_name}</span>
+            <span style="font-size:10px;color:var(--text3);background:var(--bg3);padding:2px 6px;border-radius:100px">${r.bsns_year} ${r.quarter}</span>
+          </div>
+          <div style="font-size:16px;font-weight:700;color:var(--text1);margin-bottom:8px">${fmtCap(r[metric])}</div>
+          <div style="display:flex;gap:8px">
+            ${qoq != null ? `<div style="flex:1;background:var(--bg3);border-radius:6px;padding:5px 8px;text-align:center">
+              <div style="font-size:10px;color:var(--text3);margin-bottom:2px">전분기</div>
+              <div style="font-size:13px;font-weight:600;color:${qoqColor}">${qoq>0?'▲':'▼'}${Math.abs(qoq).toFixed(1)}%</div>
+            </div>` : ''}
+            ${yoy != null ? `<div style="flex:1;background:var(--bg3);border-radius:6px;padding:5px 8px;text-align:center">
+              <div style="font-size:10px;color:var(--text3);margin-bottom:2px">전년동기</div>
+              <div style="font-size:13px;font-weight:600;color:${yoyColor}">${yoy>0?'▲':'▼'}${Math.abs(yoy).toFixed(1)}%</div>
+            </div>` : ''}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="padding:4px 1rem 10px;font-size:11px;color:var(--text3)">총 ${surges.length}개 종목</div>`;
 }
 
 // ── 매크로 카드 ──
