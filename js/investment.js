@@ -132,34 +132,38 @@ function pInvestment() {
 
     <!-- 실적 급등 종목 -->
     <div class="card" style="margin-bottom:1.25rem">
-      <div class="card-header" style="flex-wrap:wrap;gap:8px">
+      <div class="card-header" style="flex-wrap:wrap;gap:8px;align-items:center">
         <span class="card-title">🚀 실적 급등 종목</span>
-        <div style="display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12px">
-          <span style="color:var(--text3)">전분기 대비</span>
-          <input type="number" id="inv-qoq-threshold" value="${localStorage.getItem('earnings_qoq_threshold')||20}" min="0" max="200" step="5"
-            style="width:56px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-          <span style="color:var(--text3)">% / 전년동기 대비</span>
-          <input type="number" id="inv-yoy-threshold" value="${localStorage.getItem('earnings_yoy_threshold')||20}" min="0" max="200" step="5"
-            style="width:56px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-          <span style="color:var(--text3)">% 이상</span>
-          <button class="chip" onclick="loadEarningsSurge()" style="font-size:11px;padding:2px 8px">적용</button>
-        </div>
-      </div>
-      <div style="display:flex;gap:4px;padding:.5rem 1rem;border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap;gap:8px">
-        <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
-          <span style="font-size:12px;color:var(--text3)">전분기</span>
-          <input type="number" id="inv-qoq-threshold" value="${localStorage.getItem('earnings_qoq_threshold')||20}" min="0" max="200" step="5"
-            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-          <span style="font-size:12px;color:var(--text3)">% / 전년동기</span>
-          <input type="number" id="inv-yoy-threshold" value="${localStorage.getItem('earnings_yoy_threshold')||20}" min="0" max="200" step="5"
-            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-          <span style="font-size:12px;color:var(--text3)">% 이상</span>
-          <button class="chip" onclick="loadEarningsSurge()" style="font-size:11px;padding:2px 8px">적용</button>
-          <span style="font-size:12px;color:var(--text3);margin-left:4px">기준 분기</span>
+        <div style="display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--text3)">기준 분기</span>
           <select class="form-select" id="inv-earnings-quarter" style="width:130px;padding:3px 8px;font-size:12px"
             onchange="loadEarningsSurge()">
             <option value="">로딩 중...</option>
           </select>
+        </div>
+      </div>
+      <!-- 매출액 / 영업이익 개별 설정 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-right:1px solid var(--border);flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:600;color:var(--text2)">📈 매출액</span>
+          <span style="font-size:12px;color:var(--text3)">QoQ</span>
+          <input type="number" id="inv-rev-qoq" value="${localStorage.getItem('earnings_rev_qoq')||20}" min="0" max="500" step="5"
+            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
+          <span style="font-size:12px;color:var(--text3)">% / YoY</span>
+          <input type="number" id="inv-rev-yoy" value="${localStorage.getItem('earnings_rev_yoy')||20}" min="0" max="500" step="5"
+            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
+          <span style="font-size:12px;color:var(--text3)">% 이상</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;padding:8px 12px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:600;color:var(--text2)">💰 영업이익</span>
+          <span style="font-size:12px;color:var(--text3)">QoQ</span>
+          <input type="number" id="inv-op-qoq" value="${localStorage.getItem('earnings_op_qoq')||20}" min="0" max="500" step="5"
+            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
+          <span style="font-size:12px;color:var(--text3)">% / YoY</span>
+          <input type="number" id="inv-op-yoy" value="${localStorage.getItem('earnings_op_yoy')||20}" min="0" max="500" step="5"
+            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
+          <span style="font-size:12px;color:var(--text3)">% 이상</span>
+          <button class="chip" onclick="loadEarningsSurge()" style="font-size:11px;padding:2px 8px;margin-left:4px">적용</button>
         </div>
       </div>
       <div id="inv-earnings-list" style="padding:.5rem 0">
@@ -442,12 +446,16 @@ async function loadEarningsSurge() {
   if (!el) return;
   el.innerHTML = `<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>`;
 
-  const qoqThreshold = parseFloat(document.getElementById('inv-qoq-threshold')?.value || 20);
-  const yoyThreshold = parseFloat(document.getElementById('inv-yoy-threshold')?.value || 20);
+  const revQoq = parseFloat(document.getElementById('inv-rev-qoq')?.value || 20);
+  const revYoy = parseFloat(document.getElementById('inv-rev-yoy')?.value || 20);
+  const opQoq  = parseFloat(document.getElementById('inv-op-qoq')?.value  || 20);
+  const opYoy  = parseFloat(document.getElementById('inv-op-yoy')?.value  || 20);
 
   try {
-    localStorage.setItem('earnings_qoq_threshold', qoqThreshold);
-    localStorage.setItem('earnings_yoy_threshold', yoyThreshold);
+    localStorage.setItem('earnings_rev_qoq', revQoq);
+    localStorage.setItem('earnings_rev_yoy', revYoy);
+    localStorage.setItem('earnings_op_qoq',  opQoq);
+    localStorage.setItem('earnings_op_yoy',  opYoy);
   } catch(e) {}
 
   // 분기 목록 조회 (최초 1회)
@@ -498,16 +506,16 @@ async function loadEarningsSurge() {
     targets = Object.values(latestMap);
   }
 
-  const filter = (col, qoqCol, yoyCol) => targets
+  const filterBy = (col, qoqCol, yoyCol, qThr, yThr) => targets
     .filter(r => r[col] != null && (
-      (r[qoqCol] != null && r[qoqCol] >= qoqThreshold) ||
-      (r[yoyCol] != null && r[yoyCol] >= yoyThreshold)
+      (r[qoqCol] != null && r[qoqCol] >= qThr) ||
+      (r[yoyCol] != null && r[yoyCol] >= yThr)
     ))
     .sort((a,b) => Math.max(b[qoqCol]??-999,b[yoyCol]??-999) - Math.max(a[qoqCol]??-999,a[yoyCol]??-999))
     .slice(0, 15);
 
-  const revSurges = filter('revenue',          'revenue_qoq',   'revenue_yoy');
-  const opSurges  = filter('operating_profit', 'op_profit_qoq', 'op_profit_yoy');
+  const revSurges = filterBy('revenue',          'revenue_qoq',   'revenue_yoy',   revQoq, revYoy);
+  const opSurges  = filterBy('operating_profit', 'op_profit_qoq', 'op_profit_yoy', opQoq,  opYoy);
 
   const chgBadge = (v, label) => {
     if (v == null) return '';
@@ -516,7 +524,9 @@ async function loadEarningsSurge() {
   };
 
   const renderRow = (r, i, qoqCol, yoyCol, valCol) => `
-    <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border)">
+    <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border);cursor:pointer"
+      onclick="openFinTrend('${r.stock_code}','${r.corp_name}')"
+      onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
       <span style="width:18px;font-size:11px;color:var(--text3);font-weight:600">${i+1}</span>
       <div style="flex:1;min-width:0">
         <span style="font-size:13px;font-weight:600">${r.corp_name}</span>
@@ -546,7 +556,7 @@ async function loadEarningsSurge() {
       </div>
     </div>
     <div style="padding:6px 12px;font-size:11px;color:var(--text3)">
-      QoQ ${qoqThreshold}% 또는 YoY ${yoyThreshold}% 이상 · 각 상위 15개
+      매출: QoQ ${revQoq}%/YoY ${revYoy}% 이상 · 영업이익: QoQ ${opQoq}%/YoY ${opYoy}% 이상 · 각 상위 15개 · 클릭 시 재무 추이 확인
     </div>`;
 }
 
