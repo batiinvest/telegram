@@ -262,6 +262,44 @@ async function loadInvestment() {
 }
 
 // ── 전체 종목 + 산업별 동향 ──
+async function loadMacroData() {
+  const { data } = await sb.from('macro_data')
+    .select('*').order('base_date', { ascending: false }).limit(1);
+  const m = data?.[0] || {};
+
+  const globalEl = document.getElementById('inv-global');
+  if (globalEl) globalEl.innerHTML = [
+    mkIndexCard('S&P 500',     m.sp500,    m.sp500_chg,    '',  'USA'),
+    mkIndexCard('나스닥',       m.nasdaq,   m.nasdaq_chg,   '',  'USA'),
+    mkIndexCard('다우존스',     m.dow,      m.dow_chg,      '',  'USA'),
+    mkIndexCard('VIX',         m.vix,      m.vix_chg,      '',  '공포지수'),
+    mkIndexCard('미 10년 금리', m.us10y,    m.us10y_chg,    '%', '국채'),
+  ].join('');
+
+  const domEl = document.getElementById('inv-domestic');
+  if (domEl) domEl.innerHTML = [
+    mkIndexCard('코스피',    m.kospi,    m.kospi_chg,    '',  'KOSPI'),
+    mkIndexCard('코스닥',    m.kosdaq,   m.kosdaq_chg,   '',  'KOSDAQ'),
+    mkIndexCard('코스피200', m.kospi200, m.kospi200_chg, '',  '선물'),
+  ].join('');
+
+  const fxEl = document.getElementById('inv-fx');
+  if (fxEl) fxEl.innerHTML = [
+    mkIndexCard('USD/KRW', m.usd_krw, m.usd_krw_chg, '원', '달러'),
+    mkIndexCard('JPY/KRW', m.jpy_krw, m.jpy_krw_chg, '원', '100엔'),
+    mkIndexCard('EUR/KRW', m.eur_krw, m.eur_krw_chg, '원', '유로'),
+    mkIndexCard('CNY/KRW', m.cny_krw, m.cny_krw_chg, '원', '위안'),
+  ].join('');
+
+  const commEl = document.getElementById('inv-commodity');
+  if (commEl) commEl.innerHTML = [
+    mkIndexCard('WTI 유가', m.wti,    m.wti_chg,    '$', '배럴'),
+    mkIndexCard('금',       m.gold,   m.gold_chg,   '$', '온스'),
+    mkIndexCard('천연가스',  m.gas,    m.gas_chg,    '$', 'MMBtu'),
+    mkIndexCard('구리',     m.copper, m.copper_chg, '$', '파운드'),
+  ].join('');
+}
+
 async function loadMarketOverview(maxDate) {
   // 전체 종목 조회 — 페이지네이션 (Supabase 기본 limit 1000 우회)
   let all = [], from = 0;
