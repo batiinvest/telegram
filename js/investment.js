@@ -150,28 +150,25 @@ function pInvestment() {
           </select>
         </div>
       </div>
-      <!-- 매출액 / 영업이익 개별 설정 -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--border)">
-        <div style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-right:1px solid var(--border);flex-wrap:wrap">
-          <span style="font-size:12px;font-weight:600;color:var(--text2)">📈 매출액</span>
-          <span style="font-size:12px;color:var(--text3)">QoQ</span>
-          <input type="number" id="inv-rev-qoq" value="${localStorage.getItem('earnings_rev_qoq')||20}" min="0" max="500" step="5"
-            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-          <span style="font-size:12px;color:var(--text3)">% / YoY</span>
-          <input type="number" id="inv-rev-yoy" value="${localStorage.getItem('earnings_rev_yoy')||20}" min="0" max="500" step="5"
-            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-          <span style="font-size:12px;color:var(--text3)">% 이상</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;padding:8px 12px;flex-wrap:wrap">
-          <span style="font-size:12px;font-weight:600;color:var(--text2)">💰 영업이익</span>
-          <span style="font-size:12px;color:var(--text3)">QoQ</span>
-          <input type="number" id="inv-op-qoq" value="${localStorage.getItem('earnings_op_qoq')||20}" min="0" max="500" step="5"
-            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-          <span style="font-size:12px;color:var(--text3)">% / YoY</span>
-          <input type="number" id="inv-op-yoy" value="${localStorage.getItem('earnings_op_yoy')||20}" min="0" max="500" step="5"
-            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-          <span style="font-size:12px;color:var(--text3)">% 이상</span>
-          <button class="chip" onclick="loadEarningsSurge()" style="font-size:11px;padding:2px 8px;margin-left:4px">적용</button>
+      <!-- 탭 + 설정 -->
+      <div style="display:flex;align-items:center;gap:0;border-bottom:1px solid var(--border)">
+        <button id="inv-surge-tab-rev" class="chip active" onclick="setEarningsSurgeTab('revenue')"
+          style="font-size:12px;border-radius:0;padding:8px 16px;border:none;border-bottom:2px solid var(--accent)">
+          📈 매출액
+        </button>
+        <button id="inv-surge-tab-op" class="chip" onclick="setEarningsSurgeTab('operating_profit')"
+          style="font-size:12px;border-radius:0;padding:8px 16px;border:none;border-bottom:2px solid transparent">
+          💰 영업이익
+        </button>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:4px 12px;flex-wrap:wrap">
+          <span style="font-size:11px;color:var(--text3)">QoQ</span>
+          <input type="number" id="inv-surge-qoq" value="${localStorage.getItem('earnings_surge_qoq')||20}" min="0" max="500" step="5"
+            style="width:48px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;text-align:center">
+          <span style="font-size:11px;color:var(--text3)">% YoY</span>
+          <input type="number" id="inv-surge-yoy" value="${localStorage.getItem('earnings_surge_yoy')||20}" min="0" max="500" step="5"
+            style="width:48px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;text-align:center">
+          <span style="font-size:11px;color:var(--text3)">% 이상</span>
+          <button class="chip" onclick="loadEarningsSurge()" style="font-size:11px;padding:2px 8px">적용</button>
         </div>
       </div>
       <div id="inv-earnings-list" style="padding:.5rem 0">
@@ -180,6 +177,7 @@ function pInvestment() {
     </div>
   </div>`;
 }
+
 
 
 // ── 지수 카드 ──
@@ -540,21 +538,35 @@ function setEarningsMetric(el, metric) {
   loadEarningsSurge();
 }
 
+let _earningsSurgeTab = 'revenue';
+
+function setEarningsSurgeTab(tab) {
+  _earningsSurgeTab = tab;
+  const revBtn = document.getElementById('inv-surge-tab-rev');
+  const opBtn  = document.getElementById('inv-surge-tab-op');
+  if (revBtn) {
+    revBtn.classList.toggle('active', tab === 'revenue');
+    revBtn.style.borderBottom = tab === 'revenue' ? '2px solid var(--accent)' : '2px solid transparent';
+  }
+  if (opBtn) {
+    opBtn.classList.toggle('active', tab === 'operating_profit');
+    opBtn.style.borderBottom = tab === 'operating_profit' ? '2px solid var(--accent)' : '2px solid transparent';
+  }
+  loadEarningsSurge();
+}
+
 async function loadEarningsSurge() {
   const el = document.getElementById('inv-earnings-list');
   if (!el) return;
   el.innerHTML = `<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span></div>`;
 
-  const revQoq = parseFloat(document.getElementById('inv-rev-qoq')?.value || 20);
-  const revYoy = parseFloat(document.getElementById('inv-rev-yoy')?.value || 20);
-  const opQoq  = parseFloat(document.getElementById('inv-op-qoq')?.value  || 20);
-  const opYoy  = parseFloat(document.getElementById('inv-op-yoy')?.value  || 20);
+  const qoqThreshold = parseFloat(document.getElementById('inv-surge-qoq')?.value || 20);
+  const yoyThreshold = parseFloat(document.getElementById('inv-surge-yoy')?.value || 20);
+  const metric = _earningsSurgeTab;
 
   try {
-    localStorage.setItem('earnings_rev_qoq', revQoq);
-    localStorage.setItem('earnings_rev_yoy', revYoy);
-    localStorage.setItem('earnings_op_qoq',  opQoq);
-    localStorage.setItem('earnings_op_yoy',  opYoy);
+    localStorage.setItem('earnings_surge_qoq', qoqThreshold);
+    localStorage.setItem('earnings_surge_yoy', yoyThreshold);
   } catch(e) {}
 
   // 분기 목록 조회 (최초 1회)
@@ -582,6 +594,9 @@ async function loadEarningsSurge() {
   let filterYear = null, filterQuarter = null;
   if (selVal) [filterYear, filterQuarter] = selVal.split('-');
 
+  const qoqCol = metric === 'revenue' ? 'revenue_qoq' : 'op_profit_qoq';
+  const yoyCol = metric === 'revenue' ? 'revenue_yoy' : 'op_profit_yoy';
+
   let query = sb.from('financials')
     .select('corp_name,stock_code,bsns_year,quarter,revenue,operating_profit,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
     .eq('fs_div', 'CFS');
@@ -605,199 +620,90 @@ async function loadEarningsSurge() {
     targets = Object.values(latestMap);
   }
 
-  const filterBy = (col, qoqCol, yoyCol, qThr, yThr) => targets
-    .filter(r => r[col] != null && (
-      (r[qoqCol] != null && r[qoqCol] >= qThr) ||
-      (r[yoyCol] != null && r[yoyCol] >= yThr)
+  const surges = targets
+    .filter(r => r[metric] != null && (
+      (r[qoqCol] != null && r[qoqCol] >= qoqThreshold) ||
+      (r[yoyCol] != null && r[yoyCol] >= yoyThreshold)
     ))
     .sort((a,b) => Math.max(b[qoqCol]??-999,b[yoyCol]??-999) - Math.max(a[qoqCol]??-999,a[yoyCol]??-999))
-    .slice(0, 15);
+    .slice(0, 20);
 
-  const revSurges = filterBy('revenue',          'revenue_qoq',   'revenue_yoy',   revQoq, revYoy);
-  const opSurges  = filterBy('operating_profit', 'op_profit_qoq', 'op_profit_yoy', opQoq,  opYoy);
+  if (!surges.length) {
+    el.innerHTML = `<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px">기준 충족 종목 없음</div>`;
+    return;
+  }
+
+  // 급등 종목의 최근 4분기 + 연간 데이터 조회
+  const codes = [...new Set(surges.map(r => r.stock_code))];
+  const { data: histRows } = await sb.from('financials')
+    .select('corp_name,stock_code,bsns_year,quarter,revenue,operating_profit')
+    .eq('fs_div', 'CFS')
+    .in('stock_code', codes)
+    .order('bsns_year', { ascending: false })
+    .order('quarter', { ascending: false })
+    .limit(codes.length * 20);
+
+  // 종목별 히스토리 맵
+  const histMap = {};
+  (histRows||[]).forEach(r => {
+    if (!histMap[r.stock_code]) histMap[r.stock_code] = [];
+    histMap[r.stock_code].push(r);
+  });
 
   const chgBadge = (v, label) => {
     if (v == null) return '';
     const color = v > 0 ? 'var(--red)' : 'var(--blue)';
-    return `<span style="font-size:11px;color:${color};margin-left:4px">${v>0?'▲':'▼'}${Math.abs(v).toFixed(1)}% <span style="color:var(--text3)">${label}</span></span>`;
+    return `<span style="font-size:11px;color:${color}">${v>0?'▲':'▼'}${Math.abs(v).toFixed(1)}% <span style="color:var(--text3);font-size:10px">${label}</span></span>`;
   };
 
-  const renderRow = (r, i, qoqCol, yoyCol, valCol) => `
-    <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border);cursor:pointer"
+  const renderSparkBars = (hist, metric) => {
+    // 최근 4분기
+    const q4 = hist.slice(0, 4).reverse();
+    if (!q4.length) return '';
+    const maxVal = Math.max(...q4.map(r => Math.abs(r[metric]||0)));
+    if (!maxVal) return '';
+    return q4.map(r => {
+      const val = r[metric] || 0;
+      const pct = Math.abs(val) / maxVal * 100;
+      const color = val >= 0 ? 'var(--red)' : 'var(--blue)';
+      return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1">
+        <div style="font-size:9px;color:var(--text3)">${r.bsns_year.slice(2)}${r.quarter}</div>
+        <div style="width:100%;background:var(--bg3);border-radius:2px;height:36px;display:flex;align-items:flex-end">
+          <div style="width:100%;background:${color};border-radius:2px;height:${Math.max(pct,3)}%;opacity:0.85"></div>
+        </div>
+        <div style="font-size:9px;color:var(--text2);white-space:nowrap">${fmtCap(val)}</div>
+      </div>`;
+    }).join('');
+  };
+
+  el.innerHTML = surges.map((r, i) => {
+    const hist = histMap[r.stock_code] || [];
+    const sparkBars = renderSparkBars(hist, metric);
+    return `
+    <div style="display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer"
       onclick="openFinTrend('${r.stock_code}','${r.corp_name}')"
       onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
-      <span style="width:18px;font-size:11px;color:var(--text3);font-weight:600">${i+1}</span>
-      <div style="flex:1;min-width:0">
-        <span style="font-size:13px;font-weight:600">${r.corp_name}</span>
-        <span style="font-size:10px;color:var(--text3);margin-left:5px">${r.bsns_year} ${r.quarter}</span>
-      </div>
-      <div style="text-align:right">
-        <div style="font-size:13px;font-weight:600">${fmtCap(r[valCol])}</div>
-        <div>${chgBadge(r[qoqCol],'QoQ')}${chgBadge(r[yoyCol],'YoY')}</div>
-      </div>
-    </div>`;
-
-  const noData = `<div style="padding:2rem;text-align:center;color:var(--text3);font-size:12px">해당 기준 종목 없음</div>`;
-
-  el.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr">
-      <div style="border-right:1px solid var(--border)">
-        <div style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--text2);background:var(--bg3);border-bottom:1px solid var(--border)">
-          📈 매출액 급등 (${revSurges.length}개)
+      <div style="min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="font-size:12px;color:var(--text3);font-weight:600;width:18px">${i+1}</span>
+          <span style="font-size:14px;font-weight:600">${r.corp_name}</span>
+          <span style="font-size:10px;color:var(--text3)">${r.bsns_year} ${r.quarter}</span>
+          <span style="font-size:13px;font-weight:700;margin-left:auto">${fmtCap(r[metric])}</span>
         </div>
-        ${revSurges.length ? revSurges.map((r,i) => renderRow(r,i,'revenue_qoq','revenue_yoy','revenue')).join('') : noData}
-      </div>
-      <div>
-        <div style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--text2);background:var(--bg3);border-bottom:1px solid var(--border)">
-          💰 영업이익 급등 (${opSurges.length}개)
+        <div style="display:flex;gap:8px;padding-left:26px">
+          ${chgBadge(r[qoqCol], 'QoQ')}
+          ${chgBadge(r[yoyCol], 'YoY')}
         </div>
-        ${opSurges.length ? opSurges.map((r,i) => renderRow(r,i,'op_profit_qoq','op_profit_yoy','operating_profit')).join('') : noData}
       </div>
-    </div>
-    <div style="padding:6px 12px;font-size:11px;color:var(--text3)">
-      매출: QoQ ${revQoq}%/YoY ${revYoy}% 이상 · 영업이익: QoQ ${opQoq}%/YoY ${opYoy}% 이상 · 각 상위 15개 · 클릭 시 재무 추이 확인
+      <!-- 미니 바 차트 (최근 4분기) -->
+      ${sparkBars ? `
+      <div style="display:flex;gap:3px;align-items:flex-end;width:100px;height:60px">
+        ${sparkBars}
+      </div>` : ''}
     </div>`;
+  }).join('') + `<div style="padding:6px 12px;font-size:11px;color:var(--text3)">
+    QoQ ${qoqThreshold}% 또는 YoY ${yoyThreshold}% 이상 · 클릭 시 재무 추이
+  </div>`;
 }
 
 
-async function loadMacroData() {
-  const { data } = await sb.from('macro_data')
-    .select('*').order('updated_at', { ascending: false }).limit(1);
-  const m = data?.[0] || {};
-
-  document.getElementById('inv-global').innerHTML = [
-    mkIndexCard('S&P 500',     m.sp500,    m.sp500_chg,   '',  'USA'),
-    mkIndexCard('나스닥',       m.nasdaq,   m.nasdaq_chg,  '',  'USA'),
-    mkIndexCard('다우존스',     m.dow,      m.dow_chg,     '',  'USA'),
-    mkIndexCard('VIX',         m.vix,      m.vix_chg,     '',  '공포지수'),
-    mkIndexCard('미 10년 금리', m.us10y,    m.us10y_chg,   '%', '국채'),
-  ].join('');
-
-  document.getElementById('inv-domestic').innerHTML = [
-    mkIndexCard('코스피',      m.kospi,    m.kospi_chg,   '',  'KOSPI'),
-    mkIndexCard('코스닥',      m.kosdaq,   m.kosdaq_chg,  '',  'KOSDAQ'),
-    mkIndexCard('코스피200',   m.kospi200, m.kospi200_chg,'',  '선물'),
-  ].join('');
-
-  document.getElementById('inv-fx').innerHTML = [
-    mkIndexCard('USD/KRW', m.usd_krw, m.usd_krw_chg, '원', '달러'),
-    mkIndexCard('JPY/KRW', m.jpy_krw, m.jpy_krw_chg, '원', '100엔'),
-    mkIndexCard('EUR/KRW', m.eur_krw, m.eur_krw_chg, '원', '유로'),
-    mkIndexCard('CNY/KRW', m.cny_krw, m.cny_krw_chg, '원', '위안'),
-  ].join('');
-
-  document.getElementById('inv-commodity').innerHTML = [
-    mkIndexCard('WTI 유가', m.wti,    m.wti_chg,    '$', '배럴'),
-    mkIndexCard('금',       m.gold,   m.gold_chg,   '$', '온스'),
-    mkIndexCard('천연가스',  m.gas,    m.gas_chg,    '$', 'MMBtu'),
-    mkIndexCard('구리',     m.copper, m.copper_chg, '$', '파운드'),
-  ].join('');
-}
-
-// ── 흐름 비교 차트 ──
-let _invTrendChart = null;
-
-function toggleInvMetric(col) {
-  if (INV.selected.has(col)) {
-    INV.selected.delete(col);
-  } else {
-    if (INV.selected.size >= 8) { toast('최대 8개까지 선택 가능합니다.', 'info'); return; }
-    INV.selected.add(col);
-  }
-  const m = INV_ALL_METRICS.find(x => x.col === col);
-  const lbl = document.getElementById('inv-lbl-' + col);
-  if (lbl && m) {
-    const on = INV.selected.has(col);
-    lbl.style.background  = on ? m.color + '22' : '';
-    lbl.style.borderColor = on ? m.color : 'var(--border)';
-    lbl.style.color       = on ? m.color : '';
-  }
-  loadTrendChart();
-}
-
-function initInvCheckboxStyles() {
-  INV_ALL_METRICS.forEach(m => {
-    const lbl = document.getElementById('inv-lbl-' + m.col);
-    if (!lbl) return;
-    const on = INV.selected.has(m.col);
-    lbl.style.background  = on ? m.color + '22' : '';
-    lbl.style.borderColor = on ? m.color : 'var(--border)';
-    lbl.style.color       = on ? m.color : '';
-  });
-}
-
-function setInvPeriod(period) {
-  INV.period = period;
-  document.querySelectorAll('[data-inv-period]').forEach(b =>
-    b.classList.toggle('active', b.dataset.invPeriod === String(period)));
-  loadTrendChart();
-}
-
-async function loadTrendChart() {
-  const canvas = document.getElementById('inv-trend-chart');
-  const empty  = document.getElementById('inv-trend-empty');
-  if (!canvas) return;
-
-  initInvCheckboxStyles();
-
-  if (!INV.selected.size) {
-    canvas.style.display = 'none';
-    if (empty) { empty.style.display = 'flex'; empty.textContent = '지표를 선택해주세요.'; }
-    return;
-  }
-
-  const selectedMetrics = INV_ALL_METRICS.filter(m => INV.selected.has(m.col));
-  const cols = ['base_date', ...selectedMetrics.map(m => m.col)].join(',');
-
-  const { data: rows } = await sb.from('macro_data')
-    .select(cols)
-    .order('base_date', { ascending: true })
-    .limit(INV.period);
-
-  if (!rows?.length) {
-    canvas.style.display = 'none';
-    if (empty) { empty.style.display = 'flex'; empty.textContent = '데이터 수집 중... (매일 09:00, 16:10 업데이트)'; }
-    return;
-  }
-  canvas.style.display = 'block';
-  if (empty) empty.style.display = 'none';
-
-  const labels = rows.map(r => r.base_date);
-
-  const datasets = selectedMetrics.map(m => {
-    const values     = rows.map(r => r[m.col]);
-    const base       = values.find(v => v != null);
-    const normalized = values.map(v => v != null && base ? Math.round(v / base * 10000) / 100 : null);
-    return {
-      label: m.name, data: normalized,
-      borderColor: m.color, backgroundColor: m.color + '15',
-      borderWidth: 2, pointRadius: 2, pointHoverRadius: 5,
-      tension: 0.3, fill: false, spanGaps: true,
-    };
-  });
-
-  if (_invTrendChart) { _invTrendChart.destroy(); _invTrendChart = null; }
-
-  _invTrendChart = new Chart(canvas, {
-    type: 'line',
-    data: { labels, datasets },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { position: 'top', labels: { color: '#a8adc4', font: { size: 11 }, padding: 12, usePointStyle: true } },
-        tooltip: {
-          backgroundColor: '#1a1d27', borderColor: 'rgba(255,255,255,.1)', borderWidth: 1,
-          callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y?.toFixed(2) ?? '—'}` }
-        },
-      },
-      scales: {
-        x: { ticks: { color: '#6e7491', font: { size: 10 }, maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,.04)' } },
-        y: {
-          ticks: { color: '#6e7491', font: { size: 10 }, callback: v => v.toFixed(0) },
-          grid:  { color: 'rgba(255,255,255,.06)' },
-        },
-      },
-    },
-  });
-}
