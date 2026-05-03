@@ -864,6 +864,33 @@ async function loadEarningsSurge() {
     const qoqPrev = prevQ ? prevQ[metric] : null;
     const yoyPrev = prevY ? prevY[metric] : null;
 
+    // QoQ 패턴 분석
+    let qoqSignal = '';
+    if (curIdx >= 2 && curVal != null) {
+      const vals = histSorted.slice(Math.max(0, curIdx-4), curIdx+1).map(h => h[metric]||0);
+      const cur  = vals[vals.length-1];
+      const p1   = vals[vals.length-2]; // 직전 분기
+      const p2   = vals.length >= 3 ? vals[vals.length-3] : null; // 2분기 전
+      const p3   = vals.length >= 4 ? vals[vals.length-4] : null; // 3분기 전
+
+      // 베이스 효과: 직전 분기가 현재의 10% 미만
+      if (p1 != null && Math.abs(p1) < Math.abs(cur) * 0.1 && Math.abs(cur) > 0) {
+        qoqSignal = '<span title="직전 분기가 너무 작아 QoQ 수치 과장 가능" style="font-size:13px;cursor:help">⚠️</span>';
+      }
+      // 추세전환: 직전 2분기 이상 하락 후 이번 분기 반등
+      else if (p2 != null && p1 != null && p1 < p2 && cur > p1) {
+        qoqSignal = '<span title="하락 후 반등 (추세전환 신호)" style="font-size:13px;cursor:help">↩️</span>';
+      }
+      // 성장 가속: 3분기 연속 QoQ 성장
+      else if (p2 != null && p1 != null && cur > p1 && p1 > p2 && (p3 == null || p2 > p3)) {
+        qoqSignal = '<span title="3분기+ 연속 QoQ 성장 (모멘텀)" style="font-size:13px;cursor:help">🔥</span>';
+      }
+      // 2분기 연속 성장
+      else if (p1 != null && cur > p1 && p2 != null && p1 > p2) {
+        qoqSignal = '<span title="2분기 연속 QoQ 성장" style="font-size:13px;cursor:help">📈</span>';
+      }
+    }
+
     return `
     <div style="display:grid;grid-template-columns:220px 1fr 1fr;align-items:center;gap:0;padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer"
       onclick="openFinTrend('${r.stock_code}','${r.corp_name}')"
@@ -874,6 +901,7 @@ async function loadEarningsSurge() {
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
           <span style="font-size:11px;color:var(--text3);font-weight:600;width:16px">${i+1}</span>
           <span style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.corp_name}</span>
+          ${qoqSignal}
         </div>
         <div style="display:flex;align-items:baseline;gap:6px;padding-left:22px">
           <span style="font-size:14px;font-weight:700">${fmtCap(r[metric])}</span>
