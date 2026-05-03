@@ -998,18 +998,20 @@ function renderSurgeHTML(surges, gradesToShow, histMap) {
     }
 
     // 이력 흐름 텍스트 (최근 3분기 → 현재)
-    const recentHist = hist.slice(0, 3).reverse();
+    const recentHist = hist.slice(0, 2).reverse(); // 최근 2분기만
     if (recentHist.length) {
-      const GRADE_NAMES = {'S':'S','A':'A','B':'B','관찰':'관찰'};
       const GRADE_COLORS = {'S':'#ffd600','A':'#fb6340','B':'#2AABEE','관찰':'#2dce89'};
       const flowItems = [...recentHist, { grade: r._grade, bsns_year: r.bsns_year, quarter: r.quarter, isCurrent: true }];
-      histLine = `<div style="display:flex;align-items:center;gap:3px;margin-top:2px">
+      histLine = `<div style="display:flex;align-items:center;gap:3px;margin-top:3px">
         ${flowItems.map((h, i) => {
           const c    = GRADE_COLORS[h.grade] || '#8b90a7';
-          const name = GRADE_NAMES[h.grade] || h.grade;
           const qLabel = h.bsns_year.slice(2) + h.quarter;
-          return `${i > 0 ? '<span style="color:var(--text3);font-size:10px">→</span>' : ''}
-            <span title="${h.bsns_year} ${h.quarter}" style="font-size:10px;color:${c};${h.isCurrent?'font-weight:700':'opacity:0.7'}">${name}<span style="font-size:8px;color:var(--text3)">(${qLabel})</span></span>`;
+          return `${i > 0 ? '<span style="color:var(--text3);font-size:11px;margin:0 1px">→</span>' : ''}
+            <span style="font-size:10px;font-weight:600;padding:0px 5px;border-radius:3px;
+              background:${h.isCurrent ? c+'30' : 'transparent'};
+              color:${h.isCurrent ? c : 'var(--text2)'};
+              border:1px solid ${h.isCurrent ? c+'60' : 'var(--border)'}"
+            >${h.grade}급<span style="font-size:9px;color:${h.isCurrent ? c+'bb' : 'var(--text3)'};margin-left:2px">${qLabel}</span></span>`;
         }).join('')}
       </div>`;
     }
