@@ -251,13 +251,10 @@ async function loadFinancialData(el) {
     <thead><tr>
       <th>종목명</th><th>기간</th>
       <th>매출액</th><th>매출총이익</th><th>GPM</th>
-      <th>판관비율</th>
       <th>영업이익</th><th>영업이익률</th>
       <th>순이익</th><th>순이익률</th>
-      <th>ROE</th><th>ROA</th>
-      <th>부채비율</th><th>유동비율</th>
-      <th>자산총계</th>
-      <th>영업현금흐름</th>
+      <th>ROE</th><th>부채비율</th>
+      <th>자산총계</th><th>영업현금흐름</th>
     </tr></thead>
     <tbody>${rows.map(r => {
       const opColor = r.operating_profit > 0 ? 'var(--green)' : r.operating_profit < 0 ? 'var(--red)' : 'var(--text2)';
@@ -266,19 +263,16 @@ async function loadFinancialData(el) {
       const ocfColor = (r.operating_cashflow||0) >= 0 ? 'var(--green)' : 'var(--red)';
       return `<tr>
         <td style="font-weight:500;cursor:pointer;color:var(--tg)" onclick="openFinTrend('${r.stock_code}','${r.corp_name}')">${r.corp_name}</td>
-        <td style="font-size:12px;color:var(--text2)">${r.bsns_year} ${r.quarter}</td>
+        <td style="font-size:11px;color:var(--text2);white-space:nowrap">${r.bsns_year} ${r.quarter}</td>
         <td>${fmt(r.revenue)}</td>
         <td style="color:${gpColor}">${r.gross_profit ? fmt(r.gross_profit) : '—'}</td>
         <td>${pct(r.gross_margin)}</td>
-        <td>${pct(r.sga_ratio)}</td>
         <td style="color:${opColor}">${fmt(r.operating_profit)}</td>
         <td>${pct(r.operating_margin)}</td>
         <td style="color:${niColor}">${fmt(r.net_income)}</td>
         <td>${pct(r.net_margin)}</td>
         <td>${pct(r.roe)}</td>
-        <td>${pct(r.roa)}</td>
         <td>${pct(r.debt_ratio)}</td>
-        <td>${r.current_ratio ? r.current_ratio.toFixed(1)+'%' : '—'}</td>
         <td>${fmt(r.total_assets)}</td>
         <td style="color:${ocfColor}">${r.operating_cashflow ? fmt(r.operating_cashflow) : '—'}</td>
       </tr>`;
