@@ -249,23 +249,38 @@ async function loadFinancialData(el) {
 
   el.innerHTML = `<div class="table-wrap"><table>
     <thead><tr>
-      <th>종목명</th><th>기간</th><th>매출액</th><th>영업이익</th>
-      <th>순이익</th><th>영업이익률</th><th>ROE</th><th>ROA</th>
-      <th>부채비율</th><th>자산총계</th>
+      <th>종목명</th><th>기간</th>
+      <th>매출액</th><th>매출총이익</th><th>GPM</th>
+      <th>판관비율</th>
+      <th>영업이익</th><th>영업이익률</th>
+      <th>순이익</th><th>순이익률</th>
+      <th>ROE</th><th>ROA</th>
+      <th>부채비율</th><th>유동비율</th>
+      <th>자산총계</th>
+      <th>영업현금흐름</th>
     </tr></thead>
     <tbody>${rows.map(r => {
       const opColor = r.operating_profit > 0 ? 'var(--green)' : r.operating_profit < 0 ? 'var(--red)' : 'var(--text2)';
+      const niColor = (r.net_income||0) >= 0 ? '' : 'var(--red)';
+      const gpColor = (r.gross_profit||0) >= 0 ? '' : 'var(--red)';
+      const ocfColor = (r.operating_cashflow||0) >= 0 ? 'var(--green)' : 'var(--red)';
       return `<tr>
         <td style="font-weight:500;cursor:pointer;color:var(--tg)" onclick="openFinTrend('${r.stock_code}','${r.corp_name}')">${r.corp_name}</td>
         <td style="font-size:12px;color:var(--text2)">${r.bsns_year} ${r.quarter}</td>
         <td>${fmt(r.revenue)}</td>
+        <td style="color:${gpColor}">${r.gross_profit ? fmt(r.gross_profit) : '—'}</td>
+        <td>${pct(r.gross_margin)}</td>
+        <td>${pct(r.sga_ratio)}</td>
         <td style="color:${opColor}">${fmt(r.operating_profit)}</td>
-        <td>${fmt(r.net_income)}</td>
         <td>${pct(r.operating_margin)}</td>
+        <td style="color:${niColor}">${fmt(r.net_income)}</td>
+        <td>${pct(r.net_margin)}</td>
         <td>${pct(r.roe)}</td>
         <td>${pct(r.roa)}</td>
         <td>${pct(r.debt_ratio)}</td>
+        <td>${r.current_ratio ? r.current_ratio.toFixed(1)+'%' : '—'}</td>
         <td>${fmt(r.total_assets)}</td>
+        <td style="color:${ocfColor}">${r.operating_cashflow ? fmt(r.operating_cashflow) : '—'}</td>
       </tr>`;
     }).join('')}
     </tbody></table></div>`;
@@ -371,7 +386,7 @@ async function openFinTrend(stockCode, corpName) {
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 
   const { data: rawData, error } = await sb.from('financials')
-    .select('bsns_year,quarter,fs_div,revenue,gross_profit,cogs,sga,rd_expense,operating_profit,net_income,operating_margin,gross_margin,sga_ratio,net_margin,cogs_ratio,roe,roa,debt_ratio,total_assets,total_equity,total_liabilities,operating_cashflow,investing_cashflow,financing_cashflow,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
+    .select('bsns_year,quarter,fs_div,revenue,gross_profit,cogs,sga,rd_expense,operating_profit,net_income,operating_margin,gross_margin,sga_ratio,net_margin,cogs_ratio,roe,roa,current_ratio,debt_ratio,total_assets,total_equity,total_liabilities,current_assets,current_liabilities,operating_cashflow,investing_cashflow,financing_cashflow,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
     .eq('stock_code', stockCode)
     .eq('fs_div', 'CFS')
     .order('bsns_year', { ascending: true })
@@ -556,16 +571,30 @@ async function openFinTrend(stockCode, corpName) {
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:.5rem">재무상태표</div>
       <div class="table-wrap" style="margin-bottom:.75rem"><table>
         <thead><tr>
-          <th>기간</th><th>자산총계</th><th>부채총계</th><th>자본총계</th><th>부채비율</th><th>영업현금흐름</th>
+          <th>기간</th>
+          <th>자산총계</th><th>부채총계</th><th>자본총계</th>
+          <th>부채비율</th><th>유동비율</th>
+          <th>ROE</th><th>ROA</th>
+          <th>영업현금흐름</th><th>투자현금흐름</th><th>재무현금흐름</th>
         </tr></thead>
-        <tbody>${src.map(r => `<tr>
+        <tbody>${src.map(r => {
+          const ocfColor = (r.operating_cashflow||0) > 0 ? 'var(--green)' : 'var(--red)';
+          const icfColor = (r.investing_cashflow||0) > 0 ? 'var(--green)' : 'var(--red)';
+          const fcfColor = (r.financing_cashflow||0) > 0 ? 'var(--green)' : 'var(--red)';
+          return `<tr>
           <td style="font-weight:600">${r.bsns_year} ${r.quarter}</td>
           <td>${fmt(r.total_assets)}</td>
           <td>${fmt(r.total_liabilities)}</td>
           <td>${fmt(r.total_equity)}</td>
           <td>${pct(r.debt_ratio)}</td>
-          <td style="color:${(r.operating_cashflow||0)>0?'var(--green)':'var(--red)'}">${fmt(r.operating_cashflow)}</td>
-        </tr>`).join('')}
+          <td>${r.current_ratio ? r.current_ratio.toFixed(1)+'%' : '—'}</td>
+          <td>${pct(r.roe)}</td>
+          <td>${pct(r.roa)}</td>
+          <td style="color:${ocfColor}">${fmt(r.operating_cashflow)}</td>
+          <td style="color:${icfColor}">${r.investing_cashflow ? fmt(r.investing_cashflow) : '—'}</td>
+          <td style="color:${fcfColor}">${r.financing_cashflow ? fmt(r.financing_cashflow) : '—'}</td>
+        </tr>`;
+        }).join('')}
         </tbody>
       </table></div>
       <div style="font-size:11px;color:var(--text3)">연결 재무제표 기준${isAnnual?' · 4개 분기 합산 기준 (연간)':''}</div>`;
