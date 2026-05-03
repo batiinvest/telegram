@@ -148,26 +148,13 @@ function pInvestment() {
             onchange="loadEarningsSurge()">
             <option value="">로딩 중...</option>
           </select>
-        </div>
-      </div>
-      <!-- 탭 + 설정 -->
-      <div style="display:flex;align-items:center;gap:0;border-bottom:1px solid var(--border)">
-        <button id="inv-surge-tab-rev" class="chip active" onclick="setEarningsSurgeTab('revenue')"
-          style="font-size:12px;border-radius:0;padding:8px 16px;border:none;border-bottom:2px solid var(--accent)">
-          📈 매출액
-        </button>
-        <button id="inv-surge-tab-op" class="chip" onclick="setEarningsSurgeTab('operating_profit')"
-          style="font-size:12px;border-radius:0;padding:8px 16px;border:none;border-bottom:2px solid transparent">
-          💰 영업이익
-        </button>
-        <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:4px 12px;flex-wrap:wrap">
-          <span style="font-size:11px;color:var(--text3)">QoQ</span>
-          <input type="number" id="inv-surge-qoq" value="${localStorage.getItem('earnings_surge_qoq')||20}" min="0" max="500" step="5"
-            style="width:48px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;text-align:center">
-          <span style="font-size:11px;color:var(--text3)">% YoY</span>
+          <span style="font-size:12px;color:var(--text3)">YoY</span>
           <input type="number" id="inv-surge-yoy" value="${localStorage.getItem('earnings_surge_yoy')||20}" min="0" max="500" step="5"
-            style="width:48px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;text-align:center">
-          <span style="font-size:11px;color:var(--text3)">% 이상</span>
+            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
+          <span style="font-size:12px;color:var(--text3)">% QoQ</span>
+          <input type="number" id="inv-surge-qoq" value="${localStorage.getItem('earnings_surge_qoq')||20}" min="0" max="500" step="5"
+            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
+          <span style="font-size:12px;color:var(--text3)">% 이상</span>
           <button class="chip" onclick="loadEarningsSurge()" style="font-size:11px;padding:2px 8px">적용</button>
         </div>
       </div>
@@ -177,6 +164,7 @@ function pInvestment() {
     </div>
   </div>`;
 }
+
 
 
 
@@ -934,137 +922,120 @@ async function loadEarningsSurge() {
     }).join('');
   };
 
-  el.innerHTML = surges.map((r, i) => {
-    const hist = histMap[r.stock_code] || [];
+  // ── 등급별 섹션 렌더링 ──
+  const GRADE_LABELS = {
+    '🏆': { label: '최상 — YoY 30%↑ + 영업이익 동반성장 + 연속', color: '#ffd600' },
+    '🥇': { label: '상 — YoY 30%↑ + 흑자전환 또는 영업이익 성장', color: '#fb6340' },
+    '🥈': { label: '중 — YoY 20%↑ + 영업이익 흑자', color: '#2AABEE' },
+    '⚡': { label: '주목 — 추세전환 / 적자→흑자 (QoQ)', color: '#2dce89' },
+  };
 
-    // 분기 (최근 6분기)
-    const qData = hist.slice(0, 6).reverse().map(h => [h.bsns_year+h.quarter, h[metric]||0]);
-    const qMax  = Math.max(...qData.map(([,v]) => Math.abs(v)), 1);
+  const renderMiniBar = (vals, maxVal, colors) => {
+    if (!vals.length || !maxVal) return '';
+    return vals.map(([lbl, val]) => {
+      const pct   = Math.abs(val) / maxVal * 100;
+      const color = val >= 0 ? (colors||'#2AABEE') : '#f5365c';
+      return `<div style="display:flex;flex-direction:column;align-items:center;gap:1px;flex:1;min-width:0">
+        <div style="font-size:8px;color:var(--text3);white-space:nowrap">${lbl}</div>
+        <div style="width:100%;background:var(--bg3);border-radius:2px;height:24px;display:flex;align-items:flex-end">
+          <div style="width:100%;background:${color};border-radius:2px;height:${Math.max(pct,3)}%;opacity:0.85"></div>
+        </div>
+        <div style="font-size:8px;color:var(--text2);white-space:nowrap">${fmtCap(val)}</div>
+      </div>`;
+    }).join('');
+  };
 
-    // 연간 (최근 3년)
-    const yData = calcAnnual(hist, metric);
-    const yMax  = Math.max(...yData.map(([,v]) => Math.abs(v)), 1);
+  // 등급별로 그룹핑
+  const gradeGroups = {};
+  surges.forEach(r => {
+    if (!gradeGroups[r._grade]) gradeGroups[r._grade] = [];
+    gradeGroups[r._grade].push(r);
+  });
 
-    // 이전 분기/전년동기 값 계산
-    const histSorted = [...hist].sort((a,b) =>
-      a.bsns_year !== b.bsns_year ? a.bsns_year.localeCompare(b.bsns_year) : a.quarter.localeCompare(b.quarter));
-    const curIdx  = histSorted.findIndex(h => h.bsns_year === r.bsns_year && h.quarter === r.quarter);
-    const prevQ   = curIdx > 0 ? histSorted[curIdx - 1] : null;
-    const prevY   = hist.find(h => h.bsns_year === String(parseInt(r.bsns_year)-1) && h.quarter === r.quarter);
-    const curVal  = r[metric];
-    const qoqPrev = prevQ ? prevQ[metric] : null;
-    const yoyPrev = prevY ? prevY[metric] : null;
+  const gradeOrder = ['🏆','🥇','🥈','⚡'];
 
-    // QoQ 패턴 분석
-    let qoqSignal = '';
-    if (curIdx >= 2 && curVal != null) {
-      const vals = histSorted.slice(Math.max(0, curIdx-4), curIdx+1).map(h => h[metric]||0);
-      const cur  = vals[vals.length-1];
-      const p1   = vals[vals.length-2];
-      const p2   = vals.length >= 3 ? vals[vals.length-3] : null;
-      const p3   = vals.length >= 4 ? vals[vals.length-4] : null;
-
-      // 베이스 효과: 직전 분기가 현재의 10% 미만
-      if (p1 != null && Math.abs(p1) < Math.abs(cur) * 0.1 && Math.abs(cur) > 0) {
-        qoqSignal = '<span title="직전 분기가 너무 작아 QoQ 수치 과장 가능" style="font-size:13px;cursor:help">⚠️</span>';
-      }
-      // 적자→흑자 전환
-      else if (p1 != null && p1 < 0 && cur > 0) {
-        qoqSignal = '<span title="적자→흑자 전환 (QoQ)" style="font-size:13px;cursor:help">💚</span>';
-      }
-      // 추세전환: 직전 2분기 이상 하락 후 반등
-      else if (p2 != null && p1 != null && p1 < p2 && cur > p1) {
-        qoqSignal = '<span title="하락 후 반등 (추세전환 신호)" style="font-size:13px;cursor:help">↩️</span>';
-      }
-      // 성장 가속: 3분기 연속 QoQ 성장
-      else if (p2 != null && p1 != null && cur > p1 && p1 > p2 && (p3 == null || p2 > p3)) {
-        qoqSignal = '<span title="3분기+ 연속 QoQ 성장 (모멘텀)" style="font-size:13px;cursor:help">🔥</span>';
-      }
-      // 2분기 연속 성장
-      else if (p1 != null && cur > p1 && p2 != null && p1 > p2) {
-        qoqSignal = '<span title="2분기 연속 QoQ 성장" style="font-size:13px;cursor:help">📈</span>';
-      }
-    }
-
-    // YoY 패턴 분석
-    let yoySignal = '';
-    if (yoyPrev != null && curVal != null) {
-      const cur = curVal;
-      const py  = yoyPrev;
-
-      // YoY 베이스 효과: 전년 동기가 현재의 10% 미만
-      if (Math.abs(py) < Math.abs(cur) * 0.1 && Math.abs(cur) > 0) {
-        yoySignal = '<span title="전년 동기가 너무 작아 YoY 수치 과장 가능" style="font-size:11px;cursor:help">⚠️</span>';
-      }
-      // YoY 흑자전환
-      else if (py < 0 && cur > 0) {
-        yoySignal = '<span title="전년 적자→흑자 전환 (YoY)" style="font-size:11px;cursor:help">🔄</span>';
-      }
-      else if (cur > py) {
-        // YoY 연속 성장 확인 (전전년 동기)
-        const ppy = histSorted.find(h =>
-          h.bsns_year === String(parseInt(r.bsns_year)-2) && h.quarter === r.quarter);
-        const ppyVal = ppy ? ppy[metric] : null;
-
-        // YoY 성장 가속: 성장률이 전년보다 커짐
-        if (ppyVal != null && ppyVal !== 0) {
-          const prevGrowth = (py - ppyVal) / Math.abs(ppyVal) * 100;
-          const curGrowth  = r[yoyCol] || 0;
-          if (curGrowth > prevGrowth && prevGrowth > 0) {
-            yoySignal = '<span title="YoY 성장률 가속" style="font-size:11px;cursor:help">🚀</span>';
-          } else if (py > ppyVal) {
-            yoySignal = '<span title="2년+ 연속 YoY 성장 (지속성장)" style="font-size:11px;cursor:help">📊</span>';
-          }
-        }
-      }
-    }
-
+  el.innerHTML = gradeOrder.filter(g => gradeGroups[g]).map(grade => {
+    const items = gradeGroups[grade];
+    const meta  = GRADE_LABELS[grade];
     return `
-    <div style="display:grid;grid-template-columns:220px 1fr 1fr;align-items:center;gap:0;padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer"
-      onclick="openFinTrend('${r.stock_code}','${r.corp_name}')"
-      onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
+    <div style="border-bottom:2px solid var(--border)">
+      <div style="padding:6px 14px;background:var(--bg3);display:flex;align-items:center;gap:8px">
+        <span style="font-size:16px">${grade}</span>
+        <span style="font-size:12px;color:${meta.color};font-weight:600">${meta.label}</span>
+        <span style="font-size:11px;color:var(--text3);margin-left:auto">${items.length}개</span>
+      </div>
+      ${items.map((r, i) => {
+        const hist = histMap[r.stock_code] || [];
+        const histSorted2 = [...hist].sort((a,b) =>
+          a.bsns_year !== b.bsns_year ? a.bsns_year.localeCompare(b.bsns_year) : a.quarter.localeCompare(b.quarter));
 
-      <!-- 종목 정보 -->
-      <div style="min-width:0;padding-right:12px;border-right:1px solid var(--border)">
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-          <span style="font-size:11px;color:var(--text3);font-weight:600;width:16px">${i+1}</span>
-          <span style="font-size:15px">${r._grade}</span>
-          <span style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.corp_name}</span>
-        </div>
-        <div style="display:flex;align-items:baseline;gap:6px;padding-left:22px">
-          <span style="font-size:14px;font-weight:700">${fmtCap(r[metric])}</span>
-          <span style="font-size:10px;color:var(--text3)">${r.bsns_year} ${r.quarter}</span>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:3px;padding-left:22px;margin-top:4px">
-          <div style="display:flex;align-items:center;gap:4px">
-            ${chgBadge(r[qoqCol], 'QoQ', qoqPrev, curVal)}
-            ${qoqSignal}
+        // 최근 6분기 데이터
+        const recent = histSorted2.slice(-6);
+        const revVals = recent.map(h => [h.bsns_year.slice(2)+h.quarter, h.revenue||0]);
+        const opVals  = recent.map(h => [h.bsns_year.slice(2)+h.quarter, h.operating_profit||0]);
+        const revMax  = Math.max(...revVals.map(([,v]) => Math.abs(v)), 1);
+        const opMax   = Math.max(...opVals.map(([,v]) => Math.abs(v)), 1);
+
+        // 이전값
+        const curIdx2  = histSorted2.findIndex(h => h.bsns_year === r.bsns_year && h.quarter === r.quarter);
+        const prevQ2   = curIdx2 > 0 ? histSorted2[curIdx2-1] : null;
+        const prevY2   = hist.find(h => h.bsns_year === String(parseInt(r.bsns_year)-1) && h.quarter === r.quarter);
+
+        // QoQ/YoY 시그널
+        let qoqSig = '', yoySig = '';
+        const cur2 = r.revenue, p12 = prevQ2?.revenue, p22 = histSorted2[curIdx2-2]?.revenue;
+        if (p12 != null && p12 < 0 && cur2 > 0)          qoqSig = '💚';
+        else if (p12 != null && p22 != null && p12 < p22 && cur2 > p12) qoqSig = '↩️';
+        else if (p12 != null && p22 != null && cur2 > p12 && p12 > p22) qoqSig = '🔥';
+        if (prevY2?.revenue != null && prevY2.revenue < 0 && cur2 > 0) yoySig = '🔄';
+        else if (r.revenue_yoy != null) {
+          const ppy = hist.find(h => h.bsns_year === String(parseInt(r.bsns_year)-2) && h.quarter === r.quarter);
+          if (ppy && ppy.revenue && prevY2?.revenue && prevY2.revenue > ppy.revenue) yoySig = '📊';
+        }
+
+        return `<div style="display:grid;grid-template-columns:180px 1fr 1fr;align-items:stretch;gap:0;padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer"
+          onclick="openFinTrend('${r.stock_code}','${r.corp_name}')"
+          onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
+
+          <!-- 종목 정보 -->
+          <div style="padding-right:12px;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;gap:3px">
+            <div style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.corp_name}</div>
+            <div style="font-size:10px;color:var(--text3)">${r.bsns_year} ${r.quarter}</div>
+            <div style="display:flex;flex-direction:column;gap:2px;margin-top:2px">
+              <div style="font-size:11px">
+                <span style="color:var(--text3)">매출</span> <b>${fmtCap(r.revenue)}</b>
+                ${r.revenue_yoy != null ? `<span style="color:${r.revenue_yoy>0?'var(--red)':'var(--blue)'}"> ${r.revenue_yoy>0?'▲':'▼'}${Math.abs(r.revenue_yoy).toFixed(1)}%</span>` : ''}
+                ${r.revenue_qoq != null ? `<span style="color:var(--text3);font-size:10px"> QoQ ${r.revenue_qoq>0?'▲':'▼'}${Math.abs(r.revenue_qoq).toFixed(1)}%</span>` : ''}
+                ${qoqSig}${yoySig}
+              </div>
+              <div style="font-size:11px">
+                <span style="color:var(--text3)">영업익</span> <b style="color:${(r.operating_profit||0)>=0?'var(--green)':'var(--red)'}">${fmtCap(r.operating_profit)}</b>
+                ${r.op_profit_yoy != null ? `<span style="color:${r.op_profit_yoy>0?'var(--red)':'var(--blue)'}"> ${r.op_profit_yoy>0?'▲':'▼'}${Math.abs(r.op_profit_yoy).toFixed(1)}%</span>` : ''}
+                <span style="color:var(--text3);font-size:10px"> ${r.operating_margin != null ? r.operating_margin.toFixed(1)+'%' : ''}</span>
+              </div>
+            </div>
           </div>
-          <div style="display:flex;align-items:center;gap:4px">
-            ${chgBadge(r[yoyCol], 'YoY', yoyPrev, curVal)}
-            ${yoySignal}
+
+          <!-- 매출 미니바 -->
+          <div style="padding:4px 10px;border-right:1px solid var(--border)">
+            <div style="font-size:9px;color:var(--text3);margin-bottom:3px">매출액</div>
+            <div style="display:flex;gap:2px;align-items:flex-end;height:42px">
+              ${renderMiniBar(revVals, revMax, '#2AABEE')}
+            </div>
           </div>
-        </div>
-      </div>
 
-      <!-- 분기별 차트 -->
-      <div style="padding:0 12px;border-right:1px solid var(--border)">
-        <div style="font-size:10px;color:var(--text3);margin-bottom:4px">분기별</div>
-        <div style="display:flex;gap:3px;align-items:flex-end;height:50px">
-          ${renderBars(qData, qMax, k => k.slice(2,4)+''+k.slice(4))}
-        </div>
-      </div>
-
-      <!-- 연간 차트 -->
-      <div style="padding:0 12px">
-        <div style="font-size:10px;color:var(--text3);margin-bottom:4px">연간</div>
-        <div style="display:flex;gap:4px;align-items:flex-end;height:50px">
-          ${renderBars(yData, yMax, k => k+'년')}
-        </div>
-      </div>
+          <!-- 영업이익 미니바 -->
+          <div style="padding:4px 10px">
+            <div style="font-size:9px;color:var(--text3);margin-bottom:3px">영업이익</div>
+            <div style="display:flex;gap:2px;align-items:flex-end;height:42px">
+              ${renderMiniBar(opVals, opMax, '#2dce89')}
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
     </div>`;
   }).join('') + `<div style="padding:6px 12px;font-size:11px;color:var(--text3)">
-    QoQ ${qoqThreshold}% 또는 YoY ${yoyThreshold}% 이상 · 50억↑ · 🏆최상 🥇상 🥈중 ⚡추세전환 · 클릭 시 재무 추이
+    매출 50억↑ · YoY ${yoyThreshold}%+ 또는 QoQ ${qoqThreshold}%+ · 클릭 시 재무 추이
   </div>`;
 }
 
