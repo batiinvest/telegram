@@ -928,6 +928,22 @@ async function loadEarningsSurge() {
   // 캐시 저장 후 렌더링
   _surgeAllResults = surges;
   window._surgeHistMap = histMap;
+
+  // 등급 이력 조회 (신규/향상/강등 표시용)
+  const { data: gradeHist } = await sb.from('earnings_grade_history')
+    .select('stock_code,bsns_year,quarter,grade')
+    .in('stock_code', codes)
+    .order('bsns_year', { ascending: false })
+    .order('quarter', { ascending: false })
+    .limit(codes.length * 8);
+
+  const gradeHistMap = {};
+  (gradeHist||[]).forEach(r => {
+    if (!gradeHistMap[r.stock_code]) gradeHistMap[r.stock_code] = [];
+    gradeHistMap[r.stock_code].push(r);
+  });
+  window._surgeGradeHistMap = gradeHistMap;
+
   renderSurgeList();
 }
 
@@ -935,6 +951,40 @@ function renderSurgeHTML(surges, gradesToShow, histMap) {
   const metric = _earningsSurgeTab || 'revenue';
   const qoqCol = metric === 'revenue' ? 'revenue_qoq' : 'op_profit_qoq';
   const yoyCol = metric === 'revenue' ? 'revenue_yoy' : 'op_profit_yoy';
+  const gradeHistMap = window._surgeGradeHistMap || {};
+  const GRADE_ORDER  = {'🏆':4,'🥇':3,'🥈':2,'⚡':1};
+
+  // 등급 이력 분석 함수
+  const getGradeMeta = (r) => {
+    const hist = (gradeHistMap[r.stock_code] || [])
+      .filter(h => !(h.bsns_year === r.bsns_year && h.quarter === r.quarter))
+      .sort((a,b) => a.bsns_year !== b.bsns_year
+        ? b.bsns_year.localeCompare(a.bsns_year)
+        : b.quarter.localeCompare(a.quarter));
+
+    const curRank  = GRADE_ORDER[r._grade] || 0;
+    const prevGrade = hist[0]?.grade;
+    const prevRank  = GRADE_ORDER[prevGrade] || 0;
+
+    // 신규: 이력이 없음
+    if (!hist.length) return { badge: '<span style="font-size:10px;padding:1px 5px;border-radius:100px;background:rgba(45,206,137,.2);color:#2dce89;font-weight:600">NEW</span>', streak: 0, hist };
+
+    // 등급 향상
+    if (curRank > prevRank) return { badge: `<span style="font-size:10px;padding:1px 5px;border-radius:100px;background:rgba(255,214,0,.2);color:#ffd600;font-weight:600">↑${prevGrade}→${r._grade}</span>`, streak: 0, hist };
+
+    // 등급 유지 — 연속 분기 계산
+    let streak = 1;
+    for (const h of hist) {
+      if (h.grade === r._grade) streak++;
+      else break;
+    }
+    if (streak >= 2) return { badge: `<span style="font-size:10px;padding:1px 5px;border-radius:100px;background:rgba(42,171,238,.15);color:#2AABEE;font-weight:600">${streak}분기 연속</span>`, streak, hist };
+
+    // 등급 강등
+    if (curRank < prevRank) return { badge: `<span style="font-size:10px;padding:1px 5px;border-radius:100px;background:rgba(245,54,92,.15);color:#f5365c;font-weight:600">↓${prevGrade}→${r._grade}</span>`, streak: 0, hist };
+
+    return { badge: '', streak: 1, hist };
+  };
 
   const chgBadge = (v, label, prevVal, curVal) => {
     if (v == null) return '';
@@ -1042,14 +1092,29 @@ function renderSurgeHTML(surges, gradesToShow, histMap) {
           if (ppy && ppy.revenue && prevY2?.revenue && prevY2.revenue > ppy.revenue) yoySig = '📊';
         }
 
-        return `<div style="display:grid;grid-template-columns:180px 1fr 1fr;align-items:stretch;gap:0;padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer"
+        const gradeMeta = getGradeMeta(r);
+
+        return `<div style="display:grid;grid-template-columns:200px 1fr 1fr;align-items:stretch;gap:0;padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer"
           onclick="openFinTrend('${r.stock_code}','${r.corp_name}')"
           onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
 
           <!-- 종목 정보 -->
           <div style="padding-right:12px;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;gap:3px">
-            <div style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.corp_name}</div>
-            <div style="font-size:10px;color:var(--text3)">${r.bsns_year} ${r.quarter}</div>
+            <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+              <span style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.corp_name}</span>
+              ${gradeMeta.badge}
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:10px;color:var(--text3)">${r.bsns_year} ${r.quarter}</span>
+              <!-- 등급 이력 미니 타임라인 (최근 4분기) -->
+              <div style="display:flex;gap:2px;align-items:center">
+                ${gradeMeta.hist.slice(0,3).reverse().map(h => {
+                  const c = {'🏆':'#ffd600','🥇':'#fb6340','🥈':'#2AABEE','⚡':'#2dce89'}[h.grade]||'#8b90a7';
+                  return `<span title="${h.bsns_year} ${h.quarter}: ${h.grade}" style="font-size:9px;width:14px;height:14px;border-radius:50%;background:${c}22;border:1px solid ${c};display:inline-flex;align-items:center;justify-content:center;color:${c};cursor:help">${h.grade}</span>`;
+                }).join('')}
+                <span style="font-size:11px" title="${r.bsns_year} ${r.quarter}: ${r._grade} (현재)">${r._grade}</span>
+              </div>
+            </div>
             <div style="display:flex;flex-direction:column;gap:2px;margin-top:2px">
               <div style="font-size:11px">
                 <span style="color:var(--text3)">매출</span> <b>${fmtCap(r.revenue)}</b>
@@ -1086,6 +1151,4 @@ function renderSurgeHTML(surges, gradesToShow, histMap) {
   }).join('') + `<div style="padding:6px 12px;font-size:11px;color:var(--text3)">매출 50억↑ · S/A/B/관찰 등급 · 클릭 시 재무 추이</div>`;
   return html;
 }
-  return html;
 }
-
