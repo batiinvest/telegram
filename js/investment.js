@@ -777,60 +777,70 @@ async function loadEarningsSurge() {
     const qoq    = r[qoqCol];
     const op     = r[opCol];
     const opY    = r[opYoy];
+    const margin = r.operating_margin;
     const revAbs = Math.abs(rev || 0);
 
-    // 규모 필터
+    // 규모 필터 (50억 미만 제외)
     if (revAbs < MIN_REVENUE) return null;
 
-    // 전년동기 찾기 (베이스효과 감지)
     const hist = histAll[r.stock_code] || [];
     const histSorted = [...hist].sort((a,b) =>
       a.bsns_year !== b.bsns_year ? a.bsns_year.localeCompare(b.bsns_year) : a.quarter.localeCompare(b.quarter));
-    const prevY = hist.find(h => h.bsns_year === String(parseInt(r.bsns_year)-1) && h.quarter === r.quarter);
-    const prevYVal = prevY ? prevY[metric] : null;
+    const curIdx = histSorted.findIndex(h => h.bsns_year === r.bsns_year && h.quarter === r.quarter);
+    const prevQ  = curIdx > 0 ? histSorted[curIdx-1] : null;
+    const prevQ2 = curIdx > 1 ? histSorted[curIdx-2] : null;
+    const prevY  = hist.find(h => h.bsns_year === String(parseInt(r.bsns_year)-1) && h.quarter === r.quarter);
+    const prevYVal   = prevY ? prevY[metric] : null;
+    const prevMargin = prevY ? prevY.operating_margin : null;
 
-    // 베이스효과: 전년동기가 현재의 10% 미만 → 제외
+    // 베이스효과: 전년동기가 현재의 10% 미만 + YoY 200% 초과 → 제외
     if (prevYVal != null && Math.abs(prevYVal) < revAbs * 0.1 && yoy != null && yoy > 200) return null;
 
-    // 영업손실 심화 제외 (매출 늘어도 영업이익이 더 악화)
+    // 영업손실 심화 제외
     if (op != null && op < 0 && opY != null && opY < -50) return null;
+
+    // 일회성 이익 제외: other_operating_income이 영업이익의 50% 이상
+    const ooi = r.other_operating_income;
+    if (ooi != null && op != null && op > 0 && ooi > op * 0.5) return null;
 
     let grade = null, score = 0;
 
-    // 🏆 최상: YoY 30%↑ + 영업이익 동반 성장 + 연속성
+    // 🏆 S급: YoY 매출 30%↑ + 영업이익 20%↑ + 이익률 개선(2%p↑) + 연속성
     if (yoy != null && yoy >= 30 && opY != null && opY >= 20) {
-      const curIdx = histSorted.findIndex(h => h.bsns_year === r.bsns_year && h.quarter === r.quarter);
-      const prevQ  = curIdx > 0 ? histSorted[curIdx-1] : null;
-      const prevY2 = hist.find(h => h.bsns_year === String(parseInt(r.bsns_year)-2) && h.quarter === r.quarter);
-      const continuous = prevQ && prevQ[yoyCol] >= 20;
-      if (continuous || (prevY2 && prevY2[metric] < (prevYVal||0))) {
-        grade = '🏆'; score = 100 + (yoy || 0) + (opY || 0);
+      const marginImproved = margin != null && prevMargin != null && (margin - prevMargin) >= 2;
+      const continuous     = prevQ && prevQ[yoyCol] != null && prevQ[yoyCol] >= 20;
+      if (marginImproved && continuous) {
+        grade = '🏆'; score = 100 + (yoy||0) + (opY||0) + (margin||0);
+      } else if (marginImproved || continuous) {
+        // 이익률 개선 or 연속성 중 하나만 충족 → A급으로 강등
+        grade = '🥇'; score = 85 + (yoy||0) + (opY||0);
       }
     }
 
-    // 🥇 상: YoY 30%↑ + 흑자전환 또는 영업이익 성장
+    // 🥇 A급: YoY 매출 30%↑ + 흑자전환 또는 영업이익 성장
     if (!grade && yoy != null && yoy >= 30) {
-      const isBlackTurn = prevYVal != null && prevYVal < 0 && (rev || 0) > 0;
-      const opGood = opY != null && opY >= 0;
+      const isBlackTurn = prevYVal != null && prevYVal < 0 && (rev||0) > 0;
+      const opGood      = opY != null && opY >= 0;
       if (isBlackTurn || opGood) {
-        grade = '🥇'; score = 80 + (yoy || 0);
+        grade = '🥇'; score = 80 + (yoy||0);
       }
     }
 
-    // 🥈 중: YoY 20%↑ + 수익성 유지 (영업이익 흑자)
+    // 🥈 B급: YoY 매출 20%↑ + 영업이익 흑자 유지
     if (!grade && yoy != null && yoy >= yoyThreshold && op != null && op >= 0) {
-      grade = '🥈'; score = 50 + (yoy || 0);
+      grade = '🥈'; score = 50 + (yoy||0);
     }
 
-    // ⚡ 주목: QoQ만이지만 추세전환 신호 (YoY는 기준 미달)
+    // ⚡ 관찰: QoQ 급등 + 적자 축소(2분기 연속) 또는 흑자전환 조짐
     if (!grade && qoq != null && qoq >= qoqThreshold) {
-      const curIdx = histSorted.findIndex(h => h.bsns_year === r.bsns_year && h.quarter === r.quarter);
-      const p1 = curIdx > 0 ? histSorted[curIdx-1] : null;
-      const p2 = curIdx > 1 ? histSorted[curIdx-2] : null;
-      const isTurn = p1 && p2 && p1[metric] < p2[metric] && rev > p1[metric]; // 하락 후 반등
-      const isBlack = p1 && p1[metric] < 0 && rev > 0; // 적자→흑자
-      if (isTurn || isBlack) {
-        grade = '⚡'; score = 30 + (qoq || 0);
+      const isBlack      = prevQ && prevQ[opCol] < 0 && (op||0) > 0;   // 적자→흑자
+      const isTurn       = prevQ && prevQ2 && prevQ[metric] < prevQ2[metric] && rev > prevQ[metric]; // 하락 후 반등
+      // 적자 축소 2분기 연속: op < 0이지만 줄어드는 중
+      const lossReduce   = op != null && op < 0 && prevQ && prevQ[opCol] < 0
+                        && op > prevQ[opCol]  // 이번이 전분기보다 덜 적자
+                        && prevQ2 && prevQ[opCol] > prevQ2[opCol]; // 전분기도 전전분기보다 덜 적자
+      if (isBlack || isTurn || lossReduce) {
+        grade = '⚡'; score = 30 + (qoq||0);
       }
     }
 
@@ -838,10 +848,12 @@ async function loadEarningsSurge() {
     return { ...r, _grade: grade, _score: score };
   };
 
+
+
   // histRows 미리 조회 (등급 평가용)
   const previewCodes = [...new Set(targets.map(r => r.stock_code))].slice(0, 200);
   const { data: previewHist } = await sb.from('financials')
-    .select('stock_code,bsns_year,quarter,revenue,operating_profit,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
+    .select('stock_code,bsns_year,quarter,revenue,operating_profit,operating_margin,other_operating_income,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
     .eq('fs_div', 'CFS')
     .in('stock_code', previewCodes)
     .order('bsns_year', { ascending: false })
@@ -924,10 +936,10 @@ async function loadEarningsSurge() {
 
   // ── 등급별 섹션 렌더링 ──
   const GRADE_LABELS = {
-    '🏆': { label: '최상 — YoY 30%↑ + 영업이익 동반성장 + 연속', color: '#ffd600' },
-    '🥇': { label: '상 — YoY 30%↑ + 흑자전환 또는 영업이익 성장', color: '#fb6340' },
-    '🥈': { label: '중 — YoY 20%↑ + 영업이익 흑자', color: '#2AABEE' },
-    '⚡': { label: '주목 — 추세전환 / 적자→흑자 (QoQ)', color: '#2dce89' },
+    '🏆': { label: 'S급 — YoY 30%↑ + 영업이익 20%↑ + 이익률 개선 + 연속 성장', color: '#ffd600' },
+    '🥇': { label: 'A급 — YoY 30%↑ + 흑자전환 또는 영업이익 성장',              color: '#fb6340' },
+    '🥈': { label: 'B급 — YoY 20%↑ + 영업이익 흑자 유지',                      color: '#2AABEE' },
+    '⚡': { label: '관찰 — QoQ 급등 + 적자 축소 또는 흑자전환 조짐',              color: '#2dce89' },
   };
 
   const renderMiniBar = (vals, maxVal, colors) => {
