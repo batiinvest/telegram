@@ -773,7 +773,7 @@ async function loadEarningsSurge() {
   const yoyCol = metric === 'revenue' ? 'revenue_yoy' : 'op_profit_yoy';
 
   let query = sb.from('financials')
-    .select('corp_name,stock_code,bsns_year,quarter,revenue,operating_profit,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
+    .select('corp_name,stock_code,bsns_year,quarter,revenue,operating_profit,operating_margin,other_operating_income,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
     .eq('fs_div', 'CFS');
   if (filterYear)    query = query.eq('bsns_year', filterYear);
   if (filterQuarter) query = query.eq('quarter', filterQuarter);
@@ -881,14 +881,21 @@ async function loadEarningsSurge() {
 
 
   // histRows 미리 조회 (등급 평가용)
-  const previewCodes = [...new Set(targets.map(r => r.stock_code))].slice(0, 200);
-  const { data: previewHist } = await sb.from('financials')
-    .select('stock_code,bsns_year,quarter,revenue,operating_profit,operating_margin,other_operating_income,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
-    .eq('fs_div', 'CFS')
-    .in('stock_code', previewCodes)
-    .order('bsns_year', { ascending: false })
-    .order('quarter', { ascending: false })
-    .limit(previewCodes.length * 12);
+  const previewCodes = [...new Set(targets.map(r => r.stock_code))];
+
+  // 배치로 나눠서 전체 히스토리 조회 (Supabase in() 제한 대응)
+  const previewHist = [];
+  for (let i = 0; i < previewCodes.length; i += 200) {
+    const batch = previewCodes.slice(i, i + 200);
+    const { data } = await sb.from('financials')
+      .select('stock_code,bsns_year,quarter,revenue,operating_profit,operating_margin,other_operating_income,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
+      .eq('fs_div', 'CFS')
+      .in('stock_code', batch)
+      .order('bsns_year', { ascending: false })
+      .order('quarter', { ascending: false })
+      .limit(batch.length * 12);
+    if (data) previewHist.push(...data);
+  }
 
   const previewHistMap = {};
   (previewHist||[]).forEach(r => {
