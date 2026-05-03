@@ -969,24 +969,45 @@ function renderSurgeHTML(surges, gradesToShow, histMap) {
     const prevGrade = hist[0]?.grade;
     const prevRank  = GRADE_ORDER[prevGrade] || 0;
 
-    // 신규: 이력이 없음
-    if (!hist.length) return { badge: '<span style="font-size:10px;padding:1px 5px;border-radius:100px;background:rgba(45,206,137,.2);color:#2dce89;font-weight:600">NEW</span>', streak: 0, hist };
-
-    // 등급 향상
-    if (curRank > prevRank) return { badge: `<span style="font-size:10px;padding:1px 5px;border-radius:100px;background:rgba(255,214,0,.2);color:#ffd600;font-weight:600">↑${prevGrade}→${r._grade}</span>`, streak: 0, hist };
-
-    // 등급 유지 — 연속 분기 계산
+    // 연속 유지 분기 계산
     let streak = 1;
     for (const h of hist) {
       if (h.grade === r._grade) streak++;
       else break;
     }
-    if (streak >= 2) return { badge: `<span style="font-size:10px;padding:1px 5px;border-radius:100px;background:rgba(42,171,238,.15);color:#2AABEE;font-weight:600">${streak}분기 연속</span>`, streak, hist };
 
-    // 등급 강등
-    if (curRank < prevRank) return { badge: `<span style="font-size:10px;padding:1px 5px;border-radius:100px;background:rgba(245,54,92,.15);color:#f5365c;font-weight:600">↓${prevGrade}→${r._grade}</span>`, streak: 0, hist };
+    let statusBadge = '';
+    let histLine    = '';
 
-    return { badge: '', streak: 1, hist };
+    // 상태 배지
+    if (!hist.length) {
+      statusBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(45,206,137,.2);color:#2dce89;font-weight:600">신규진입</span>`;
+    } else if (curRank > prevRank) {
+      statusBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(255,214,0,.2);color:#ffd600;font-weight:600">등급향상 ↑</span>`;
+    } else if (curRank < prevRank) {
+      statusBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(245,54,92,.15);color:#f5365c;font-weight:600">등급하락 ↓</span>`;
+    } else if (streak >= 3) {
+      statusBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(42,171,238,.15);color:#2AABEE;font-weight:600">${streak}분기 연속</span>`;
+    }
+
+    // 이력 흐름 텍스트 (최근 3분기 → 현재)
+    const recentHist = hist.slice(0, 3).reverse();
+    if (recentHist.length) {
+      const GRADE_NAMES = {'🏆':'S','🥇':'A','🥈':'B','⚡':'관찰'};
+      const GRADE_COLORS = {'🏆':'#ffd600','🥇':'#fb6340','🥈':'#2AABEE','⚡':'#2dce89'};
+      const flowItems = [...recentHist, { grade: r._grade, bsns_year: r.bsns_year, quarter: r.quarter, isCurrent: true }];
+      histLine = `<div style="display:flex;align-items:center;gap:3px;margin-top:2px">
+        ${flowItems.map((h, i) => {
+          const c    = GRADE_COLORS[h.grade] || '#8b90a7';
+          const name = GRADE_NAMES[h.grade] || h.grade;
+          const qLabel = h.bsns_year.slice(2) + h.quarter;
+          return `${i > 0 ? '<span style="color:var(--text3);font-size:10px">→</span>' : ''}
+            <span title="${h.bsns_year} ${h.quarter}" style="font-size:10px;color:${c};${h.isCurrent?'font-weight:700':'opacity:0.7'}">${name}<span style="font-size:8px;color:var(--text3)">(${qLabel})</span></span>`;
+        }).join('')}
+      </div>`;
+    }
+
+    return { statusBadge, histLine, streak, hist };
   };
 
   const chgBadge = (v, label, prevVal, curVal) => {
@@ -1104,20 +1125,12 @@ function renderSurgeHTML(surges, gradesToShow, histMap) {
           <!-- 종목 정보 -->
           <div style="padding-right:12px;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;gap:3px">
             <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+              <span style="font-size:14px">${r._grade}</span>
               <span style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.corp_name}</span>
-              ${gradeMeta.badge}
+              ${gradeMeta.statusBadge}
             </div>
-            <div style="display:flex;align-items:center;gap:6px">
-              <span style="font-size:10px;color:var(--text3)">${r.bsns_year} ${r.quarter}</span>
-              <!-- 등급 이력 미니 타임라인 (최근 4분기) -->
-              <div style="display:flex;gap:2px;align-items:center">
-                ${gradeMeta.hist.slice(0,3).reverse().map(h => {
-                  const c = {'🏆':'#ffd600','🥇':'#fb6340','🥈':'#2AABEE','⚡':'#2dce89'}[h.grade]||'#8b90a7';
-                  return `<span title="${h.bsns_year} ${h.quarter}: ${h.grade}" style="font-size:9px;width:14px;height:14px;border-radius:50%;background:${c}22;border:1px solid ${c};display:inline-flex;align-items:center;justify-content:center;color:${c};cursor:help">${h.grade}</span>`;
-                }).join('')}
-                <span style="font-size:11px" title="${r.bsns_year} ${r.quarter}: ${r._grade} (현재)">${r._grade}</span>
-              </div>
-            </div>
+            <div style="font-size:10px;color:var(--text3)">${r.bsns_year} ${r.quarter}</div>
+            ${gradeMeta.histLine}
             <div style="display:flex;flex-direction:column;gap:2px;margin-top:2px">
               <div style="font-size:11px">
                 <span style="color:var(--text3)">매출</span> <b>${fmtCap(r.revenue)}</b>
