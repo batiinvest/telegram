@@ -143,19 +143,17 @@ function pInvestment() {
       <div class="card-header" style="flex-wrap:wrap;gap:8px;align-items:center">
         <span class="card-title">🚀 실적 급등 종목</span>
         <div style="display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap">
-          <span style="font-size:12px;color:var(--text3)">기준 분기</span>
+          <div style="display:flex;gap:4px">
+            <button class="chip active" data-surge-grade="all"   onclick="setSurgeGrade(this,'all')"  style="font-size:12px">전체</button>
+            <button class="chip"        data-surge-grade="🏆"    onclick="setSurgeGrade(this,'🏆')"   style="font-size:12px">🏆 S급</button>
+            <button class="chip"        data-surge-grade="🥇"    onclick="setSurgeGrade(this,'🥇')"   style="font-size:12px">🥇 A급</button>
+            <button class="chip"        data-surge-grade="🥈"    onclick="setSurgeGrade(this,'🥈')"   style="font-size:12px">🥈 B급</button>
+            <button class="chip"        data-surge-grade="⚡"    onclick="setSurgeGrade(this,'⚡')"   style="font-size:12px">⚡ 관찰</button>
+          </div>
           <select class="form-select" id="inv-earnings-quarter" style="width:130px;padding:3px 8px;font-size:12px"
             onchange="loadEarningsSurge()">
             <option value="">로딩 중...</option>
           </select>
-          <span style="font-size:12px;color:var(--text3)">YoY</span>
-          <input type="number" id="inv-surge-yoy" value="${localStorage.getItem('earnings_surge_yoy')||20}" min="0" max="500" step="5"
-            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-          <span style="font-size:12px;color:var(--text3)">% QoQ</span>
-          <input type="number" id="inv-surge-qoq" value="${localStorage.getItem('earnings_surge_qoq')||20}" min="0" max="500" step="5"
-            style="width:52px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;text-align:center">
-          <span style="font-size:12px;color:var(--text3)">% 이상</span>
-          <button class="chip" onclick="loadEarningsSurge()" style="font-size:11px;padding:2px 8px">적용</button>
         </div>
       </div>
       <div id="inv-earnings-list" style="padding:.5rem 0">
@@ -683,7 +681,37 @@ function setEarningsMetric(el, metric) {
   loadEarningsSurge();
 }
 
-let _earningsSurgeTab = 'revenue';
+let _surgeGradeFilter = 'all';
+
+function setSurgeGrade(el, grade) {
+  _surgeGradeFilter = grade;
+  document.querySelectorAll('[data-surge-grade]').forEach(b =>
+    b.classList.toggle('active', b.dataset.surgeGrade === grade));
+  renderSurgeList();
+}
+
+let _surgeAllResults = []; // 전체 결과 캐시
+
+function renderSurgeList() {
+  const el = document.getElementById('inv-earnings-list');
+  if (!el || !_surgeAllResults.length) return;
+
+  const filtered = _surgeGradeFilter === 'all'
+    ? _surgeAllResults
+    : _surgeAllResults.filter(r => r._grade === _surgeGradeFilter);
+
+  if (!filtered.length) {
+    el.innerHTML = `<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px">${_surgeGradeFilter} 등급 종목 없음</div>`;
+    return;
+  }
+
+  // 등급별 그룹핑 (전체 필터 시) 또는 단일 등급
+  const gradeOrder = ['🏆','🥇','🥈','⚡'];
+  const gradesToShow = _surgeGradeFilter === 'all'
+    ? gradeOrder.filter(g => filtered.some(r => r._grade === g))
+    : [_surgeGradeFilter];
+
+  el.innerHTML = renderSurgeHTML(filtered, gradesToShow, _surgeHistMap);
 
 function setEarningsSurgeTab(tab) {
   _earningsSurgeTab = tab;
@@ -874,29 +902,39 @@ async function loadEarningsSurge() {
       const gd = (gradeOrder[b._grade]||0) - (gradeOrder[a._grade]||0);
       return gd !== 0 ? gd : b._score - a._score;
     })
-    .slice(0, 20);
+    .slice(0, 60); // 전체 60개 캐시
 
   if (!surges.length) {
     el.innerHTML = `<div style="padding:1.5rem;text-align:center;color:var(--text3);font-size:12px">기준 충족 종목 없음</div>`;
     return;
   }
 
-  // 급등 종목의 최근 4분기 + 연간 데이터 조회
+  // 급등 종목의 최근 분기 데이터 조회
   const codes = [...new Set(surges.map(r => r.stock_code))];
   const { data: histRows } = await sb.from('financials')
-    .select('corp_name,stock_code,bsns_year,quarter,revenue,operating_profit')
+    .select('corp_name,stock_code,bsns_year,quarter,revenue,operating_profit,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
     .eq('fs_div', 'CFS')
     .in('stock_code', codes)
     .order('bsns_year', { ascending: false })
     .order('quarter', { ascending: false })
     .limit(codes.length * 20);
 
-  // 종목별 히스토리 맵
   const histMap = {};
   (histRows||[]).forEach(r => {
     if (!histMap[r.stock_code]) histMap[r.stock_code] = [];
     histMap[r.stock_code].push(r);
   });
+
+  // 캐시 저장 후 렌더링
+  _surgeAllResults = surges;
+  window._surgeHistMap = histMap;
+  renderSurgeList();
+}
+
+function renderSurgeHTML(surges, gradesToShow, histMap) {
+  const metric = _earningsSurgeTab || 'revenue';
+  const qoqCol = metric === 'revenue' ? 'revenue_qoq' : 'op_profit_qoq';
+  const yoyCol = metric === 'revenue' ? 'revenue_yoy' : 'op_profit_yoy';
 
   const chgBadge = (v, label, prevVal, curVal) => {
     if (v == null) return '';
@@ -958,15 +996,14 @@ async function loadEarningsSurge() {
   };
 
   // 등급별로 그룹핑
+  // 등급별 그룹핑
   const gradeGroups = {};
   surges.forEach(r => {
     if (!gradeGroups[r._grade]) gradeGroups[r._grade] = [];
     gradeGroups[r._grade].push(r);
   });
 
-  const gradeOrder = ['🏆','🥇','🥈','⚡'];
-
-  el.innerHTML = gradeOrder.filter(g => gradeGroups[g]).map(grade => {
+  let html = gradeOrder.filter(g => gradeGroups[g] && (gradesToShow.includes(g))).map(grade => {
     const items = gradeGroups[grade];
     const meta  = GRADE_LABELS[grade];
     return `
@@ -1046,9 +1083,9 @@ async function loadEarningsSurge() {
         </div>`;
       }).join('')}
     </div>`;
-  }).join('') + `<div style="padding:6px 12px;font-size:11px;color:var(--text3)">
-    매출 50억↑ · YoY ${yoyThreshold}%+ 또는 QoQ ${qoqThreshold}%+ · 클릭 시 재무 추이
-  </div>`;
+  }).join('') + `<div style="padding:6px 12px;font-size:11px;color:var(--text3)">매출 50억↑ · S/A/B/관찰 등급 · 클릭 시 재무 추이</div>`;
+  return html;
 }
-
+  return html;
+}
 
