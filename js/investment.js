@@ -777,12 +777,103 @@ async function loadEarningsSurge() {
     targets = Object.values(latestMap);
   }
 
+  // ── 실적 급등 등급 평가 ──
+  const MIN_REVENUE = 5_000_000_000; // 50억 최소 규모
+  const opCol  = 'operating_profit';
+  const opYoy  = 'op_profit_yoy';
+  const opQoq  = 'op_profit_qoq';
+
+  const gradeRow = (r, histAll) => {
+    const rev    = r[metric];
+    const yoy    = r[yoyCol];
+    const qoq    = r[qoqCol];
+    const op     = r[opCol];
+    const opY    = r[opYoy];
+    const revAbs = Math.abs(rev || 0);
+
+    // 규모 필터
+    if (revAbs < MIN_REVENUE) return null;
+
+    // 전년동기 찾기 (베이스효과 감지)
+    const hist = histAll[r.stock_code] || [];
+    const histSorted = [...hist].sort((a,b) =>
+      a.bsns_year !== b.bsns_year ? a.bsns_year.localeCompare(b.bsns_year) : a.quarter.localeCompare(b.quarter));
+    const prevY = hist.find(h => h.bsns_year === String(parseInt(r.bsns_year)-1) && h.quarter === r.quarter);
+    const prevYVal = prevY ? prevY[metric] : null;
+
+    // 베이스효과: 전년동기가 현재의 10% 미만 → 제외
+    if (prevYVal != null && Math.abs(prevYVal) < revAbs * 0.1 && yoy != null && yoy > 200) return null;
+
+    // 영업손실 심화 제외 (매출 늘어도 영업이익이 더 악화)
+    if (op != null && op < 0 && opY != null && opY < -50) return null;
+
+    let grade = null, score = 0;
+
+    // 🏆 최상: YoY 30%↑ + 영업이익 동반 성장 + 연속성
+    if (yoy != null && yoy >= 30 && opY != null && opY >= 20) {
+      const curIdx = histSorted.findIndex(h => h.bsns_year === r.bsns_year && h.quarter === r.quarter);
+      const prevQ  = curIdx > 0 ? histSorted[curIdx-1] : null;
+      const prevY2 = hist.find(h => h.bsns_year === String(parseInt(r.bsns_year)-2) && h.quarter === r.quarter);
+      const continuous = prevQ && prevQ[yoyCol] >= 20;
+      if (continuous || (prevY2 && prevY2[metric] < (prevYVal||0))) {
+        grade = '🏆'; score = 100 + (yoy || 0) + (opY || 0);
+      }
+    }
+
+    // 🥇 상: YoY 30%↑ + 흑자전환 또는 영업이익 성장
+    if (!grade && yoy != null && yoy >= 30) {
+      const isBlackTurn = prevYVal != null && prevYVal < 0 && (rev || 0) > 0;
+      const opGood = opY != null && opY >= 0;
+      if (isBlackTurn || opGood) {
+        grade = '🥇'; score = 80 + (yoy || 0);
+      }
+    }
+
+    // 🥈 중: YoY 20%↑ + 수익성 유지 (영업이익 흑자)
+    if (!grade && yoy != null && yoy >= yoyThreshold && op != null && op >= 0) {
+      grade = '🥈'; score = 50 + (yoy || 0);
+    }
+
+    // ⚡ 주목: QoQ만이지만 추세전환 신호 (YoY는 기준 미달)
+    if (!grade && qoq != null && qoq >= qoqThreshold) {
+      const curIdx = histSorted.findIndex(h => h.bsns_year === r.bsns_year && h.quarter === r.quarter);
+      const p1 = curIdx > 0 ? histSorted[curIdx-1] : null;
+      const p2 = curIdx > 1 ? histSorted[curIdx-2] : null;
+      const isTurn = p1 && p2 && p1[metric] < p2[metric] && rev > p1[metric]; // 하락 후 반등
+      const isBlack = p1 && p1[metric] < 0 && rev > 0; // 적자→흑자
+      if (isTurn || isBlack) {
+        grade = '⚡'; score = 30 + (qoq || 0);
+      }
+    }
+
+    if (!grade) return null;
+    return { ...r, _grade: grade, _score: score };
+  };
+
+  // histRows 미리 조회 (등급 평가용)
+  const previewCodes = [...new Set(targets.map(r => r.stock_code))].slice(0, 200);
+  const { data: previewHist } = await sb.from('financials')
+    .select('stock_code,bsns_year,quarter,revenue,operating_profit,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
+    .eq('fs_div', 'CFS')
+    .in('stock_code', previewCodes)
+    .order('bsns_year', { ascending: false })
+    .order('quarter', { ascending: false })
+    .limit(previewCodes.length * 12);
+
+  const previewHistMap = {};
+  (previewHist||[]).forEach(r => {
+    if (!previewHistMap[r.stock_code]) previewHistMap[r.stock_code] = [];
+    previewHistMap[r.stock_code].push(r);
+  });
+
   const surges = targets
-    .filter(r => r[metric] != null && (
-      (r[qoqCol] != null && r[qoqCol] >= qoqThreshold) ||
-      (r[yoyCol] != null && r[yoyCol] >= yoyThreshold)
-    ))
-    .sort((a,b) => Math.max(b[qoqCol]??-999,b[yoyCol]??-999) - Math.max(a[qoqCol]??-999,a[yoyCol]??-999))
+    .map(r => gradeRow(r, previewHistMap))
+    .filter(Boolean)
+    .sort((a,b) => {
+      const gradeOrder = {'🏆':4,'🥇':3,'🥈':2,'⚡':1};
+      const gd = (gradeOrder[b._grade]||0) - (gradeOrder[a._grade]||0);
+      return gd !== 0 ? gd : b._score - a._score;
+    })
     .slice(0, 20);
 
   if (!surges.length) {
@@ -937,6 +1028,7 @@ async function loadEarningsSurge() {
       <div style="min-width:0;padding-right:12px;border-right:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
           <span style="font-size:11px;color:var(--text3);font-weight:600;width:16px">${i+1}</span>
+          <span style="font-size:15px">${r._grade}</span>
           <span style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.corp_name}</span>
         </div>
         <div style="display:flex;align-items:baseline;gap:6px;padding-left:22px">
@@ -972,7 +1064,7 @@ async function loadEarningsSurge() {
       </div>
     </div>`;
   }).join('') + `<div style="padding:6px 12px;font-size:11px;color:var(--text3)">
-    QoQ ${qoqThreshold}% 또는 YoY ${yoyThreshold}% 이상 · 클릭 시 재무 추이
+    QoQ ${qoqThreshold}% 또는 YoY ${yoyThreshold}% 이상 · 50억↑ · 🏆최상 🥇상 🥈중 ⚡추세전환 · 클릭 시 재무 추이
   </div>`;
 }
 
