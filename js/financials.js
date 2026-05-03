@@ -379,13 +379,16 @@ async function openFinTrend(stockCode, corpName) {
   document.body.appendChild(overlay);
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 
-  const { data: rawData, error } = await sb.from('financials')
-    .select('bsns_year,quarter,fs_div,revenue,gross_profit,cogs,sga,rd_expense,operating_profit,net_income,operating_margin,gross_margin,sga_ratio,net_margin,cogs_ratio,roe,roa,current_ratio,debt_ratio,total_assets,total_equity,total_liabilities,current_assets,current_liabilities,operating_cashflow,investing_cashflow,financing_cashflow,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
-    .eq('stock_code', stockCode)
-    .eq('fs_div', 'CFS')
-    .order('bsns_year', { ascending: true })
-    .order('quarter', { ascending: true })
-    .limit(24);
+  const [{ data: rawData, error }, { data: gradeHist }] = await Promise.all([
+    sb.from('financials')
+      .select('bsns_year,quarter,fs_div,revenue,gross_profit,cogs,sga,rd_expense,operating_profit,net_income,operating_margin,gross_margin,sga_ratio,net_margin,cogs_ratio,roe,roa,current_ratio,debt_ratio,total_assets,total_equity,total_liabilities,current_assets,current_liabilities,operating_cashflow,investing_cashflow,financing_cashflow,revenue_yoy,revenue_qoq,op_profit_yoy,op_profit_qoq')
+      .eq('stock_code', stockCode).eq('fs_div', 'CFS')
+      .order('bsns_year', { ascending: true }).order('quarter', { ascending: true }).limit(24),
+    sb.from('earnings_grade_history')
+      .select('bsns_year,quarter,grade')
+      .eq('stock_code', stockCode)
+      .order('bsns_year', { ascending: true }).order('quarter', { ascending: true }),
+  ]);
 
   const body = document.getElementById('fin-trend-body');
   if (error || !rawData?.length) { body.innerHTML = emptyHTML(); return; }
@@ -540,6 +543,33 @@ async function openFinTrend(stockCode, corpName) {
           oninput="window._finChartHeight=parseInt(this.value);document.getElementById('fin-chart-wrap').style.height=this.value+'px';document.getElementById('fin-chart-size').textContent=this.value+'px';if(window._finChartInst)window._finChartInst.resize()">
         <span style="font-size:11px;color:var(--text3);min-width:36px" id="fin-chart-size">${window._finChartHeight||240}px</span>
       </div>
+
+      <!-- 등급 이력 -->
+      ${(() => {
+        if (!gradeHist?.length) return '';
+        const GRADE_COLORS = {'S':'#ffd600','A':'#fb6340','B':'#2AABEE','관찰':'#2dce89'};
+        const gradeMap = {};
+        (gradeHist||[]).forEach(h => { gradeMap[`${h.bsns_year}-${h.quarter}`] = h.grade; });
+        const quarters = isAnnual ? [] : chartSrc;
+        if (!quarters.length) return '';
+        return `<div style="margin-bottom:1rem">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:.5rem">분기별 실적 등급</div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap">
+            ${chartSrc.map(r => {
+              const key   = `${r.bsns_year}-${r.quarter}`;
+              const grade = gradeMap[key];
+              const color = GRADE_COLORS[grade];
+              return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+                <div style="font-size:9px;color:var(--text3)">${r.bsns_year.slice(2)}${r.quarter}</div>
+                ${grade
+                  ? `<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:4px;background:${color}22;color:${color};border:1px solid ${color}40">${grade}급</span>`
+                  : `<span style="font-size:10px;padding:1px 7px;border-radius:4px;color:var(--text3);border:1px solid var(--border)">—</span>`
+                }
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+      })()}
 
       <!-- 손익계산서 -->
       <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:.5rem">손익계산서</div>
