@@ -813,19 +813,26 @@ async function loadEarningsSurge() {
     return `<span style="font-size:11px;color:${color}">${v>0?'▲':'▼'}${Math.abs(v).toFixed(1)}% <span style="color:var(--text3);font-size:10px">${label}</span></span>`;
   };
 
-  const renderSparkBars = (hist, metric) => {
-    // 최근 4분기
-    const q4 = hist.slice(0, 4).reverse();
-    if (!q4.length) return '';
-    const maxVal = Math.max(...q4.map(r => Math.abs(r[metric]||0)));
-    if (!maxVal) return '';
-    return q4.map(r => {
-      const val = r[metric] || 0;
+  // 연간 집계 함수
+  const calcAnnual = (hist, metric) => {
+    const byYear = {};
+    hist.forEach(r => {
+      if (!byYear[r.bsns_year]) byYear[r.bsns_year] = 0;
+      byYear[r.bsns_year] += (r[metric] || 0);
+    });
+    return Object.entries(byYear)
+      .sort(([a],[b]) => a.localeCompare(b))
+      .slice(-3); // 최근 3년
+  };
+
+  const renderBars = (items, maxVal, labelFn) => {
+    if (!items.length || !maxVal) return '';
+    return items.map(([label, val]) => {
       const pct = Math.abs(val) / maxVal * 100;
-      const color = val >= 0 ? 'var(--red)' : 'var(--blue)';
-      return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1">
-        <div style="font-size:9px;color:var(--text3)">${r.bsns_year.slice(2)}${r.quarter}</div>
-        <div style="width:100%;background:var(--bg3);border-radius:2px;height:36px;display:flex;align-items:flex-end">
+      const color = val >= 0 ? '#2AABEE' : 'var(--red)';
+      return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;min-width:0">
+        <div style="font-size:9px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">${labelFn(label)}</div>
+        <div style="width:100%;background:var(--bg3);border-radius:2px;height:32px;display:flex;align-items:flex-end">
           <div style="width:100%;background:${color};border-radius:2px;height:${Math.max(pct,3)}%;opacity:0.85"></div>
         </div>
         <div style="font-size:9px;color:var(--text2);white-space:nowrap">${fmtCap(val)}</div>
@@ -835,28 +842,51 @@ async function loadEarningsSurge() {
 
   el.innerHTML = surges.map((r, i) => {
     const hist = histMap[r.stock_code] || [];
-    const sparkBars = renderSparkBars(hist, metric);
+
+    // 분기 (최근 6분기)
+    const qData = hist.slice(0, 6).reverse().map(h => [h.bsns_year+h.quarter, h[metric]||0]);
+    const qMax  = Math.max(...qData.map(([,v]) => Math.abs(v)), 1);
+
+    // 연간 (최근 3년)
+    const yData = calcAnnual(hist, metric);
+    const yMax  = Math.max(...yData.map(([,v]) => Math.abs(v)), 1);
+
     return `
-    <div style="display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer"
+    <div style="display:grid;grid-template-columns:200px 1fr 1fr;align-items:center;gap:0;padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer"
       onclick="openFinTrend('${r.stock_code}','${r.corp_name}')"
       onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
-      <div style="min-width:0">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <span style="font-size:12px;color:var(--text3);font-weight:600;width:18px">${i+1}</span>
-          <span style="font-size:14px;font-weight:600">${r.corp_name}</span>
-          <span style="font-size:10px;color:var(--text3)">${r.bsns_year} ${r.quarter}</span>
-          <span style="font-size:13px;font-weight:700;margin-left:auto">${fmtCap(r[metric])}</span>
+
+      <!-- 종목 정보 -->
+      <div style="min-width:0;padding-right:12px;border-right:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+          <span style="font-size:11px;color:var(--text3);font-weight:600;width:16px">${i+1}</span>
+          <span style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.corp_name}</span>
         </div>
-        <div style="display:flex;gap:8px;padding-left:26px">
+        <div style="display:flex;align-items:baseline;gap:6px;padding-left:22px">
+          <span style="font-size:14px;font-weight:700">${fmtCap(r[metric])}</span>
+          <span style="font-size:10px;color:var(--text3)">${r.bsns_year} ${r.quarter}</span>
+        </div>
+        <div style="display:flex;gap:6px;padding-left:22px;margin-top:3px;flex-wrap:wrap">
           ${chgBadge(r[qoqCol], 'QoQ')}
           ${chgBadge(r[yoyCol], 'YoY')}
         </div>
       </div>
-      <!-- 미니 바 차트 (최근 4분기) -->
-      ${sparkBars ? `
-      <div style="display:flex;gap:3px;align-items:flex-end;width:100px;height:60px">
-        ${sparkBars}
-      </div>` : ''}
+
+      <!-- 분기별 차트 -->
+      <div style="padding:0 12px;border-right:1px solid var(--border)">
+        <div style="font-size:10px;color:var(--text3);margin-bottom:4px">분기별</div>
+        <div style="display:flex;gap:3px;align-items:flex-end;height:50px">
+          ${renderBars(qData, qMax, k => k.slice(2,4)+''+k.slice(4))}
+        </div>
+      </div>
+
+      <!-- 연간 차트 -->
+      <div style="padding:0 12px">
+        <div style="font-size:10px;color:var(--text3);margin-bottom:4px">연간</div>
+        <div style="display:flex;gap:4px;align-items:flex-end;height:50px">
+          ${renderBars(yData, yMax, k => k+'년')}
+        </div>
+      </div>
     </div>`;
   }).join('') + `<div style="padding:6px 12px;font-size:11px;color:var(--text3)">
     QoQ ${qoqThreshold}% 또는 YoY ${yoyThreshold}% 이상 · 클릭 시 재무 추이
