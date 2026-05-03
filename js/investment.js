@@ -672,7 +672,8 @@ async function loadTodayDisclosures() {
 }
 
 // ── 실적 급등 종목 ──
-let _earningsMetric = 'revenue';
+let _earningsMetric    = 'revenue';
+let _earningsSurgeTab  = 'revenue';
 
 function setEarningsMetric(el, metric) {
   _earningsMetric = metric;
