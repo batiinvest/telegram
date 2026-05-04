@@ -190,6 +190,7 @@ function setInvTab(tab) {
   document.getElementById('inv-tab-market').style.display     = tab === 'market'     ? 'block' : 'none';
   document.getElementById('inv-tab-disclosure').style.display = tab === 'disclosure' ? 'block' : 'none';
   if (tab === 'disclosure') {
+    _allDiscLoaded = false;  // 탭 재진입 시 전체공시 재로드 허용
     loadTodayDisclosures();
     loadEarningsSurge();
   }
@@ -202,6 +203,7 @@ async function loadInvestment() {
 
   // 공시 탭이 활성화된 경우에만 로드
   if (window._invTab === 'disclosure') {
+    _allDiscLoaded = false;  // 새로고침 시 전체공시 재로드 허용
     loadTodayDisclosures();
     loadEarningsSurge();
   }
@@ -643,9 +645,13 @@ async function loadTodayDisclosures() {
     return;
   }
 
-  // 날짜 표시 (description에서 추출)
+  // 날짜 표시 (description에서 추출, YYYYMMDD → YYYY-MM-DD 자동 변환)
   if (dateEl && cfg.description) {
-    dateEl.textContent = cfg.description.replace(' 실적 공시 종목 목록', '') + ' 기준';
+    let dateStr = cfg.description.replace(' 실적 공시 종목 목록', '').trim();
+    if (/^\d{8}$/.test(dateStr)) {
+      dateStr = dateStr.slice(0,4) + '-' + dateStr.slice(4,6) + '-' + dateStr.slice(6,8);
+    }
+    dateEl.textContent = dateStr + ' 기준';
   }
 
   // 보고서 종류별 배지 색상
