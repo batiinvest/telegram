@@ -34,7 +34,7 @@ function pInvestment() {
     </div>
     <div style="display:flex;align-items:center;gap:8px">
       <div style="font-size:12px;color:var(--text3)" id="inv-date"></div>
-      <button class="btn btn-sm" onclick="loadInvestment()">🔄 새로고침</button>
+      <button class="btn btn-sm" onclick="refreshInvestment()">🔄 새로고침</button>
     </div>
   </div>
 
@@ -194,6 +194,34 @@ function setInvTab(tab) {
     loadTodayDisclosures();
     loadEarningsSurge();
   }
+}
+
+// ── 새로고침 — 공시 탭이면 백엔드 수집 트리거 후 로드 ──
+async function refreshInvestment() {
+  if (window._invTab === 'disclosure') {
+    // run_disclosure_flag 업데이트 → 봇이 1분 내 job_collect_financials 실행
+    try {
+      await sb.from('app_config').upsert({
+        key: 'run_disclosure_flag',
+        value: String(Date.now()),
+        description: '대시보드 공시수집 수동 트리거'
+      }, { onConflict: 'key' });
+      toast('📡 공시 수집 요청 완료 — 봇이 1분 내 업데이트합니다', 'info');
+    } catch(e) {
+      toast('트리거 전송 실패: ' + e.message, 'error');
+    }
+    // DB 업데이트 대기 후 화면 갱신 (60초 후 자동 리로드)
+    setTimeout(() => {
+      if (window._invTab === 'disclosure') {
+        _allDiscLoaded = false;
+        loadTodayDisclosures();
+        loadEarningsSurge();
+        toast('✓ 공시 목록 새로고침 완료', 'success');
+      }
+    }, 62000);
+  }
+  // 항상 현재 화면은 즉시 갱신
+  loadInvestment();
 }
 
 // ── 메인 로드 ──
