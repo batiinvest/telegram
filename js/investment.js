@@ -683,18 +683,22 @@ async function loadTodayDisclosures() {
   }
 
   // 보고서 종류별 배지 색상
-  const reprtColor = (nm) => {
-    if (nm.includes('사업보고서')) return { bg:'rgba(42,171,238,.15)', color:'#2AABEE', label:'연간' };
-    if (nm.includes('반기'))      return { bg:'rgba(45,206,137,.15)', color:'#2dce89', label:'반기' };
-    if (nm.includes('분기'))      return { bg:'rgba(251,99,64,.15)',  color:'#fb6340', label:'분기' };
-    return                               { bg:'rgba(139,144,167,.15)', color:'#8b90a7', label:'공시' };
+  const reprtColor = (nm, isAmended) => {
+    const base = nm.includes('사업보고서') ? { bg:'rgba(42,171,238,.15)',  color:'#2AABEE', label:'연간' }
+                : nm.includes('반기')      ? { bg:'rgba(45,206,137,.15)',  color:'#2dce89', label:'반기' }
+                : nm.includes('분기')      ? { bg:'rgba(251,99,64,.15)',   color:'#fb6340', label:'분기' }
+                :                            { bg:'rgba(139,144,167,.15)', color:'#8b90a7', label:'공시' };
+    if (isAmended) {
+      return { ...base, label: base.label + '(정정)', bg:'rgba(253,203,110,.15)', color:'#f59e0b' };
+    }
+    return base;
   };
 
   el.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;padding:.75rem 1rem">
       ${corps.map(c => {
-        const badge = reprtColor(c.report_nm || '');
-        return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg3);border-radius:var(--radius-sm);border:1px solid var(--border)">
+        const badge = reprtColor(c.report_nm || '', c.is_amended);
+        return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--bg3);border-radius:var(--radius-sm);border:1px solid ${c.is_amended ? 'rgba(245,158,11,.3)' : 'var(--border)'}">
           <span style="font-size:10px;padding:2px 6px;border-radius:100px;background:${badge.bg};color:${badge.color};font-weight:600;white-space:nowrap">${badge.label}</span>
           <span style="font-size:13px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.corp_name}</span>
         </div>`;
