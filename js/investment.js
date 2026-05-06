@@ -196,31 +196,38 @@ function setInvTab(tab) {
   }
 }
 
-// ── 새로고침 — 공시 탭이면 백엔드 수집 트리거 후 로드 ──
+// ── 새로고침 ──────────────────────────────────────────────────
 async function refreshInvestment() {
   if (window._invTab === 'disclosure') {
-    // run_disclosure_flag 업데이트 → 봇이 1분 내 job_collect_financials 실행
+    // 1) 전체공시 패널 플래그 리셋 — DB에 이미 있는 오늘 데이터 즉시 반영
+    _allDiscLoaded = false;
+
+    // 2) 실적공시 + 실적급등 즉시 재로드
+    loadTodayDisclosures();
+    loadEarningsSurge();
+
+    // 3) 전체공시 패널이 열려있으면 즉시 재로드
+    const panel = document.getElementById('inv-all-disclosure');
+    if (panel && panel.style.display !== 'none') {
+      loadAllDisclosures();
+    }
+
+    // 4) 봇 트리거 — DART에서 오늘 공시를 아직 못 가져온 경우 백엔드에 수집 요청
     try {
       await sb.from('app_config').upsert({
         key: 'run_disclosure_flag',
         value: String(Date.now()),
         description: '대시보드 공시수집 수동 트리거'
       }, { onConflict: 'key' });
-      toast('📡 공시 수집 요청 완료 — 봇이 1분 내 업데이트합니다', 'info');
+      toast('📡 DART 공시 수집 요청 — 봇이 1분 내 업데이트합니다', 'info');
     } catch(e) {
       toast('트리거 전송 실패: ' + e.message, 'error');
     }
-    // DB 업데이트 대기 후 화면 갱신 (60초 후 자동 리로드)
-    setTimeout(() => {
-      if (window._invTab === 'disclosure') {
-        _allDiscLoaded = false;
-        loadTodayDisclosures();
-        loadEarningsSurge();
-        toast('✓ 공시 목록 새로고침 완료', 'success');
-      }
-    }, 62000);
+
+    return; // 공시 탭은 여기서 종료 (시황 탭 로직 스킵)
   }
-  // 항상 현재 화면은 즉시 갱신
+
+  // 시황 탭은 전체 재로드
   loadInvestment();
 }
 

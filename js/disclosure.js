@@ -23,6 +23,8 @@ async function loadAllDisclosures() {
   const el = document.getElementById('inv-all-disclosure-list');
   if (!el) return;
 
+  el.innerHTML = `<div style="padding:1.25rem;text-align:center;color:var(--text3);font-size:12px"><span class="loading"></span> 공시 목록 불러오는 중...</div>`;
+
   const { data: cfg } = await sb.from('app_config')
     .select('value').eq('key', 'today_all_disclosures').single();
 
