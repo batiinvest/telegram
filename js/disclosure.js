@@ -46,6 +46,7 @@ async function loadAllDisclosures() {
     { label: '사업보고서',  color: '#2AABEE', bg: 'rgba(42,171,238,.12)',  match: ['사업보고서'] },
     { label: '반기보고서',  color: '#2dce89', bg: 'rgba(45,206,137,.12)',  match: ['반기보고서'] },
     { label: '분기보고서',  color: '#fb6340', bg: 'rgba(251,99,64,.12)',   match: ['분기보고서'] },
+    { label: '기업설명회(IR)', color: '#22d3ee', bg: 'rgba(34,211,238,.12)',  match: ['기업설명회', 'IR개최', 'NDR'] },
     { label: '잠정실적',    color: '#f59e0b', bg: 'rgba(245,158,11,.12)',  match: ['잠정', '결산실적', '실적(공정공시)'] },
     { label: '주요사항',    color: '#ffd600', bg: 'rgba(255,214,0,.12)',   match: ['주요사항보고'] },
     { label: '증자/감자',   color: '#a78bfa', bg: 'rgba(167,139,250,.12)', match: ['유상증자', '무상증자', '감자'] },
