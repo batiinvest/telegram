@@ -82,29 +82,67 @@ async function loadAllDisclosures() {
   const dartLink = (d) =>
     d.rcept_no ? `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${d.rcept_no}` : null;
 
+  // insider_trades DB에서 오늘 지분변동 조회
+  const today = new Date().toISOString().slice(0, 10);
+  let insiderMap = {};  // rcept_no → [rows]
+  try {
+    const { data: insiders } = await sb.from('insider_trades')
+      .select('rcept_no,reporter,relation,trade_date,reason,shares_change,shares_after,price,stock_type')
+      .eq('base_date', today);
+    (insiders || []).forEach(r => {
+      if (!insiderMap[r.rcept_no]) insiderMap[r.rcept_no] = [];
+      insiderMap[r.rcept_no].push(r);
+    });
+  } catch(e) { /* insider_trades 없으면 무시 */ }
+
+  const fmtShares = n => n != null ? Math.abs(n).toLocaleString() + '주' : '';
+  const reasonBadge = (rows) => {
+    if (!rows?.length) return '';
+    // 취득/처분 집계
+    let buy = 0, sell = 0, other = 0;
+    rows.forEach(r => {
+      const chg = r.shares_change || 0;
+      if (chg > 0) buy += chg;
+      else if (chg < 0) sell += Math.abs(chg);
+      else other++;
+    });
+    const parts = [];
+    if (buy)   parts.push(`<span style="color:var(--red);font-size:10px;font-weight:600">▲취득 ${buy.toLocaleString()}주</span>`);
+    if (sell)  parts.push(`<span style="color:var(--blue);font-size:10px;font-weight:600">▼처분 ${sell.toLocaleString()}주</span>`);
+    if (other && !buy && !sell) parts.push(`<span style="color:var(--text3);font-size:10px">기타</span>`);
+    return parts.join(' ');
+  };
+
   const catHTML = CATEGORIES.map(cat => {
     const items = categorized[cat.label];
     if (!items.length) return '';
+
+    const isInsider = cat.label === '지분공시';
+
     return `
       <div style="padding:.75rem 1rem;border-bottom:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
           <span style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:100px;background:${cat.bg};color:${cat.color}">${cat.label}</span>
           <span style="font-size:11px;color:var(--text3)">${items.length}건</span>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(${isInsider?'240':'180'}px,1fr));gap:6px">
           ${items.map(d => {
             const link = dartLink(d);
-            const inner = `
-              <span style="font-size:12px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                    title="${d.report_nm}">${d.corp_name}</span>
-              ${link ? `<a href="${link}" target="_blank"
-                  style="font-size:10px;color:var(--tg);flex-shrink:0;text-decoration:none"
-                  onclick="event.stopPropagation()" title="${d.report_nm}">DART↗</a>` : ''}`;
-            return `<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;
+            const insider = isInsider ? insiderMap[d.rcept_no] : null;
+            const badge   = reasonBadge(insider);
+            return `<div style="display:flex;flex-direction:column;gap:3px;padding:6px 10px;
                 background:var(--bg3);border-radius:var(--radius-sm);
-                border:1px solid var(--border);cursor:${link?'pointer':'default'}"
+                border:1px solid ${badge ? 'var(--border2)' : 'var(--border)'};
+                cursor:${link?'pointer':'default'}"
                 ${link ? `onclick="window.open('${link}','_blank')"` : ''}>
-              ${inner}
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="font-size:12px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                      title="${d.report_nm}">${d.corp_name}</span>
+                ${link ? `<a href="${link}" target="_blank"
+                    style="font-size:10px;color:var(--tg);flex-shrink:0;text-decoration:none"
+                    onclick="event.stopPropagation()" title="${d.report_nm}">DART↗</a>` : ''}
+              </div>
+              ${badge ? `<div style="display:flex;gap:6px;flex-wrap:wrap">${badge}</div>` : ''}
             </div>`;
           }).join('')}
         </div>
