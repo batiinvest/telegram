@@ -77,9 +77,9 @@ async function loadAllDisclosures() {
     if (!matched) categorized['기타'].push(d);
   });
 
-  // DART 원본 링크 생성
-  const dartLink = (rcept_no) =>
-    rcept_no ? `https://dart.fss.or.kr/dsaf001/main.do?rcept_no=${rcept_no}` : null;
+  // DART 원본 링크 — rcpNo 파라미터 사용
+  const dartLink = (d) =>
+    d.rcept_no ? `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${d.rcept_no}` : null;
 
   const catHTML = CATEGORIES.map(cat => {
     const items = categorized[cat.label];
@@ -92,7 +92,7 @@ async function loadAllDisclosures() {
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">
           ${items.map(d => {
-            const link = dartLink(d.rcept_no);
+            const link = dartLink(d);
             const inner = `
               <span style="font-size:12px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
                     title="${d.report_nm}">${d.corp_name}</span>
