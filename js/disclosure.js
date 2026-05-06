@@ -98,6 +98,13 @@ async function loadTodayDisclosures() {
   const dateEl = document.getElementById('inv-disclosure-date');
   if (!el) return;
 
+  // 날짜는 항상 오늘 날짜로 표시 (DB description 의존 제거)
+  if (dateEl) {
+    const _d = new Date();
+    const today = `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;
+    dateEl.textContent = today + ' 기준';
+  }
+
   const { data: cfg } = await sb.from('app_config')
     .select('value,description')
     .eq('key', 'today_earnings_corps')
@@ -116,15 +123,6 @@ async function loadTodayDisclosures() {
   if (!corps.length) {
     el.innerHTML = `<div style="padding:1.25rem;text-align:center;color:var(--text3);font-size:12px">오늘 실적 공시 없음</div>`;
     return;
-  }
-
-  // 날짜 표시 (description에서 추출, YYYYMMDD → YYYY-MM-DD 자동 변환)
-  if (dateEl && cfg.description) {
-    let dateStr = cfg.description.replace(' 실적 공시 종목 목록', '').trim();
-    if (/^\d{8}$/.test(dateStr)) {
-      dateStr = dateStr.slice(0,4) + '-' + dateStr.slice(4,6) + '-' + dateStr.slice(6,8);
-    }
-    dateEl.textContent = dateStr + ' 기준';
   }
 
   // 보고서 종류별 배지 색상

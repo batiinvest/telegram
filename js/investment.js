@@ -230,6 +230,12 @@ async function loadInvestment() {
   loadMacroData();
   loadTrendChart();
 
+  // 우상단 날짜 — 오늘 날짜 즉시 표시 (market_data 조회 전에도 보임)
+  const _today = new Date();
+  const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
+  const dateEl = document.getElementById('inv-date');
+  if (dateEl) dateEl.textContent = `기준: ${todayStr}`;
+
   // 공시 탭이 활성화된 경우에만 로드
   if (window._invTab === 'disclosure') {
     _allDiscLoaded = false;  // 새로고침 시 전체공시 재로드 허용
@@ -240,8 +246,6 @@ async function loadInvestment() {
   const { data: dateRow } = await sb.from('market_data')
     .select('base_date').order('base_date', { ascending: false }).limit(1);
   const maxDate = dateRow?.[0]?.base_date;
-  const dateEl = document.getElementById('inv-date');
-  if (dateEl) dateEl.textContent = maxDate ? `기준: ${maxDate}` : '';
   if (!maxDate) return;
 
   // 전체 종목 + 산업별 동향
