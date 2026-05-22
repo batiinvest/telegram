@@ -155,7 +155,6 @@ class DartRoutingBot:
     def __init__(self):
         self.base_url = "https://opendart.fss.or.kr/api/list.json"
         self.history  = HistoryManager("sent_list.txt", max_len=2000)
-        self.company_to_industry = COMPANY_TO_INDUSTRY
         self.ai_executor = ThreadPoolExecutor(max_workers=2)
         self.session = get_session()
 
@@ -209,6 +208,14 @@ class DartRoutingBot:
                     _bridge.heartbeat("dart_bot")
                 except Exception:
                     pass
+                try:
+                    if _bridge.check_reload_flag():
+                        from config import reload_company_data
+                        reload_company_data()
+                        _load_dart_filters()
+                        logging.info("🔄 [main] 종목 데이터 재로드 완료")
+                except Exception as _re:
+                    logging.debug(f"reload_flag 체크 오류: {_re}")
 
             now = market_timer.get_now()
             if not market_timer.is_weekday():
@@ -272,7 +279,7 @@ class DartRoutingBot:
                             msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix)
 
                             # ── 채널 라우팅 ──
-                            industry = self.company_to_industry.get(corp_name)
+                            industry = COMPANY_TO_INDUSTRY.get(corp_name)
 
                             if level == 'urgent':
                                 # 긴급: 메인 + 산업 + 기업
