@@ -66,6 +66,9 @@ ACCOUNT_MAP = {
     "수익":                      "revenue",   # 일부 종목
     "매출액 및 지분법손익":          "revenue",   # 솔브레인홀딩스 등 지주사
     "순이자이익":                  "revenue",   # 은행/금융지주 전용
+    "보험료수익":                  "revenue",   # 보험사
+    "순수수료이익":                 "revenue",   # 증권사
+    "영업수익(매출액)":             "revenue",   # 일부 변형
     # 영업이익 — 이익/손실/손익 모든 변형
     "매출총이익":                  "gross_profit",
     "매출총손실":                  "gross_profit",
@@ -80,6 +83,8 @@ ACCOUNT_MAP = {
     # "영업비용": sga 제거 — 영업비용은 매출원가+판관비+R&D 합계 계정이라 이중계산됨
     "연구개발비":                  "rd_expense",   # R&D 별도 계정
     "경상개발비":                  "rd_expense",   # 한미약품 등
+    "연구개발비용":                 "rd_expense",   # 변형
+    "연구비":                     "rd_expense",   # 일부 기업
     "기타영업수익":                 "other_operating_income",
     "기타영업외수익":               "other_operating_income",
     "기타영업수익(비용)":            "other_operating_income",
@@ -133,15 +138,32 @@ ACCOUNT_MAP = {
     "법인세차감전순손실":            "pretax_income",   # 제이엘케이 등
     "법인세차감전순이익":            "pretax_income",
     "법인세차감전순손익":            "pretax_income",
+    "법인세차감전이익":              "pretax_income",   # "순"자 없는 변형
+    "법인세차감전손실":              "pretax_income",
+    "법인세차감전이익(손실)":         "pretax_income",
     # 재무상태표
     "자산총계":                   "total_assets",
+    "자산 합계":                  "total_assets",
+    "자산합계":                   "total_assets",
     "부채총계":                   "total_liabilities",
+    "부채 합계":                  "total_liabilities",
+    "부채합계":                   "total_liabilities",
     "자본총계":                   "total_equity",
+    "자본 합계":                  "total_equity",
+    "자본합계":                   "total_equity",
     "유동자산":                   "current_assets",
+    "유동자산합계":                 "current_assets",
+    "유동자산 합계":               "current_assets",
     "유동부채":                   "current_liabilities",
+    "유동부채합계":                 "current_liabilities",
+    "유동부채 합계":               "current_liabilities",
     "비유동자산":                  "non_current_assets",
+    "비유동자산합계":               "non_current_assets",
+    "비유동자산 합계":              "non_current_assets",
     "자본금":                    "capital_stock",
     "이익잉여금":                  "retained_earnings",
+    "이익잉여금(결손금)":            "retained_earnings",   # 적자 기업
+    "미처분이익잉여금":              "retained_earnings",
     # 현금흐름
     "영업활동 현금흐름":             "operating_cashflow",
     "영업활동으로 인한 현금흐름":      "operating_cashflow",
@@ -203,8 +225,12 @@ ACCOUNT_PATTERNS = [
     (["법인세비용차감전", "순손익"],    ["주당"],                    "pretax_income"),
     # 재무상태표
     (["자산총계"],                   [],                         "total_assets"),
+    (["자산합계"],                   [],                         "total_assets"),
     (["부채총계"],                   [],                         "total_liabilities"),
+    (["부채합계"],                   [],                         "total_liabilities"),
     (["자본총계"],                   [],                         "total_equity"),
+    (["자본합계"],                   [],                         "total_equity"),
+    (["이익잉여금"],                  ["처분"],                    "retained_earnings"),
     # 현금흐름 — "영업/투자/재무" + "현금흐름" 포함
     (["영업활동", "현금흐름"],         [],                         "operating_cashflow"),
     (["영업활동", "현금"],            ["유출","유입","창출","변동"],  "operating_cashflow"),
@@ -618,7 +644,7 @@ def collect_one(dart, corp_code: str, stock_code: str, corp_name: str,
             if not col:
                 continue
             amt = parse_amount(str(r.get("thstrm_amount", "")))
-            if amt is None or amt == 0:
+            if amt is None:
                 continue
 
             if col == 'revenue':
@@ -632,6 +658,11 @@ def collect_one(dart, corp_code: str, stock_code: str, corp_name: str,
                         log.debug(f"[우선순위] {corp_name} revenue: {candidate[col][1]} → {acct}")
                         candidate[col] = (amt, acct)
             elif col not in candidate:
+                # 첫 등장: 0이라도 일단 저장 (DART에서 실제 0 보고한 경우)
+                candidate[col] = (amt, acct)
+            elif candidate[col][0] == 0 and amt != 0:
+                # 기존에 0이 저장됐는데 뒤에 실제값(비-0)이 나오면 교체
+                log.debug(f"[0→실제값] {corp_name} {col}: 0 → {amt}")
                 candidate[col] = (amt, acct)
 
         for col, (amt, _) in candidate.items():
