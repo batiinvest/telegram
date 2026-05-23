@@ -383,11 +383,15 @@ try:
         CHAT_IDS_BY_CODE = _bridge.chat_ids_by_code
         logging.info(f"✅ [Bridge] 코드 기준 채팅방 {len(CHAT_IDS_BY_CODE)}개 로드")
 
-    # rooms 테이블에서 INDUSTRY_CHAT_IDS 덮어쓰기 (하드코딩 대체)
+    # 산업 채팅방 — 하드코딩값을 rooms 테이블에 시드 후 DB로만 로드
+    _bridge.seed_industry_rooms(INDUSTRY_CHAT_IDS)
+    INDUSTRY_CHAT_IDS = {}  # 하드코딩값 제거, DB만 사용
     _db_ind_chat = _bridge.get_industry_chat_ids()
     if _db_ind_chat:
         INDUSTRY_CHAT_IDS = _db_ind_chat
         logging.info(f"✅ [Bridge] 산업 채팅방 {len(INDUSTRY_CHAT_IDS)}개 rooms 테이블에서 로드")
+    else:
+        logging.warning("⚠️ [Bridge] rooms 테이블에 산업 채팅방 없음 — 대시보드에서 등록하세요")
 
     # 산업별 뉴스 검색어 — DB 값으로 완전 대체 (merge 아님)
     _db_news_terms = _bridge.get_news_search_terms()

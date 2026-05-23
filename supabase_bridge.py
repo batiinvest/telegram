@@ -390,6 +390,36 @@ class SupabaseBridge:
             logging.debug(f"[Bridge] disclosure_flag 체크 실패: {e}")
             return False
 
+    def seed_industry_rooms(self, industry_chat_ids: dict):
+        """
+        rooms 테이블에 없는 산업 채팅방을 자동 삽입.
+        이미 존재하는 산업(cat)은 건드리지 않음.
+        """
+        client = self._get_client()
+        if not client:
+            return
+        try:
+            res = client.table("rooms").select("cat").eq("room_type", "industry").execute()
+            existing = {r["cat"] for r in (res.data or []) if r.get("cat")}
+            to_insert = [
+                {
+                    "name": ind,
+                    "cat": ind,
+                    "chat_id": chat_id,
+                    "room_type": "industry",
+                    "members": 0,
+                    "status": "open",
+                    "max_members": 5000,
+                }
+                for ind, chat_id in industry_chat_ids.items()
+                if ind not in existing
+            ]
+            if to_insert:
+                client.table("rooms").insert(to_insert).execute()
+                logging.info(f"[Bridge] 산업 채팅방 {len(to_insert)}개 rooms 테이블에 시드 완료")
+        except Exception as e:
+            logging.warning(f"[Bridge] seed_industry_rooms 실패 (무시): {e}")
+
     def seed_defaults(self, defaults: dict):
         """
         DB에 없는 키만 INSERT (이미 있는 키는 건드리지 않음).

@@ -160,7 +160,6 @@ class NaverNewsBot:
         self._event_cache: Dict[str, datetime.datetime] = {}
         self._event_cache_ttl = datetime.timedelta(hours=6)  # 같은 이벤트 6시간 내 재발송 방지
 
-        self.company_to_industry = COMPANY_TO_INDUSTRY
         self.session     = get_session()
         self.key_index   = 0
         self.api_keys    = NAVER_KEYS
@@ -352,6 +351,14 @@ class NaverNewsBot:
                     _bridge.heartbeat("news_bot")
                 except Exception:
                     pass
+                try:
+                    if _bridge.check_reload_flag():
+                        from config import reload_company_data
+                        reload_company_data()
+                        _load_news_filters()
+                        logging.info("🔄 [뉴스봇] 종목/필터 데이터 재로드 완료")
+                except Exception as _re:
+                    logging.debug(f"reload_flag 체크 오류: {_re}")
 
             for company_info in COMPANY_KEYWORDS:
                 company_name = company_info["name"]
@@ -412,7 +419,7 @@ class NaverNewsBot:
                         f"📄 {desc}..."
                     )
 
-                    industry = self.company_to_industry.get(company_name)
+                    industry = COMPANY_TO_INDUSTRY.get(company_name)
                     if industry and industry in INDUSTRY_CHAT_IDS:
                         stock_api.send_telegram(
                             INDUSTRY_CHAT_IDS[industry], msg,
