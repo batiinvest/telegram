@@ -126,9 +126,14 @@ def collect_market_one(code: str, name: str) -> Optional[dict]:
             "hgpr_cls_code":     output.get("new_hgpr_lwpr_cls_code") or None,
         }
 
-        # 시가총액 단위 변환 (억 → 원)
+        # 시가총액 단위 변환 (억 → 원), fallback: 현재가 × 상장주식수
         if row["market_cap"]:
             row["market_cap"] = row["market_cap"] * 100_000_000
+        else:
+            _price  = safe_int(output.get("stck_prpr"),  zero_as_none=True)
+            _shares = safe_int(output.get("lstn_stcn"),  zero_as_none=True)
+            if _price and _shares:
+                row["market_cap"] = _price * _shares
         # hgpr_cls_code: KIS API가 '신고가'/'신저가' 텍스트로 반환
         # hgpr_cls: 동일 텍스트 그대로 사용 (세부구분 없음)
         hgpr_code = row.get("hgpr_cls_code")
