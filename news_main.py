@@ -41,11 +41,16 @@ except Exception:
 def _load_news_filters():
     """
     app_config에서 스팸패턴/실질보도 키워드 로드.
-    DB에 없으면 코드 기본값 사용.
+    DB에 없는 기본값은 최초 1회 시드 후 로드.
     """
     global SPAM_PATTERNS, _SPAM_RE, MEANINGFUL_KEYWORDS, LOW_TRUST_SOURCES
     if not _BRIDGE_OK:
         return
+    _bridge.seed_defaults({
+        "news_spam_patterns":       "\n".join(SPAM_PATTERNS),
+        "news_meaningful_keywords": ",".join(MEANINGFUL_KEYWORDS),
+        "news_low_trust_sources":   ",".join(LOW_TRUST_SOURCES),
+    })
     try:
         client = _bridge._get_client()
         if not client:

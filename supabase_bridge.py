@@ -390,6 +390,30 @@ class SupabaseBridge:
             logging.debug(f"[Bridge] disclosure_flag 체크 실패: {e}")
             return False
 
+    def seed_defaults(self, defaults: dict):
+        """
+        DB에 없는 키만 INSERT (이미 있는 키는 건드리지 않음).
+        봇 최초 실행 시 하드코딩 기본값을 DB에 씁니다.
+        defaults: { 'key': 'value', ... }
+        """
+        client = self._get_client()
+        if not client:
+            return
+        try:
+            keys = list(defaults.keys())
+            res = client.table("app_config").select("key").in_("key", keys).execute()
+            existing = {r["key"] for r in (res.data or [])}
+            to_insert = [
+                {"key": k, "value": v, "description": "봇 기본값 (자동 시드)"}
+                for k, v in defaults.items()
+                if k not in existing
+            ]
+            if to_insert:
+                client.table("app_config").insert(to_insert).execute()
+                logging.info(f"[Bridge] 기본값 시드 완료: {[r['key'] for r in to_insert]}")
+        except Exception as e:
+            logging.warning(f"[Bridge] seed_defaults 실패 (무시): {e}")
+
     def invalidate_config_cache(self):
         """캐시 강제 초기화 (설정 변경 후 즉시 반영 시)"""
         self._config_cache = {}

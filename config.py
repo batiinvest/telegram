@@ -389,11 +389,22 @@ try:
         INDUSTRY_CHAT_IDS = _db_ind_chat
         logging.info(f"✅ [Bridge] 산업 채팅방 {len(INDUSTRY_CHAT_IDS)}개 rooms 테이블에서 로드")
 
-    # 산업별 뉴스 검색어 — DB 값이 있으면 덮어쓰기
+    # 산업별 뉴스 검색어 — DB 값으로 완전 대체 (merge 아님)
     _db_news_terms = _bridge.get_news_search_terms()
     if _db_news_terms:
-        INDUSTRY_SEARCH_TERMS.update(_db_news_terms)
+        INDUSTRY_SEARCH_TERMS = _db_news_terms
         logging.info(f"✅ [Bridge] 뉴스 검색어 {len(_db_news_terms)}개 산업 DB에서 로드")
+
+    # DB에 없는 기본값 시드 (최초 실행 시 1회)
+    _seed_news = {
+        f"news_terms_{ind}": ",".join(terms)
+        for ind, terms in INDUSTRY_SEARCH_TERMS.items()
+    }
+    _seed_news.update({
+        "ai_trigger_keywords":       ",".join(AI_TRIGGER_KEYWORDS),
+        "global_important_keywords": ",".join(GLOBAL_IMPORTANT_KEYWORDS),
+    })
+    _bridge.seed_defaults(_seed_news)
 
 except Exception as _e:
     logging.warning(f"⚠️ [Bridge] Supabase 브릿지 로드 실패 (기존 설정 사용): {_e}")

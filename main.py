@@ -94,11 +94,16 @@ DART_CORP_FILTER: list = []    # 기업명 부분일치 차단
 
 
 def _load_dart_filters():
-    """app_config에서 공시 등급 키워드 + 각종 필터 로드"""
+    """app_config에서 공시 등급 키워드 + 각종 필터 로드. DB에 없는 기본값은 최초 1회 시드."""
     global DART_BLACKLIST, URGENT_KEYWORDS, MAJOR_KEYWORDS, SKIP_FOR_BROADCAST
     global DART_TITLE_FILTER, DART_CORP_FILTER
     if not _BRIDGE_OK:
         return
+    _bridge.seed_defaults({
+        "dart_urgent": ",".join(URGENT_KEYWORDS),
+        "dart_major":  ",".join(MAJOR_KEYWORDS),
+        "dart_skip":   ",".join(SKIP_FOR_BROADCAST),
+    })
     try:
         client = _bridge._get_client()
         if not client:
