@@ -590,7 +590,7 @@ def collect_foreign_institution() -> dict:
                     if res.data:
                         updated += 1
             except Exception as e:
-                logging.debug(f"[수급] {code} 업데이트 실패: {e}")
+                logging.warning(f"[수급] {code} 업데이트 실패: {e}")
         logging.info(f"[수급] {updated}개 market_data 수급 업데이트")
 
     return {
