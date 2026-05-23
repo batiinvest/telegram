@@ -184,6 +184,31 @@ ACCOUNT_MAP = {
     "유형자산의 증가":               "capex",
     "유형자산 증가":                 "capex",
     "유형자산취득으로인한현금유출":     "capex",
+    # CapEx (무형자산 취득) — FCF 계산용 확장
+    "무형자산의 취득":               "capex_intangible",
+    "무형자산취득":                  "capex_intangible",
+    "무형자산 취득":                 "capex_intangible",
+    "무형자산의취득":                "capex_intangible",
+    "소프트웨어의 취득":             "capex_intangible",
+    "소프트웨어취득":                "capex_intangible",
+    "소프트웨어의취득":              "capex_intangible",
+    "개발비의 취득":                 "capex_intangible",
+    "개발비취득":                   "capex_intangible",
+    # D&A (감가상각비) — 현금흐름표 영업활동 조정항목 (누적값)
+    "감가상각비":                   "depreciation",
+    "유형자산감가상각비":            "depreciation",
+    "유형자산 감가상각비":           "depreciation",
+    "사용권자산감가상각비":          "depreciation",
+    "사용권자산 감가상각비":         "depreciation",
+    "투자부동산감가상각비":          "depreciation",   # 일부 금융·부동산사
+    "감가상각비및상각비":            "depreciation",   # D&A 합산 계정 (일부 기업)
+    "무형자산상각비":               "amortization",
+    "무형자산 상각비":              "amortization",
+    "무형자산의상각":               "amortization",
+    "무형자산의 상각":              "amortization",
+    "개발비상각":                   "amortization",
+    "개발비 상각":                  "amortization",
+    "영업권상각비":                 "amortization",   # 일부 기업
 }
 
 # 2단계: 패턴 매칭 (정확 일치 실패 시 순서대로 적용)
@@ -242,6 +267,17 @@ ACCOUNT_PATTERNS = [
     (["유형자산", "취득"],             ["처분","대체","감소","손상"],  "capex"),
     (["유형자산", "구입"],             ["처분","대체"],               "capex"),
     (["유형자산", "증가"],             ["처분","감소","손상","재평가"],"capex"),
+    # CapEx 무형자산 패턴 (투자활동 하위 계정)
+    (["무형자산", "취득"],             ["처분","손상","감소","재평가"], "capex_intangible"),
+    (["소프트웨어", "취득"],           ["처분","감소"],               "capex_intangible"),
+    (["개발비", "취득"],              ["처분","감소"],               "capex_intangible"),
+    # D&A 패턴 (현금흐름표 영업활동 조정항목)
+    (["감가상각비"],                   ["손실","손상","누계","처분","평가","비유동","계정"],  "depreciation"),
+    (["감가상각"],                     ["손실","손상","누계","처분","평가","비유동","계정"],  "depreciation"),
+    (["사용권자산", "감가상각"],        ["처분","손상","누계"],                              "depreciation"),
+    (["무형자산", "상각비"],           ["손상","처분","환입","재평가","누계"],               "amortization"),
+    (["무형자산", "상각"],             ["손상","처분","환입","재평가","누계","취득"],         "amortization"),
+    (["개발비", "상각"],              ["취득","처분"],                                     "amortization"),
 ]
 
 
@@ -283,7 +319,10 @@ INCOME_COLS = [
 # 현금흐름: Q1~Q4 모두 누적값 → 항상 변환 (Q1 제외)
 CASHFLOW_COLS = [
     "operating_cashflow", "investing_cashflow", "financing_cashflow",
-    "capex",  # 유형자산취득 (투자활동 하위 — 누적값 변환 필요)
+    "capex",            # 유형자산취득 (투자활동 하위 — 누적값 변환 필요)
+    "capex_intangible", # 무형자산취득 (투자활동 하위 — 누적값 변환 필요)
+    "depreciation",     # 감가상각비 (영업활동 조정항목 — 누적값 변환 필요)
+    "amortization",     # 무형자산상각비 (영업활동 조정항목 — 누적값 변환 필요)
 ]
 # 재무상태표: 특정 시점 잔액 → 변환 불필요
 # total_assets, total_liabilities, total_equity 등
@@ -481,17 +520,53 @@ def calc_ratios(row: dict) -> dict:
         if ta and ni and ta != 0:
             result["roa"] = round(ni / ta * 100, 2)
 
-        # ── FCF 계산 ──
-        # FCF = 영업현금흐름 - CapEx(유형자산취득)
-        # capex는 DART에서 음수로 표기되는 경우가 많음 → 절댓값 사용
-        ocf   = row.get("operating_cashflow")
-        capex = row.get("capex")
-        if ocf is not None and capex is not None:
-            capex_abs = abs(capex)  # 음수면 절댓값 사용
-            result["fcf"] = ocf - capex_abs
+        # ── D&A / CapEx 합계 / EBITDA / FCF ──
+        ocf         = row.get("operating_cashflow")
+        capex_tan   = row.get("capex")           # 유형자산취득
+        capex_int   = row.get("capex_intangible")# 무형자산취득
+        dep         = row.get("depreciation")    # 감가상각비
+        amo         = row.get("amortization")    # 무형자산상각비
+
+        # D&A 합계 (어느 하나라도 있으면 계산)
+        da = None
+        if dep is not None or amo is not None:
+            da = (dep or 0) + (amo or 0)
+            if da > 0:
+                result["da"] = da
+
+        # CapEx 합계 (유형+무형, DART 음수 표기 → 절댓값)
+        capex_total = None
+        if capex_tan is not None or capex_int is not None:
+            capex_total = abs(capex_tan or 0) + abs(capex_int or 0)
+            result["capex_total"] = capex_total
+
+        # EBITDA = 영업이익 + D&A
+        if op is not None and da is not None:
+            result["ebitda"] = op + da
+
+        # FCF 직접법 = OCF - CapEx 합계  (가장 신뢰도 높음)
+        fcf_direct = None
+        if ocf is not None and capex_total is not None:
+            fcf_direct = ocf - capex_total
+            result["fcf_direct"] = fcf_direct
+        elif ocf is not None and capex_tan is not None:
+            # capex_intangible 없을 때 유형만으로 계산
+            fcf_direct = ocf - abs(capex_tan)
+            result["fcf_direct"] = fcf_direct
+
+        # FCF 간접법 = 순이익 + D&A - CapEx 합계  (OCF 없는 분기 폴백)
+        fcf_indirect = None
+        if ni is not None and da is not None and capex_total is not None:
+            fcf_indirect = ni + da - capex_total
+            result["fcf_indirect"] = fcf_indirect
+
+        # FCF 최선값: 직접법 → 간접법 → OCF 근사 순
+        if fcf_direct is not None:
+            result["fcf"] = fcf_direct
+        elif fcf_indirect is not None:
+            result["fcf"] = fcf_indirect
         elif ocf is not None:
-            # capex 없으면 operating_cashflow 그대로 (근사)
-            result["fcf"] = ocf
+            result["fcf"] = ocf  # CapEx 없음 — OCF 근사 (보수적)
 
     except Exception as e:
         log.debug(f"calc_ratios 오류 {corp}: {e}")
