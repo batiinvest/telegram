@@ -113,10 +113,6 @@ def collect_market_one(code: str, name: str) -> Optional[dict]:
             "w52_low":           safe_int(output.get("w52_lwpr"),             zero_as_none=True),
             "w52_high_date":     _parse_date(output.get("w52_hgpr_date")),
             "w52_low_date":      _parse_date(output.get("w52_lwpr_date")),
-            "w52_high_rate":     safe_float(output.get("w52_hgpr_vrss_prpr_ctrt"), zero_as_none=True),
-            "w52_low_rate":      safe_float(output.get("w52_lwpr_vrss_prpr_ctrt"), zero_as_none=True),
-            # ── 기술적 지표 ──
-            "approach_rate":     safe_float(output.get("apprch_rate"),        zero_as_none=True),
             # ── 종목 상태 ──
             "market_warn_code":  output.get("mrkt_warn_cls_code") or None,
             "is_caution":        (output.get("invt_caful_yn") == "Y") or None,
@@ -752,8 +748,7 @@ def backfill_market(days: int = 90, max_workers: int = 3):
         'foreign_hold_rate', 'foreign_hold_qty', 'foreign_net_buy',
         'program_net_buy', 'short_sell_qty',
         'w52_high', 'w52_low', 'w52_high_date', 'w52_low_date',
-        'w52_high_rate', 'w52_low_rate',
-        'approach_rate', 'market_warn_code', 'is_caution',
+        'market_warn_code', 'is_caution',
         'manage_issue_code', 'is_short_over', 'is_liquidation',
         'hgpr_cls_code', 'hgpr_cls', 'fiscal_month',
         'vwap',
