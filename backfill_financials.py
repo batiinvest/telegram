@@ -277,6 +277,7 @@ def _collect_and_save(dart, sb, fin_cache: dict, t: dict,
 def run_backfill(from_year: int, monitored_only: bool = False,
                  non_monitored_only: bool = False,
                  corp_names: list = None,
+                 force: bool = False,
                  batch_save: int = 30):
     """
     누락된 재무 데이터를 분기별로 수집.
@@ -286,6 +287,7 @@ def run_backfill(from_year: int, monitored_only: bool = False,
         monitored_only    : True → 모니터링 종목만
         non_monitored_only: True → 비모니터링만
         corp_names        : 특정 종목명 리스트 (None=전체)
+        force             : True → 이미 수집된 건도 재수집 (D&A 등 신규 컬럼 채울 때)
         batch_save        : 배치 저장 단위 (기본 30개)
     """
     if not DART_API_KEY or not SB_URL or not SB_SERVICE_KEY:
@@ -309,23 +311,25 @@ def run_backfill(from_year: int, monitored_only: bool = False,
         log.error("수집 대상 종목 없음")
         return
 
-    # 기존 수집 데이터 로드 (skip용)
-    existing = _load_existing(sb)
-
-    # 누락된 (company, year, quarter) 페어 계산
-    total_pairs   = len(companies) * len(quarters)
-    missing_pairs = []
-    for t in companies:
-        for (y, q) in quarters:
-            if (t["stock_code"], y, q) not in existing:
-                missing_pairs.append((t, y, q))
-
-    skipped_count = total_pairs - len(missing_pairs)
-    log.info(
-        f"📊 전체 {total_pairs:,}개 페어 중 "
-        f"이미수집 {skipped_count:,}개 스킵 → "
-        f"누락 {len(missing_pairs):,}개 수집 예정"
-    )
+    # 기존 수집 데이터 로드 (skip용) — force 모드에서는 스킵
+    total_pairs = len(companies) * len(quarters)
+    if force:
+        log.info(f"⚡ --force 모드: 기존 수집 여부 무관하게 전체 재수집 ({total_pairs:,}건)")
+        missing_pairs  = [(t, y, q) for t in companies for (y, q) in quarters]
+        skipped_count  = 0
+    else:
+        existing = _load_existing(sb)
+        missing_pairs = []
+        for t in companies:
+            for (y, q) in quarters:
+                if (t["stock_code"], y, q) not in existing:
+                    missing_pairs.append((t, y, q))
+        skipped_count = total_pairs - len(missing_pairs)
+        log.info(
+            f"📊 전체 {total_pairs:,}개 페어 중 "
+            f"이미수집 {skipped_count:,}개 스킵 → "
+            f"누락 {len(missing_pairs):,}개 수집 예정"
+        )
 
     if not missing_pairs:
         log.info("✅ 모두 수집 완료됨. 백필 불필요.")
@@ -424,6 +428,10 @@ if __name__ == "__main__":
         "--corp-name", type=str, nargs="+",
         help="특정 종목명 (예: --corp-name 삼성전자 SK하이닉스)"
     )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="이미 수집된 건도 재수집 (D&A 등 신규 컬럼 채울 때 사용)"
+    )
     args = parser.parse_args()
 
     # 모드 결정
@@ -448,4 +456,5 @@ if __name__ == "__main__":
         monitored_only=monitored_only,
         non_monitored_only=non_monitored_only,
         corp_names=args.corp_name,
+        force=args.force,
     )

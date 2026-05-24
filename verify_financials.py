@@ -91,7 +91,7 @@ def _load_data(sb, monitored_only: bool = True,
         "revenue,gross_profit,operating_profit,net_income,pretax_income,"
         "total_assets,total_liabilities,total_equity,current_assets,current_liabilities,"
         "operating_cashflow,investing_cashflow,financing_cashflow,capex,capex_intangible,"
-        "depreciation,amortization,da,ebitda,fcf,fcf_direct,fcf_indirect,"
+        "depreciation,amortization,da,capex_total,ebitda,fcf,fcf_direct,fcf_indirect,"
         "operating_margin,net_margin,roe,roa,debt_ratio,current_ratio,"
         "revenue_yoy,op_profit_yoy,net_income_yoy"
     )
