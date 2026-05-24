@@ -760,6 +760,29 @@ def backfill_market(days: int = 90, max_workers: int = 3):
             if field in sup and row.get(field) is None:
                 row[field] = sup[field]
 
+    # Step3: price_change_rate 계산 (백필 API는 전일대비율 미제공)
+    # 종목별로 날짜 정렬 후 연속 price 값으로 계산
+    log.info("[백필] Step3: price_change_rate 계산")
+    from collections import defaultdict
+    stock_rows = defaultdict(list)
+    for row in all_rows:
+        stock_rows[row['stock_code']].append(row)
+
+    calc_count = 0
+    for code, rows in stock_rows.items():
+        rows.sort(key=lambda r: r['base_date'])
+        for i, row in enumerate(rows):
+            if row.get('price_change_rate') is not None:
+                continue  # 이미 값 있으면 스킵
+            if i == 0:
+                continue  # 첫 행은 전일 없음
+            prev_price = rows[i - 1].get('price')
+            cur_price  = row.get('price')
+            if prev_price and cur_price and prev_price > 0:
+                row['price_change_rate'] = round((cur_price - prev_price) / prev_price * 100, 2)
+                calc_count += 1
+    log.info(f"[백필] price_change_rate 계산 완료: {calc_count}건")
+
     # DB upsert
     log.info(f"[백필] DB upsert 시작: {len(all_rows)}건")
     upserted = 0
