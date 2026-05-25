@@ -28,6 +28,12 @@ try:
 except ImportError:
     _PRO_OK = False
 
+try:
+    from supabase_bridge import bridge as _bridge
+    _BRIDGE_OK = True
+except ImportError:
+    _BRIDGE_OK = False
+
 _TG = "https://api.telegram.org/bot{token}/{method}"
 _running = False
 
@@ -50,43 +56,90 @@ def _reply(chat_id: int, text: str):
     _post('sendMessage', chat_id=chat_id, text=text, parse_mode='HTML')
 
 
+def _get_admin_chat() -> str:
+    """app_config에서 admin_chat_id 조회."""
+    if not _BRIDGE_OK:
+        return ''
+    try:
+        sb  = _bridge._get_client()
+        res = sb.table('app_config').select('value').eq('key', 'admin_chat_id').single().execute()
+        return (res.data or {}).get('value') or ''
+    except Exception:
+        return ''
+
+
+def _notify_admin_subscribe(uid: int, fname: str, lname: str, username: str):
+    """구독 신청 내용을 어드민에게 전달."""
+    admin = _get_admin_chat()
+    if not admin:
+        return
+    name_display = f"{fname} {lname}".strip()
+    uname_display = f"@{username}" if username else "없음"
+    _post('sendMessage',
+        chat_id    = admin,
+        parse_mode = 'HTML',
+        text       = (
+            f"📩 <b>[프로 채널 구독 신청]</b>\n\n"
+            f"이름: <b>{name_display}</b>\n"
+            f"@username: {uname_display}\n"
+            f"텔레그램 ID: <code>{uid}</code>\n\n"
+            f"대시보드 → 프로 채널에서 등록 후 초대 링크를 발송하세요."
+        )
+    )
+
+
 def _handle(update: dict):
     """단일 update 처리."""
     msg = update.get('message') or update.get('edited_message')
     if not msg:
         return
 
-    chat_id = msg['chat']['id']
-    user    = msg.get('from', {})
-    uid     = user.get('id', chat_id)
-    fname   = user.get('first_name', '')
-    text    = (msg.get('text') or '').strip()
-
-    if not text.startswith('/'):
+    # 봇과의 1:1 DM만 처리 (그룹 메시지 무시)
+    if msg['chat']['type'] != 'private':
         return
 
-    cmd = text.split()[0].split('@')[0].lower()   # /myid@botname → /myid
+    chat_id  = msg['chat']['id']
+    user     = msg.get('from', {})
+    uid      = user.get('id', chat_id)
+    fname    = user.get('first_name', '')
+    lname    = user.get('last_name', '')
+    username = user.get('username', '')
+    text     = (msg.get('text') or '').strip()
 
-    # ── /start ──────────────────────────────────────────────
-    if cmd == '/start':
+    cmd = ''
+    if text.startswith('/'):
+        cmd = text.split()[0].split('@')[0].lower()
+
+    # ── /start 또는 일반 메시지 ───────────────────────────────
+    if cmd == '/start' or not cmd:
+        # 이미 구독 중인지 확인
+        if _PRO_OK:
+            try:
+                member = _pro.get_member(uid)
+                if member and member.get('is_active'):
+                    from datetime import date
+                    until = member['paid_until']
+                    days  = (date.fromisoformat(until) - date.today()).days
+                    _reply(chat_id,
+                        f"안녕하세요, {fname}님! 👋\n\n"
+                        f"✅ 구독 중 — 만료일 <b>{until}</b> (D-{days})\n\n"
+                        f"/status — 구독 현황 상세 조회"
+                    )
+                    return
+            except Exception:
+                pass
+
+        # 미구독자: 구독 안내 + 자동으로 어드민 알림
         _reply(chat_id,
             f"안녕하세요, {fname}님! 👋\n\n"
-            "바티인베스트 봇입니다.\n\n"
-            "📌 <b>사용 가능한 명령어</b>\n"
-            "/myid — 내 텔레그램 ID 확인\n"
-            "/status — 프로 채널 구독 현황\n\n"
-            "구독 문의: @batiinvest"
+            f"바티인베스트 <b>증권사 리포트 프로 채널</b>입니다.\n\n"
+            f"📨 구독 신청이 접수되었습니다.\n"
+            f"입금 확인 후 초대 링크를 보내드립니다.\n\n"
+            f"💳 구독료 및 계좌번호는 @batiinvest 로 문의해 주세요."
         )
-
-    # ── /myid ────────────────────────────────────────────────
-    elif cmd == '/myid':
-        _reply(chat_id,
-            f"🔢 <b>내 텔레그램 ID</b>\n\n"
-            f"<code>{uid}</code>\n\n"
-            f"이 숫자를 @batiinvest 로 보내주시면\n"
-            f"프로 채널 초대 링크를 발송해 드립니다."
-        )
-        log.info(f"[cmd] /myid: {uid} ({fname})")
+        # 어드민에게 신청자 정보 전달
+        _notify_admin_subscribe(uid, fname, lname, username)
+        log.info(f"[cmd] 구독 신청: {uid} ({fname} {lname} @{username})")
 
     # ── /status ──────────────────────────────────────────────
     elif cmd == '/status':
@@ -98,14 +151,13 @@ def _handle(update: dict):
             if not member:
                 _reply(chat_id,
                     "❌ 등록된 구독 정보가 없습니다.\n\n"
-                    "프로 채널 구독 문의: @batiinvest"
+                    "구독 문의: @batiinvest"
                 )
             else:
                 from datetime import date
-                until   = member['paid_until']
-                active  = member.get('is_active', False)
-                in_ch   = member.get('in_channel', False)
-                days    = (date.fromisoformat(until) - date.today()).days
+                until = member['paid_until']
+                in_ch = member.get('in_channel', False)
+                days  = (date.fromisoformat(until) - date.today()).days
 
                 if days < 0:
                     status = "⛔ 만료됨"
@@ -126,6 +178,12 @@ def _handle(update: dict):
         except Exception as e:
             log.error(f"[cmd] /status 오류: {e}")
             _reply(chat_id, "조회 중 오류가 발생했습니다.")
+
+    # ── /myid (레거시 지원) ───────────────────────────────────
+    elif cmd == '/myid':
+        _reply(chat_id,
+            f"🔢 내 텔레그램 ID: <code>{uid}</code>"
+        )
 
 
 def run_polling():
