@@ -211,7 +211,7 @@ def run_dart_bot():
 # ==========================================
 
 def job_lunch_briefing():
-    if not market_timer.is_weekday(): return
+    if market_timer.is_kr_holiday(): return
     # ✅ [추가] DB에서 스케줄 ON/OFF 확인
     if not _is_enabled("lunch"):
         logging.info("⏸ 점심 브리핑 비활성화 (DB 설정)")
@@ -233,7 +233,7 @@ def job_lunch_briefing():
 
 
 def job_naver_report():
-    if not market_timer.is_weekday(): return
+    if market_timer.is_kr_holiday(): return
     # ✅ [추가] DB에서 스케줄 ON/OFF 확인
     if not _is_enabled("report"):
         logging.info("⏸ 네이버 리포트 비활성화 (DB 설정)")
@@ -247,7 +247,7 @@ def job_naver_report():
 
 
 def job_daily_closing():
-    if not market_timer.is_weekday(): return
+    if market_timer.is_kr_holiday(): return
     # ✅ [추가] DB에서 스케줄 ON/OFF 확인
     if not _is_enabled("closing"):
         logging.info("⏸ 마감 브리핑 비활성화 (DB 설정)")
@@ -956,7 +956,7 @@ def _check_market_warnings():
 def job_collect_market_closing():
     """평일 장 마감 후 (15:40) — 전체 상장사 시장 데이터 수집"""
     import datetime
-    if not market_timer.is_weekday():  # 주말/공휴일 스킵
+    if market_timer.is_kr_holiday():  # 주말/공휴일 스킵
         logging.info("⏸ [시장수집-전체] 주말/공휴일 스킵")
         return
     if not _COLLECTOR_OK:
@@ -1496,7 +1496,7 @@ def main():
                         import time as _tm2
                         _mkt_elapsed = (_tm2.time() * 1000 - float(_mktf.data['value'])) / 1000
                         if 0 < _mkt_elapsed < 300:
-                            if not market_timer.is_weekday():
+                            if market_timer.is_kr_holiday():
                                 logging.info("⏸ [시장수집-전체] 주말/공휴일 — 수동 트리거 무시")
                                 _sb_mkt.table('app_config').upsert({
                                     'key': 'run_market_all_flag', 'value': '0'

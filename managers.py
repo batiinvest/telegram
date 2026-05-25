@@ -454,10 +454,35 @@ class MarketTimeManager:
                         logging.info(f"[휴장일] {today_str} 개장여부={row.get('opnd_yn')} → {'휴장' if is_holiday else '개장'}")
                         return is_holiday
         except Exception as e:
-            logging.warning(f"[휴장일] API 조회 실패 ({e}) → 주말 여부로 fallback")
-        # fallback: 주말 여부만
-        is_holiday = now.weekday() >= 5
+            logging.warning(f"[휴장일] API 조회 실패 ({e}) → 정적 공휴일 목록으로 fallback")
+        # fallback: 주말 + 정적 공휴일 목록
+        KR_HOLIDAYS = {
+            # 2025
+            '20250101','20250128','20250129','20250130',  # 신정, 설날연휴
+            '20250301',                                    # 3.1절
+            '20250505','20250506',                         # 어린이날, 대체
+            '20250602',                                    # 부처님오신날
+            '20250606',                                    # 현충일
+            '20250815',                                    # 광복절
+            '20251003','20251005','20251006','20251007',   # 추석연휴
+            '20251009',                                    # 한글날
+            '20251225',                                    # 크리스마스
+            # 2026
+            '20260101',                                    # 신정
+            '20260216','20260217','20260218',              # 설날연휴
+            '20260302',                                    # 3.1절 대체
+            '20260505',                                    # 어린이날
+            '20260525',                                    # 부처님오신날 대체 (5/24 일요일)
+            '20260606',                                    # 현충일
+            '20260817',                                    # 광복절 대체 (8/15 토요일)
+            '20260924','20260925','20260928',              # 추석연휴 (추정)
+            '20261009',                                    # 한글날
+            '20261225',                                    # 크리스마스
+        }
+        is_holiday = now.weekday() >= 5 or today_str in KR_HOLIDAYS
         self._holiday_cache = {'date': today_str, 'is_holiday': is_holiday}
+        if today_str in KR_HOLIDAYS:
+            logging.info(f"[휴장일] {today_str} 정적 공휴일 목록에서 휴장 확인")
         return is_holiday
 
     def is_market_open(self) -> bool:
