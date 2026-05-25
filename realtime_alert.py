@@ -525,13 +525,100 @@ class KisMyStockScanner:
             logging.error(f"Command Execution Error ({cmd}): {e}")
             stock_api.send_telegram(chat_id, f"❌ 명령 처리 중 오류 발생: {e}")
 
+    def _handle_pro_callback(self, cb_id: str, chat_id: int, message_id: int, parts: list):
+        """PRO 채널 승인/거절 인라인 버튼 처리."""
+        base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+        def answer(text='', alert=False):
+            try:
+                self.listener_session.post(
+                    f"{base_url}/answerCallbackQuery",
+                    json={'callback_query_id': cb_id, 'text': text, 'show_alert': alert},
+                    timeout=5
+                )
+            except Exception:
+                pass
+
+        def edit(text):
+            try:
+                self.listener_session.post(
+                    f"{base_url}/editMessageText",
+                    json={'chat_id': chat_id, 'message_id': message_id,
+                          'text': text, 'parse_mode': 'HTML'},
+                    timeout=5
+                )
+            except Exception:
+                pass
+
+        if len(parts) < 3:
+            answer("잘못된 요청", alert=True)
+            return
+
+        action = parts[1]   # approve / reject
+        try:
+            uid = int(parts[2])
+        except (ValueError, IndexError):
+            answer("잘못된 ID", alert=True)
+            return
+
+        if action == 'approve':
+            months = int(parts[3]) if len(parts) > 3 else 1
+            try:
+                import pro_channel as _pro
+                row = _pro.add_member(uid, months=months)
+                paid_until = row.get('paid_until', '?')
+                ok_invite  = _pro.send_invite(uid, months=months)
+                invite_str = "✅ 초대 링크 발송 완료" if ok_invite else "⚠️ 초대 링크 발송 실패"
+                answer(f"✅ {months}개월 승인 완료")
+                edit(
+                    f"✅ <b>[승인 완료]</b>\n\n"
+                    f"텔레그램 ID: <code>{uid}</code>\n"
+                    f"구독 기간: <b>{months}개월</b>\n"
+                    f"만료일: <b>{paid_until}</b>\n"
+                    f"{invite_str}"
+                )
+            except Exception as e:
+                logging.error(f"[PRO approve] 오류: {e}")
+                answer("❌ 오류 발생", alert=True)
+                edit(f"❌ <b>[승인 오류]</b>\n<code>{e}</code>")
+
+        elif action == 'reject':
+            try:
+                answer("❌ 거절 처리")
+                edit(
+                    f"❌ <b>[거절]</b>\n\n"
+                    f"텔레그램 ID: <code>{uid}</code>\n"
+                    f"구독 신청이 거절되었습니다."
+                )
+                # 신청자에게 거절 안내 DM
+                try:
+                    import bot_commands as _bc
+                    _bc._reply(uid,
+                        "안타깝게도 이번에는 구독 신청이 승인되지 않았습니다.\n"
+                        "문의사항이 있으시면 @batiinvest로 연락해 주세요."
+                    )
+                except Exception:
+                    pass
+            except Exception as e:
+                logging.error(f"[PRO reject] 오류: {e}")
+                answer("오류 발생")
+
+        else:
+            answer("알 수 없는 액션", alert=True)
+
     def handle_callback(self, callback_q):
         cb_id = callback_q['id']
-        data = callback_q['data'] 
+        data = callback_q['data']
         chat_id = callback_q['message']['chat']['id']
         message_id = callback_q['message']['message_id']
-        
+
         parts = data.split('|')
+
+        # PRO 채널 콜백 (승인/거절)
+        if parts[0] == 'PRO':
+            self._handle_pro_callback(cb_id, chat_id, message_id, parts)
+            return
+
         if len(parts) != 3 or parts[0] != "REP": return
 
         action_type = parts[1]

@@ -85,7 +85,7 @@ def _get_admin_chat() -> str:
 
 
 def _notify_admin_subscribe(uid: int, fname: str, lname: str, username: str):
-    """구독 신청 내용을 어드민에게 전달."""
+    """구독 신청 내용을 어드민에게 전달 (인라인 버튼 포함)."""
     admin = _get_admin_chat()
     if not admin:
         log.warning(f"[cmd] 어드민 chat_id 미설정 — 구독 신청 알림 전송 불가 (uid={uid})")
@@ -97,10 +97,16 @@ def _notify_admin_subscribe(uid: int, fname: str, lname: str, username: str):
         f"📩 <b>[프로 채널 구독 신청]</b>\n\n"
         f"이름: <b>{name_display}</b>\n"
         f"@username: {uname_display}\n"
-        f"텔레그램 ID: <code>{uid}</code>\n\n"
-        f"대시보드 → 프로 채널에서 등록 후 초대 발송"
+        f"텔레그램 ID: <code>{uid}</code>"
     )
-    res = _post('sendMessage', chat_id=admin, parse_mode='HTML', text=msg)
+    # 인라인 버튼: 1개월 승인 / 3개월 승인 / 거절
+    keyboard = {'inline_keyboard': [[
+        {'text': '✅ 1개월 승인 + 초대', 'callback_data': f'PRO|approve|{uid}|1'},
+        {'text': '✅ 3개월',             'callback_data': f'PRO|approve|{uid}|3'},
+        {'text': '❌ 거절',              'callback_data': f'PRO|reject|{uid}'},
+    ]]}
+    res = _post('sendMessage', chat_id=admin, parse_mode='HTML',
+                text=msg, reply_markup=keyboard)
     if res.get('ok'):
         log.info(f"[cmd] 어드민 알림 전송 완료 → {admin}")
     else:
