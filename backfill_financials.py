@@ -278,7 +278,8 @@ def run_backfill(from_year: int, monitored_only: bool = False,
                  non_monitored_only: bool = False,
                  corp_names: list = None,
                  force: bool = False,
-                 batch_save: int = 30):
+                 batch_save: int = 30,
+                 check_only: bool = False):
     """
     누락된 재무 데이터를 분기별로 수집.
 
@@ -333,6 +334,20 @@ def run_backfill(from_year: int, monitored_only: bool = False,
 
     if not missing_pairs:
         log.info("✅ 모두 수집 완료됨. 백필 불필요.")
+        return
+
+    if check_only:
+        # 분기별 누락 현황 요약 출력 후 종료
+        from collections import Counter
+        by_quarter = Counter(f"{y} {q}" for _, y, q in missing_pairs)
+        print("\n" + "="*60)
+        print("📊 비모니터링 종목 재무 수집 현황 (누락)")
+        print("="*60)
+        for qtr in sorted(by_quarter):
+            print(f"  ❌ {qtr}: 누락 {by_quarter[qtr]:,}개")
+        print("="*60)
+        print(f"  총 누락: {len(missing_pairs):,}건  |  이미수집: {skipped_count:,}건")
+        print("  수집하려면 --check-only 제거 후 재실행")
         return
 
     # 기존 재무 캐시 로드 (누적→단독 변환 + 성장률 계산용)
@@ -432,6 +447,10 @@ if __name__ == "__main__":
         "--force", action="store_true",
         help="이미 수집된 건도 재수집 (D&A 등 신규 컬럼 채울 때 사용)"
     )
+    parser.add_argument(
+        "--check-only", action="store_true",
+        help="수집 없이 누락 현황만 출력"
+    )
     args = parser.parse_args()
 
     # 모드 결정
@@ -457,4 +476,5 @@ if __name__ == "__main__":
         non_monitored_only=non_monitored_only,
         corp_names=args.corp_name,
         force=args.force,
+        check_only=args.check_only,
     )
