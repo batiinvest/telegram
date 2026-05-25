@@ -43,6 +43,15 @@ except ImportError as _ie:
     _COLLECTOR_OK = False
     logging.warning(f"수집 모듈 없음 (무시): {_ie}")
 
+# ✅ [추가] 프로 채널 관리 모듈
+try:
+    import pro_channel as _pro
+    _PRO_OK = True
+    logging.info("✅ [Pro] 프로 채널 관리 모듈 로드 완료")
+except ImportError as _pe:
+    _PRO_OK = False
+    logging.warning(f"⚠️ [Pro] pro_channel 모듈 없음 (무시): {_pe}")
+
 # ✅ [추가] Supabase 브릿지 (실패해도 스케줄러 동작에 영향 없음)
 try:
     from supabase_bridge import bridge as _bridge
@@ -1127,6 +1136,23 @@ def job_watchlist_alert():
         logging.error(f"❌ [관심가알림] 오류: {e}")
 
 
+def job_pro_channel_check():
+    """매일 09:00 — 프로 채널 구독 만료 멤버 퇴장 + D-3 예고 알림"""
+    if not _PRO_OK:
+        return
+    try:
+        logging.info("🔐 [프로채널] 구독 만료 체크 시작")
+        result = _pro.check_expired()
+        logging.info(
+            f"🔐 [프로채널] 완료 — "
+            f"퇴장 {len(result['kicked'])}명 / "
+            f"예고 {len(result['notified'])}명 / "
+            f"오류 {len(result['errors'])}건"
+        )
+    except Exception as e:
+        logging.error(f"❌ [프로채널] 만료 체크 오류: {e}")
+
+
 def job_saturday_main_ranking():
     # ✅ [추가] DB에서 스케줄 ON/OFF 확인
     if not _is_enabled("saturday"):
@@ -1179,6 +1205,7 @@ def job_sunday_company_diagnosis():
 def run_scheduler():
     logging.info("🚀 [스케줄러] 시작 (schedule 라이브러리 적용)")
 
+    schedule.every().day.at("09:00").do(job_pro_channel_check)  # 프로 채널 구독 만료 체크
     schedule.every().day.at("08:50").do(job_naver_report)
     schedule.every().day.at("08:55").do(job_collect_analyst_opinions)  # 투자의견 (장전)
     schedule.every().day.at("06:10").do(job_collect_macro)             # 글로벌 매크로 수집 (미국 장 마감 직후, 서머타임 06:00 기준)
@@ -1591,6 +1618,13 @@ def main():
                         ).start()
                 except Exception as _de:
                     logging.debug(f"disclosure_flag 체크 오류: {_de}")
+
+            # ✅ [추가] 프로 채널 액션 플래그 체크 (초대/퇴장/연장 요청)
+            if _PRO_OK:
+                try:
+                    _pro.process_pro_action_flag()
+                except Exception as _proe:
+                    logging.debug(f"pro_action_flag 체크 오류: {_proe}")
 
             # ✅ [추가] 워치독 루프에서도 전체 봇 heartbeat 업데이트
             if _BRIDGE_OK:
