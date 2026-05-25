@@ -74,7 +74,8 @@ def _handle(update: dict):
             "바티인베스트 봇입니다.\n\n"
             "📌 <b>사용 가능한 명령어</b>\n"
             "/myid — 내 텔레그램 ID 확인\n"
-            "/status — 프로 채널 구독 현황"
+            "/status — 프로 채널 구독 현황\n\n"
+            "구독 문의: @batiinvest"
         )
 
     # ── /myid ────────────────────────────────────────────────
@@ -82,8 +83,8 @@ def _handle(update: dict):
         _reply(chat_id,
             f"🔢 <b>내 텔레그램 ID</b>\n\n"
             f"<code>{uid}</code>\n\n"
-            f"이 숫자를 관리자에게 알려주시면\n"
-            f"프로 채널 초대 링크를 보내드립니다."
+            f"이 숫자를 @batiinvest 로 보내주시면\n"
+            f"프로 채널 초대 링크를 발송해 드립니다."
         )
         log.info(f"[cmd] /myid: {uid} ({fname})")
 
