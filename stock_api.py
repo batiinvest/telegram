@@ -1620,6 +1620,35 @@ def _safe_caption(file_name: str) -> str:
 def _is_robot_topic(text: str) -> bool:
     return text and any(k.lower() in text.lower() for k in ROBOT_KEYWORDS)
 
+def _make_hashtag(text: str) -> str:
+    """텍스트 → 텔레그램 해시태그 (한글·영문·숫자만 허용, 공백/특수문자 제거)"""
+    clean = re.sub(r'[^\w가-힣]', '', str(text).replace(' ', ''))
+    return f'#{clean}' if clean else ''
+
+def _extract_firm(file_name: str) -> str:
+    """파일명 마지막 _XXX 부분에서 증권사명 추출
+    예: 삼성전자_260519_하나증권.pdf → 하나증권
+    """
+    base = file_name[:-4] if file_name.lower().endswith('.pdf') else file_name
+    parts = base.split('_')
+    return parts[-1] if parts else ''
+
+def _report_hashtags(page_type: str, tag: str, file_name: str) -> str:
+    """리포트 해시태그 문자열 생성
+    예: #기업분석 #삼성전자 #하나증권
+    """
+    tags = []
+    pt = _make_hashtag(page_type)           # #산업분석 | #기업분석
+    if pt: tags.append(pt)
+    if tag:
+        ht = _make_hashtag(tag)             # #자동차 | #삼성전자
+        if ht and ht not in tags: tags.append(ht)
+    firm = _extract_firm(file_name)
+    if firm:
+        ht = _make_hashtag(firm)            # #하나증권
+        if ht and ht not in tags: tags.append(ht)
+    return ' '.join(tags)
+
 def _get_total_pages(soup) -> int:
     """네이버 페이지네이션에서 마지막 페이지 번호 추출"""
     try:
@@ -1809,7 +1838,7 @@ def run_naver_report_job():
                     clean_name = item[1].replace(".pdf", "").replace("_", " ")
                     msg_lines.append(f"{i+j+1}. {clean_name}")
 
-                final_msg = "\n".join(msg_lines)
+                final_msg = "\n".join(msg_lines) + f"\n\n{_make_hashtag(page_type)}"
                 send_telegram(_report_cid, final_msg)
                 time.sleep(0.5)
 
@@ -1818,7 +1847,8 @@ def run_naver_report_job():
             # PDF 다운로드
             pdf_buf = _fetch_pdf_file(pdf_url)
             target_doc = pdf_buf if pdf_buf else pdf_url
-            caption = _safe_caption(file_name)
+            hashtags = _report_hashtags(page_type, tag, file_name)
+            caption  = f"{_safe_caption(file_name)}\n\n{hashtags}"[:1024]
 
             # 1. 리포트 채널 전송
             if _report_cid:

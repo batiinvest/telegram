@@ -130,14 +130,16 @@ def backfill(from_dt: date, to_dt: date,
                 for j, item in enumerate(chunk):
                     clean = item[1].replace(".pdf", "").replace("_", " ")
                     lines.append(f"{i+j+1}. {clean}")
-                sa.send_telegram(chat_id, "\n".join(lines))
+                final_msg = "\n".join(lines) + f"\n\n{sa._make_hashtag(page_type)}"
+                sa.send_telegram(chat_id, final_msg)
                 time.sleep(0.5)
 
             # PDF 개별 전송
             for pdf_url, file_name, _ in reports:
                 pdf_buf    = sa._fetch_pdf_file(pdf_url)
                 target_doc = pdf_buf if pdf_buf else pdf_url
-                caption    = sa._safe_caption(file_name)
+                hashtags   = sa._report_hashtags(page_type, tag, file_name)
+                caption    = f"{sa._safe_caption(file_name)}\n\n{hashtags}"[:1024]
 
                 sa._send_telegram_doc(chat_id, target_doc, file_name, caption)
                 history.add(file_name)   # 중복 방지용 기록
