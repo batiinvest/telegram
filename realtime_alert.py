@@ -672,7 +672,11 @@ class KisMyStockScanner:
         while True:
             try:
                 url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-                params = {"timeout": 10, "offset": self.last_update_id + 1}
+                params = {
+                    "timeout": 10,
+                    "offset": self.last_update_id + 1,
+                    "allowed_updates": ["message", "callback_query", "channel_post", "edited_message"]
+                }
                 res = self.listener_session.get(url, params=params, timeout=30)
                 
                 if res.status_code == 200:
