@@ -1576,6 +1576,7 @@ def get_industry_financial_ranking(industry_name: str) -> str:
 # =================================================================================
 
 # 리포트 관련 상수 설정
+NAVER_REPORT_CHAT_ID = "@batiarchive"  # 네이버 리포트 전용 채널 (기본값 — DB report_chat_id로 덮어씀)
 NAVER_REPORT_URLS = {
     "기업분석": "https://finance.naver.com/research/company_list.naver",
     "시장정보": "https://finance.naver.com/research/market_info_list.naver",
@@ -1731,7 +1732,13 @@ def run_naver_report_job():
     """
     [최종 수정] 네이버 리포트 수집/전송 (페이지네이션 복원 + 중복 방지 + 메시지 분할)
     """
-    
+    # DB에서 리포트 채널 ID 동적 로드 (app_config.report_chat_id)
+    try:
+        from supabase_bridge import bridge as _b
+        _report_cid = _b.get_config('report_chat_id', NAVER_REPORT_CHAT_ID)
+    except Exception:
+        _report_cid = NAVER_REPORT_CHAT_ID
+
     today_str = datetime.now().strftime("%Y-%m-%d")
     logging.info(f"📑 네이버 리포트 수집 시작 ({today_str})")
 
@@ -1788,22 +1795,22 @@ def run_naver_report_job():
             continue
 
         # [수정] 요약본 메인방 전송 (길이 제한 고려하여 분할 전송)
-        if DEFAULT_CHAT_ID:
+        if _report_cid:
             header = f"📑 <b>[{today_str}] {page_type} 리포트</b> (총 {len(reports)}개)\n\n"
             chunk_size = 30 # 한 번에 30개씩 끊어서 전송
-            
+
             for i in range(0, len(reports), chunk_size):
                 chunk = reports[i:i+chunk_size]
                 msg_lines = []
                 if i == 0: msg_lines.append(header)
-                
+
                 for j, item in enumerate(chunk):
                     # item: (pdf_url, file_name, tag)
                     clean_name = item[1].replace(".pdf", "").replace("_", " ")
                     msg_lines.append(f"{i+j+1}. {clean_name}")
-                
+
                 final_msg = "\n".join(msg_lines)
-                send_telegram(DEFAULT_CHAT_ID, final_msg)
+                send_telegram(_report_cid, final_msg)
                 time.sleep(0.5)
 
         # 개별 파일 전송
@@ -1813,9 +1820,9 @@ def run_naver_report_job():
             target_doc = pdf_buf if pdf_buf else pdf_url
             caption = _safe_caption(file_name)
 
-            # 1. 메인 채널 전송
-            if DEFAULT_CHAT_ID:
-                _send_telegram_doc(DEFAULT_CHAT_ID, target_doc, file_name, caption)
+            # 1. 리포트 채널 전송
+            if _report_cid:
+                _send_telegram_doc(_report_cid, target_doc, file_name, caption)
                 # 어드민 채팅방 — app_config.admin_chat_id 우선, 없으면 스킵
                 try:
                     from supabase_bridge import bridge as _b
