@@ -729,7 +729,10 @@ class KisMyStockScanner:
                                     logging.debug(f"bot_commands handle 오류: {_bce}")
                             continue
 
-                        cmd_word = text.split()[0]
+                        words = text.split()
+                        if not words:
+                            continue
+                        cmd_word = words[0]
                         if cmd_word in self.commands:
                             self.handle_command(chat_id, text, matched_key)
                             
