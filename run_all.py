@@ -61,6 +61,15 @@ except ImportError as _swe:
     _SMS_WH_OK = False
     logging.warning(f"⚠️ [SMS] sms_webhook 모듈 없음 (pip install flask): {_swe}")
 
+# ✅ [추가] 봇 명령어 수신 (/myid, /status, /start)
+try:
+    import bot_commands as _bot_cmd
+    _BOT_CMD_OK = True
+    logging.info("✅ [BotCmd] 명령어 모듈 로드 완료")
+except ImportError as _bce:
+    _BOT_CMD_OK = False
+    logging.warning(f"⚠️ [BotCmd] bot_commands 모듈 없음: {_bce}")
+
 # ✅ [추가] Supabase 브릿지 (실패해도 스케줄러 동작에 영향 없음)
 try:
     from supabase_bridge import bridge as _bridge
@@ -1289,6 +1298,11 @@ def main():
     if _SMS_WH_OK:
         _sms_wh.start_thread()
         logging.info("🌐 [SMS] 웹훅 서버 기동 (포트 5001)")
+
+    # 봇 명령어 수신 (/myid, /status, /start)
+    if _BOT_CMD_OK:
+        _bot_cmd.start_thread()
+        logging.info("🤖 [BotCmd] 명령어 수신 스레드 기동")
 
     threads = {
         "Thread-Price": {"thread": t_scanner,   "target": run_scanner_bot},
