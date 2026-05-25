@@ -1299,10 +1299,8 @@ def main():
         _sms_wh.start_thread()
         logging.info("🌐 [SMS] 웹훅 서버 기동 (포트 5001)")
 
-    # 봇 명령어 수신 (/myid, /status, /start)
-    if _BOT_CMD_OK:
-        _bot_cmd.start_thread()
-        logging.info("🤖 [BotCmd] 명령어 수신 스레드 기동")
+    # 봇 명령어 수신은 realtime_alert.py의 telegram_listener에서 처리
+    # (getUpdates 중복 호출 방지 — bot_commands._handle을 직접 호출하는 방식으로 통합)
 
     threads = {
         "Thread-Price": {"thread": t_scanner,   "target": run_scanner_bot},

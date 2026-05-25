@@ -628,8 +628,16 @@ class KisMyStockScanner:
                                 for cfg in allowed_configs:
                                     if cfg.lower() == u_id.lower(): matched_key = cfg; break
                         
-                        if not matched_key: continue
-                        
+                        # ── 1:1 DM 처리 (구독 신청 / 봇 명령어) ──────────
+                        if not matched_key:
+                            if message.get("chat", {}).get("type") == "private":
+                                try:
+                                    import bot_commands as _bc
+                                    _bc._handle(update)
+                                except Exception as _bce:
+                                    logging.debug(f"bot_commands handle 오류: {_bce}")
+                            continue
+
                         cmd_word = text.split()[0]
                         if cmd_word in self.commands:
                             self.handle_command(chat_id, text, matched_key)
