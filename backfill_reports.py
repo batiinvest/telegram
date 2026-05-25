@@ -135,7 +135,7 @@ def backfill(from_dt: date, to_dt: date,
                 time.sleep(0.5)
 
             # PDF 개별 전송
-            for pdf_url, file_name, _ in reports:
+            for pdf_url, file_name, tag in reports:
                 pdf_buf    = sa._fetch_pdf_file(pdf_url)
                 target_doc = pdf_buf if pdf_buf else pdf_url
                 hashtags   = sa._report_hashtags(page_type, tag, file_name)
