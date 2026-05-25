@@ -677,7 +677,7 @@ class KisMyStockScanner:
                     "offset": self.last_update_id + 1,
                     "allowed_updates": ["message", "callback_query", "channel_post", "edited_message"]
                 }
-                res = self.listener_session.get(url, params=params, timeout=30)
+                res = self.listener_session.post(url, json=params, timeout=30)
                 
                 if res.status_code == 200:
                     updates = res.json().get("result", [])
