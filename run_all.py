@@ -52,6 +52,15 @@ except ImportError as _pe:
     _PRO_OK = False
     logging.warning(f"⚠️ [Pro] pro_channel 모듈 없음 (무시): {_pe}")
 
+# ✅ [추가] SMS 웹훅 서버 (입금 자동 처리)
+try:
+    import sms_webhook as _sms_wh
+    _SMS_WH_OK = True
+    logging.info("✅ [SMS] 웹훅 모듈 로드 완료")
+except ImportError as _swe:
+    _SMS_WH_OK = False
+    logging.warning(f"⚠️ [SMS] sms_webhook 모듈 없음 (pip install flask): {_swe}")
+
 # ✅ [추가] Supabase 브릿지 (실패해도 스케줄러 동작에 영향 없음)
 try:
     from supabase_bridge import bridge as _bridge
@@ -1275,6 +1284,11 @@ def main():
     t_news      = threading.Thread(target=run_news_bot,    name="Thread-News",  daemon=True)
     t_dart      = threading.Thread(target=run_dart_bot,    name="Thread-Dart",  daemon=True)
     t_scheduler = threading.Thread(target=run_scheduler,   name="Thread-Sched", daemon=True)
+
+    # SMS 웹훅 서버 (입금 자동 처리)
+    if _SMS_WH_OK:
+        _sms_wh.start_thread()
+        logging.info("🌐 [SMS] 웹훅 서버 기동 (포트 5001)")
 
     threads = {
         "Thread-Price": {"thread": t_scanner,   "target": run_scanner_bot},
