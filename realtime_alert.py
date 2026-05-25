@@ -525,6 +525,41 @@ class KisMyStockScanner:
             logging.error(f"Command Execution Error ({cmd}): {e}")
             stock_api.send_telegram(chat_id, f"❌ 명령 처리 중 오류 발생: {e}")
 
+    def _handle_chat_member(self, cm: dict):
+        """프로 채널 멤버 입장/퇴장 감지 → in_channel DB 자동 동기화."""
+        try:
+            import pro_channel as _pro
+
+            # 이벤트가 발생한 채널 확인
+            chat      = cm.get("chat", {})
+            chat_id   = str(chat.get("id", ""))
+            chat_user = chat.get("username", "")
+            pro_cid   = _pro._pro_channel_id()   # "@batipro" 또는 숫자ID 문자열
+
+            # 프로 채널인지 검사 (username 또는 숫자ID 비교)
+            if pro_cid.startswith("@"):
+                if f"@{chat_user}" != pro_cid:
+                    return
+            else:
+                if chat_id != str(pro_cid):
+                    return
+
+            user       = cm.get("new_chat_member", {}).get("user", {})
+            uid        = user.get("id")
+            new_status = cm.get("new_chat_member", {}).get("status", "")
+
+            if not uid:
+                return
+
+            # member / administrator / creator = 채널 내
+            # left / kicked / restricted       = 채널 외
+            in_channel = new_status in ("member", "administrator", "creator")
+            _pro.sync_channel_status(uid, in_channel)
+            logging.info(f"[채널멤버] {uid} in_channel={in_channel} (status={new_status})")
+
+        except Exception as e:
+            logging.error(f"[채널멤버] 처리 오류: {e}")
+
     def _handle_pro_callback(self, cb_id: str, chat_id: int, message_id: int, parts: list):
         """PRO 채널 승인/거절 인라인 버튼 처리."""
         base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
@@ -675,7 +710,7 @@ class KisMyStockScanner:
                 params = {
                     "timeout": 10,
                     "offset": self.last_update_id + 1,
-                    "allowed_updates": ["message", "callback_query", "channel_post", "edited_message"]
+                    "allowed_updates": ["message", "callback_query", "channel_post", "edited_message", "chat_member"]
                 }
                 res = self.listener_session.post(url, json=params, timeout=30)
                 
@@ -686,6 +721,10 @@ class KisMyStockScanner:
                         
                         if "callback_query" in update:
                             self.handle_callback(update["callback_query"])
+                            continue
+
+                        if "chat_member" in update:
+                            self._handle_chat_member(update["chat_member"])
                             continue
 
                         message = None
