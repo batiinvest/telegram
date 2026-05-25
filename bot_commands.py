@@ -57,13 +57,29 @@ def _reply(chat_id: int, text: str):
 
 
 def _get_admin_chat() -> str:
-    """app_config에서 admin_chat_id 조회."""
-    if not _BRIDGE_OK:
-        return ''
+    """
+    어드민 chat_id 조회.
+    우선순위: app_config[pro_admin_chat_id] → app_config[admin_chat_id] → config.py DEFAULT_CHAT_ID
+    ※ 개인 계정은 숫자 ID만 동작 (봇이 먼저 말 건 적 있어야 함)
+    """
+    # 1) Supabase에서 pro 전용 어드민 chat_id 조회
+    if _BRIDGE_OK:
+        try:
+            sb  = _bridge._get_client()
+            res = sb.table('app_config').select('key,value') \
+                    .in_('key', ['pro_admin_chat_id', 'admin_chat_id']) \
+                    .execute()
+            cfg = {r['key']: r['value'] for r in (res.data or [])}
+            cid = cfg.get('pro_admin_chat_id') or cfg.get('admin_chat_id') or ''
+            if cid:
+                return cid
+        except Exception as e:
+            log.debug(f"[cmd] admin_chat_id 조회 실패: {e}")
+
+    # 2) config.py DEFAULT_CHAT_ID 폴백
     try:
-        sb  = _bridge._get_client()
-        res = sb.table('app_config').select('value').eq('key', 'admin_chat_id').single().execute()
-        return (res.data or {}).get('value') or ''
+        from config import DEFAULT_CHAT_ID
+        return DEFAULT_CHAT_ID or ''
     except Exception:
         return ''
 
@@ -72,20 +88,23 @@ def _notify_admin_subscribe(uid: int, fname: str, lname: str, username: str):
     """구독 신청 내용을 어드민에게 전달."""
     admin = _get_admin_chat()
     if not admin:
+        log.warning(f"[cmd] 어드민 chat_id 미설정 — 구독 신청 알림 전송 불가 (uid={uid})")
         return
-    name_display = f"{fname} {lname}".strip()
+
+    name_display  = f"{fname} {lname}".strip()
     uname_display = f"@{username}" if username else "없음"
-    _post('sendMessage',
-        chat_id    = admin,
-        parse_mode = 'HTML',
-        text       = (
-            f"📩 <b>[프로 채널 구독 신청]</b>\n\n"
-            f"이름: <b>{name_display}</b>\n"
-            f"@username: {uname_display}\n"
-            f"텔레그램 ID: <code>{uid}</code>\n\n"
-            f"대시보드 → 프로 채널에서 등록 후 초대 링크를 발송하세요."
-        )
+    msg = (
+        f"📩 <b>[프로 채널 구독 신청]</b>\n\n"
+        f"이름: <b>{name_display}</b>\n"
+        f"@username: {uname_display}\n"
+        f"텔레그램 ID: <code>{uid}</code>\n\n"
+        f"대시보드 → 프로 채널에서 등록 후 초대 발송"
     )
+    res = _post('sendMessage', chat_id=admin, parse_mode='HTML', text=msg)
+    if res.get('ok'):
+        log.info(f"[cmd] 어드민 알림 전송 완료 → {admin}")
+    else:
+        log.warning(f"[cmd] 어드민 알림 실패: {res.get('description')} (admin={admin})")
 
 
 def _handle(update: dict):
@@ -132,10 +151,10 @@ def _handle(update: dict):
         # 미구독자: 구독 안내 + 자동으로 어드민 알림
         _reply(chat_id,
             f"안녕하세요, {fname}님! 👋\n\n"
-            f"바티인베스트 <b>증권사 리포트 프로 채널</b>입니다.\n\n"
-            f"📨 구독 신청이 접수되었습니다.\n"
-            f"입금 확인 후 초대 링크를 보내드립니다.\n\n"
-            f"💳 구독료 및 계좌번호는 @batiinvest 로 문의해 주세요."
+            f"<b>바티인베스트 증권사 리포트 채널</b>에 관심 가져주셔서 감사합니다.\n\n"
+            f"구독 신청이 접수되었습니다.\n"
+            f"담당자가 확인 후 구독 안내를 드릴게요.\n\n"
+            f"문의: @batiinvest"
         )
         # 어드민에게 신청자 정보 전달
         _notify_admin_subscribe(uid, fname, lname, username)
