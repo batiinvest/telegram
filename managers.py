@@ -449,9 +449,10 @@ class MarketTimeManager:
                 # 오늘 날짜 행 찾기
                 for row in rows:
                     if row.get('bass_dt') == today_str:
-                        is_holiday = row.get('opnd_yn') != '1'  # 개장일 아니면 휴장
+                        opnd_yn = row.get('opnd_yn', '')
+                        is_holiday = opnd_yn not in ('1', 'Y')  # '1' 또는 'Y' = 개장
                         self._holiday_cache = {'date': today_str, 'is_holiday': is_holiday}
-                        logging.info(f"[휴장일] {today_str} 개장여부={row.get('opnd_yn')} → {'휴장' if is_holiday else '개장'}")
+                        logging.info(f"[휴장일] {today_str} 개장여부={opnd_yn} → {'휴장' if is_holiday else '개장'}")
                         return is_holiday
         except Exception as e:
             logging.warning(f"[휴장일] API 조회 실패 ({e}) → 정적 공휴일 목록으로 fallback")
