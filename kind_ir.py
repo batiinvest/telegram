@@ -125,7 +125,8 @@ def _save_state(last_seq: int, sent_set: set):
 #  1. KIND IR자료 목록 조회 (날짜 필터 없이 최근 N건)
 # ══════════════════════════════════════════════════════════════
 
-def fetch_ir_list_recent(session: requests.Session, pages: int = 3) -> list[dict]:
+def fetch_ir_list_recent(session: requests.Session, pages: int = 3,
+                         from_date: str = "", to_date: str = "") -> list[dict]:
     """
     KIND IR자료실 최근 목록을 조회합니다 (날짜 필터 없음).
     irSeq 기준으로 최신 업로드 순으로 반환합니다.
@@ -151,11 +152,9 @@ def fetch_ir_list_recent(session: requests.Session, pages: int = 3) -> list[dict
         "Content-Type":     "application/x-www-form-urlencoded; charset=UTF-8",
     })
 
-    today    = date.today()
-    # 날짜 필터는 IR 개최 예정일 기준 → 최대한 넓게 설정
-    # (오늘 업로드했지만 미래 일자인 자료까지 모두 포함)
-    from_dt  = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-    to_dt    = (today + timedelta(days=365)).strftime("%Y-%m-%d")
+    today   = date.today()
+    from_dt = from_date or (today - timedelta(days=30)).strftime("%Y-%m-%d")
+    to_dt   = to_date   or (today + timedelta(days=365)).strftime("%Y-%m-%d")
 
     results = []
     for page in range(1, pages + 1):
@@ -387,10 +386,13 @@ def _send_media_group(chat_id: str,
 # ══════════════════════════════════════════════════════════════
 
 def run_kind_ir_job(
-    chat_id:  str  = TARGET_CHAT,
-    dry_run:  bool = False,
-    lookback: int  = 3,       # 조회할 페이지 수 (1page=40건)
-    reset:    bool = False,   # True면 last_seq 무시하고 모두 재처리
+    chat_id:        str  = TARGET_CHAT,
+    dry_run:        bool = False,
+    lookback:       int  = 3,       # 조회할 페이지 수 (1page=40건)
+    reset:          bool = False,   # True면 last_seq 무시하고 모두 재처리
+    monitored_only: bool = False,   # True면 COMPANY_CODES 등록 종목만 수집
+    from_date:      str  = "",      # IR 개최일 시작 (YYYY-MM-DD), 기본=오늘-30일
+    to_date:        str  = "",      # IR 개최일 종료 (YYYY-MM-DD), 기본=오늘+1년
 ):
     """
     KIND IR자료 수집 → 텔레그램 전송 메인 함수
@@ -404,7 +406,11 @@ def run_kind_ir_job(
         lookback: 조회할 페이지 수 (기본 3페이지 = 최근 120건)
         reset:    True면 last_seq 무시 (재처리 / 초기 세팅)
     """
-    log.info(f"[KIND IR] === 수집 시작 (lookback={lookback}pages) ===")
+    log.info(
+        f"[KIND IR] === 수집 시작 (lookback={lookback}p"
+        f"{', monitored_only' if monitored_only else ''}"
+        f"{f', {from_date}~{to_date}' if from_date else ''}) ==="
+    )
 
     session              = _make_session()
     last_seq, sent_set   = _load_state()
@@ -417,10 +423,22 @@ def run_kind_ir_job(
     log.info(f"[KIND IR] 마지막 처리 irSeq={last_seq}, 전송이력={len(sent_set)}개")
 
     # 목록 조회
-    items = fetch_ir_list_recent(session, pages=lookback)
+    items = fetch_ir_list_recent(session, pages=lookback,
+                                 from_date=from_date, to_date=to_date)
     if not items:
         log.info("[KIND IR] 수집된 IR자료 없음")
         return
+
+    # 모니터링 종목 필터
+    if monitored_only:
+        try:
+            from config import COMPANY_CODES as _CC
+            monitored_names = set(_CC.keys())
+        except Exception:
+            monitored_names = set()
+        before = len(items)
+        items = [it for it in items if it["corp"] in monitored_names]
+        log.info(f"[KIND IR] 모니터링 종목 필터: {before}건 → {len(items)}건")
 
     # irSeq 기준 내림차순 정렬 (최신 → 오래된 순)
     items.sort(key=lambda x: int(x["ir_seq"]) if x["ir_seq"].isdigit() else 0, reverse=True)
@@ -562,10 +580,13 @@ if __name__ == "__main__":
     logging.getLogger().setLevel(logging.INFO)
 
     parser = argparse.ArgumentParser(description="KIND IR자료 수집 → 텔레그램 전송")
-    parser.add_argument("--dry-run",  action="store_true",         help="텔레그램 전송 생략")
-    parser.add_argument("--chat-id",  default=TARGET_CHAT,          help="전송 채널")
-    parser.add_argument("--lookback", type=int,   default=3,        help="조회 페이지 수 (1page=40건)")
-    parser.add_argument("--reset",    action="store_true",          help="last_seq 무시하고 전체 재처리")
+    parser.add_argument("--dry-run",        action="store_true",  help="텔레그램 전송 생략")
+    parser.add_argument("--chat-id",        default=TARGET_CHAT,  help="전송 채널")
+    parser.add_argument("--lookback",       type=int, default=3,  help="조회 페이지 수 (1page=40건)")
+    parser.add_argument("--reset",          action="store_true",  help="last_seq 무시하고 전체 재처리")
+    parser.add_argument("--monitored-only", action="store_true",  help="모니터링 종목만 수집")
+    parser.add_argument("--from-date",      default="",           help="IR 개최일 시작 (YYYY-MM-DD)")
+    parser.add_argument("--to-date",        default="",           help="IR 개최일 종료 (YYYY-MM-DD)")
     args = parser.parse_args()
 
     run_kind_ir_job(
@@ -573,4 +594,7 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         lookback=args.lookback,
         reset=args.reset,
+        monitored_only=args.monitored_only,
+        from_date=args.from_date,
+        to_date=args.to_date,
     )
