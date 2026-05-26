@@ -1850,18 +1850,9 @@ def run_naver_report_job():
             hashtags = _report_hashtags(page_type, tag, file_name)
             caption  = f"{_safe_caption(file_name)}\n\n{hashtags}"[:1024]
 
-            # 1. 리포트 채널 전송
+            # 1. 리포트 채널 전송 (batiarchive)
             if _report_cid:
                 _send_telegram_doc(_report_cid, target_doc, file_name, caption)
-                # 어드민 채팅방 — app_config.admin_chat_id 우선, 없으면 스킵
-                try:
-                    from supabase_bridge import bridge as _b
-                    _admin_cid = _b.get_config('admin_chat_id', '')
-                    if _admin_cid and _admin_cid != DEFAULT_CHAT_ID:
-                        if pdf_buf: pdf_buf.seek(0)
-                        _send_telegram_doc(_admin_cid, target_doc, file_name, caption)
-                except Exception:
-                    pass
 
 
             # 2. 타겟 채널 찾기
