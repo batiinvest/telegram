@@ -156,6 +156,8 @@ def classify_disclosure(report_nm: str) -> str:
     return 'normal'
 
 
+CAP_THRESHOLD_MAIN = 100_000_000_000  # 메인 채널 시총 기준: 1000억
+
 class DartRoutingBot:
     def __init__(self):
         self.base_url = "https://opendart.fss.or.kr/api/list.json"
@@ -163,8 +165,50 @@ class DartRoutingBot:
         self.ai_executor = ThreadPoolExecutor(max_workers=2)
         self.session = get_session()
 
+        # 시총 캐시 (메인 채널 필터링용)
+        self._cap_cache: dict = {}   # stock_code(숫자) → market_cap
+        self._cap_loaded: datetime.datetime | None = None
+        self._load_cap_cache()
+
         # DB에서 블랙리스트 로드
         _load_dart_filters()
+
+    def _load_cap_cache(self):
+        """Supabase market_data에서 최신 시총 캐시 로드 (24시간마다 갱신)."""
+        if not _BRIDGE_OK:
+            return
+        try:
+            sb = _bridge._get_client()
+            date_res = sb.table('market_data').select('base_date') \
+                         .order('base_date', desc=True).limit(1).execute()
+            max_date = (date_res.data or [{}])[0].get('base_date')
+            if max_date:
+                mkt_res = sb.table('market_data').select('stock_code,market_cap') \
+                            .eq('base_date', max_date).execute()
+                self._cap_cache = {
+                    m['stock_code']: m['market_cap']
+                    for m in (mkt_res.data or [])
+                    if m.get('market_cap') is not None
+                }
+                self._cap_loaded = datetime.datetime.now()
+                logging.info(f"[공시봇] 시총 캐시 로드 완료: {len(self._cap_cache)}개")
+        except Exception as e:
+            logging.warning(f"[공시봇] 시총 캐시 로드 실패: {e}")
+
+    def _is_main_worthy(self, stock_code: str) -> bool:
+        """시총 1000억 이상인지 확인. 정보 없으면 True(허용)."""
+        # 24시간마다 캐시 갱신
+        if self._cap_loaded is None or \
+           (datetime.datetime.now() - self._cap_loaded).total_seconds() > 86400:
+            self._load_cap_cache()
+
+        if not stock_code:
+            return True  # stock_code 없으면 허용 (시장 전체 중요 공시 등)
+        code = stock_code.replace('.KS', '').replace('.KQ', '').strip()
+        cap  = self._cap_cache.get(code)
+        if cap is None:
+            return True  # 시총 정보 없으면 허용
+        return cap >= CAP_THRESHOLD_MAIN
 
     def ai_worker(self, chat_id, corp_name, report_nm, rcept_no):
         logging.info(f"🤖 AI Analyzing: {corp_name}")
@@ -287,8 +331,9 @@ class DartRoutingBot:
                             industry = COMPANY_TO_INDUSTRY.get(corp_name)
 
                             if level == 'urgent':
-                                # 긴급: 메인 + 산업 + 기업
-                                stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
+                                # 긴급: 메인(시총 1000억↑) + 산업 + 기업
+                                if self._is_main_worthy(stock_code):
+                                    stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
                                 if industry and industry in INDUSTRY_CHAT_IDS:
                                     stock_api.send_telegram(INDUSTRY_CHAT_IDS[industry], msg)
                                 _cid = self._get_company_chat_id(corp_name, stock_code)
@@ -302,7 +347,7 @@ class DartRoutingBot:
                                 _cid = self._get_company_chat_id(corp_name, stock_code)
                                 if _cid:
                                     stock_api.send_telegram(_cid, msg)
-                                # 시장 전체 중요 공시는 메인에도
+                                # 시장 전체 중요 공시는 메인에도 (시총 무관 — stock_code 없음)
                                 if is_market_wide:
                                     stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
 
