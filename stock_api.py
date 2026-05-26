@@ -1720,7 +1720,7 @@ def _send_telegram_doc(chat_id: str, document, file_name: str, caption: str = No
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
     
     try:
-        data = {"chat_id": chat_id, "caption": caption[:1024]}
+        data = {"chat_id": chat_id, "caption": caption[:1024], "parse_mode": "HTML"}
         
         # 문서 전송 시도
         if isinstance(document, str): # URL인 경우
@@ -1848,7 +1848,10 @@ def run_naver_report_job():
             pdf_buf = _fetch_pdf_file(pdf_url)
             target_doc = pdf_buf if pdf_buf else pdf_url
             hashtags = _report_hashtags(page_type, tag, file_name)
-            caption  = f"{_safe_caption(file_name)}\n\n{hashtags}"[:1024]
+            caption  = (
+                f"📌 <a href='https://t.me/batiarchive'>바티아카이브</a> — 리포트·IR자료\n\n"
+                f"{_safe_caption(file_name)}\n\n{hashtags}"
+            )[:1024]
 
             # 1. 리포트 채널 전송 (batiarchive)
             if _report_cid:
