@@ -140,10 +140,10 @@ def fetch_ir_list_recent(session: requests.Session, pages: int = 3) -> list[dict
     })
 
     today    = date.today()
-    # fromDate를 넉넉하게 60일 전 ~ 60일 후로 설정
-    # → 오늘 업로드했지만 미래 일자인 자료도 모두 포함
-    from_dt  = (today - timedelta(days=60)).strftime("%Y-%m-%d")
-    to_dt    = (today + timedelta(days=60)).strftime("%Y-%m-%d")
+    # 날짜 필터는 IR 개최 예정일 기준 → 최대한 넓게 설정
+    # (오늘 업로드했지만 미래 일자인 자료까지 모두 포함)
+    from_dt  = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+    to_dt    = (today + timedelta(days=365)).strftime("%Y-%m-%d")
 
     results = []
     for page in range(1, pages + 1):
