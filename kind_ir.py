@@ -425,7 +425,7 @@ def run_kind_ir_job(
 
         # 전송용 파일명: 기업명_IR_날짜.pdf
         safe_corp = re.sub(r'[\\/:*?"<>|]', '', corp)   # 파일명 금지 문자 제거
-        send_filename = f"{safe_corp}_IR_{dt_str.replace('-', '')}.pdf"
+        send_filename = f"{safe_corp}_IR_{dt_str.replace('-', '')[2:]}.pdf"
 
         if dry_run:
             log.info(f"  [DRY-RUN] 전송 생략: {send_filename} ({buf.getbuffer().nbytes:,}B)")
