@@ -192,14 +192,15 @@ def fetch_ir_list_recent(session: requests.Session, pages: int = 3) -> list[dict
             if len(tds) < 4:
                 continue
 
-            pdf_link = row.find(
+            # 한 행에 PDF 링크가 여러 개일 수 있음 (part1, part2 등) → find_all
+            pdf_links = row.find_all(
                 "a",
                 href=lambda h: h and h.startswith("/external/dst/irReference/")
             )
-            if not pdf_link:
+            if not pdf_links:
                 continue
 
-            # irSeq 추출
+            # irSeq 추출 (행 공통)
             ir_seq = ""
             detail_a = row.find("a", onclick=lambda o: o and "fnDetailView" in o if o else False)
             if detail_a:
@@ -207,8 +208,8 @@ def fetch_ir_list_recent(session: requests.Session, pages: int = 3) -> list[dict
                 if m:
                     ir_seq = m.group(1)
             if not ir_seq:
-                pdf_path = pdf_link.get("href", "")
-                m = re.search(r"/irReference/(\d+)/", pdf_path)
+                first_href = pdf_links[0].get("href", "")
+                m = re.search(r"/irReference/(\d+)/", first_href)
                 ir_seq = m.group(1) if m else ""
 
             # 시장 구분 (코스피/코스닥/코넥스)
@@ -223,18 +224,27 @@ def fetch_ir_list_recent(session: requests.Session, pages: int = 3) -> list[dict
                 if m2:
                     stock_code = m2.group(1).zfill(6)
 
-            item = {
-                "ir_seq":     ir_seq,
-                "corp":       tds[1].get_text(strip=True),
-                "date":       tds[2].get_text(strip=True),   # IR 개최 예정일
-                "category":   tds[3].get_text(strip=True),
-                "filename":   pdf_link.get_text(strip=True),
-                "pdf_path":   pdf_link.get("href", ""),
-                "market":     market,       # 코스피 / 코스닥 / 코넥스
-                "stock_code": stock_code,   # 종목코드 6자리
-            }
-            results.append(item)
-            page_items += 1
+            corp = tds[1].get_text(strip=True)
+            date = tds[2].get_text(strip=True)
+            category = tds[3].get_text(strip=True)
+
+            # PDF가 여러 개면 각각 별도 아이템으로 추가
+            # sent_set 키: 단일 파일은 ir_seq, 복수 파일은 ir_seq_N
+            for idx, pdf_link in enumerate(pdf_links):
+                seq_key = ir_seq if len(pdf_links) == 1 else f"{ir_seq}_{idx}"
+                item = {
+                    "ir_seq":     seq_key,
+                    "corp":       corp,
+                    "date":       date,
+                    "category":   category,
+                    "filename":   pdf_link.get_text(strip=True),
+                    "pdf_path":   pdf_link.get("href", ""),
+                    "market":     market,
+                    "stock_code": stock_code,
+                    "base_seq":   ir_seq,   # 정렬/필터용 원본 irSeq
+                }
+                results.append(item)
+                page_items += 1
 
         log.info(f"[KIND IR] page={page}, 수집={page_items}건 (누적 {len(results)}건)")
 
@@ -358,14 +368,14 @@ def run_kind_ir_job(
         log.info("[KIND IR] 수집된 IR자료 없음")
         return
 
-    # irSeq 기준 내림차순 정렬 (최신 → 오래된 순)
-    items.sort(key=lambda x: int(x["ir_seq"]) if x["ir_seq"].isdigit() else 0, reverse=True)
+    # base_seq 기준 내림차순 정렬 (최신 → 오래된 순)
+    items.sort(key=lambda x: int(x["base_seq"]) if x["base_seq"].isdigit() else 0, reverse=True)
 
-    # 신규 항목만 필터 (last_seq 초과 & 미전송)
+    # 신규 항목만 필터 (base_seq > last_seq & 미전송)
     new_items = [
         it for it in items
-        if it["ir_seq"].isdigit()
-        and int(it["ir_seq"]) > last_seq
+        if it["base_seq"].isdigit()
+        and int(it["base_seq"]) > last_seq
         and it["ir_seq"] not in sent_set
     ]
 
@@ -379,7 +389,7 @@ def run_kind_ir_job(
         return
 
     # 오래된 것부터 전송 (순서 보장)
-    new_items.sort(key=lambda x: int(x["ir_seq"]))
+    new_items.sort(key=lambda x: int(x["base_seq"]))
 
     # ── 전송 전 요약 메시지 ────────────────────────────────────
     today_str_hdr = date.today().strftime("%Y-%m-%d")
@@ -433,17 +443,19 @@ def run_kind_ir_job(
         safe_corp = re.sub(r'[\\/:*?"<>|]', '', corp)   # 파일명 금지 문자 제거
         send_filename = f"{safe_corp}_IR_{dt_str.replace('-', '')[2:]}.pdf"
 
+        base_seq = item.get("base_seq", ir_seq)
+
         if dry_run:
             log.info(f"  [DRY-RUN] 전송 생략: {send_filename} ({buf.getbuffer().nbytes:,}B)")
             new_sent.add(ir_seq)
-            max_seq_ok = max(max_seq_ok, int(ir_seq))
+            max_seq_ok = max(max_seq_ok, int(base_seq))
             sent_ok += 1
         else:
             ok = _send_doc(chat_id, buf, send_filename, caption)
             if ok:
                 log.info(f"  [OK] {corp}: {filename}")
                 new_sent.add(ir_seq)
-                max_seq_ok = max(max_seq_ok, int(ir_seq))
+                max_seq_ok = max(max_seq_ok, int(base_seq))
                 sent_ok += 1
 
                 # ── 산업 채팅방 전달 ──────────────────────────
