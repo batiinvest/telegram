@@ -411,14 +411,9 @@ def run_kind_ir_job(
             continue
 
         # 캡션 구성
-        future_tag   = " 📅" if dt_str > today_str_hdr else ""
-        # 해시태그용 회사명 (공백 제거)
-        corp_tag     = re.sub(r'\s+', '', corp)
-
         caption = (
-            f"📋<b>{corp} IR자료</b>\n"
-            f"IR 개최일: {dt_str}{future_tag}\n"
-            f"#IR자료 #{corp_tag}"
+            f"📋{corp} IR자료\n"
+            f"IR일자: {dt_str}"
         )
 
         # 전송용 파일명: 기업명_IR_날짜.pdf
