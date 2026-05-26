@@ -1172,7 +1172,7 @@ def job_kind_ir():
         return
     try:
         logging.info("📋 [KIND IR] 수집 시작")
-        _kind_ir.run_kind_ir_job(days=1)
+        _kind_ir.run_kind_ir_job()
     except Exception as e:
         logging.error(f"❌ [KIND IR] 오류: {e}")
 
