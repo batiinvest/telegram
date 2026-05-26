@@ -411,9 +411,11 @@ def run_kind_ir_job(
             continue
 
         # 캡션 구성
+        corp_tag = re.sub(r'\s+', '', corp)
         caption = (
             f"📋{corp} IR자료\n"
-            f"IR일자: {dt_str}"
+            f"IR일자: {dt_str}\n"
+            f"#IR자료 #{corp_tag}"
         )
 
         # 전송용 파일명: 기업명_IR_날짜.pdf
