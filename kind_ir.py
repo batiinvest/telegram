@@ -365,13 +365,17 @@ def run_kind_ir_job(
             f"{date_label}"
         )
 
+        # 전송용 파일명: 기업명_IR_날짜.pdf
+        safe_corp = re.sub(r'[\\/:*?"<>|]', '', corp)   # 파일명 금지 문자 제거
+        send_filename = f"{safe_corp}_IR_{dt_str.replace('-', '')}.pdf"
+
         if dry_run:
-            log.info(f"  [DRY-RUN] 전송 생략: {filename} ({buf.getbuffer().nbytes:,}B)")
+            log.info(f"  [DRY-RUN] 전송 생략: {send_filename} ({buf.getbuffer().nbytes:,}B)")
             new_sent.add(ir_seq)
             max_seq_ok = max(max_seq_ok, int(ir_seq))
             sent_ok += 1
         else:
-            ok = _send_doc(chat_id, buf, filename, caption)
+            ok = _send_doc(chat_id, buf, send_filename, caption)
             if ok:
                 log.info(f"  [OK] {corp}: {filename}")
                 new_sent.add(ir_seq)
