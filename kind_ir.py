@@ -199,13 +199,27 @@ def fetch_ir_list_recent(session: requests.Session, pages: int = 3) -> list[dict
                 m = re.search(r"/irReference/(\d+)/", pdf_path)
                 ir_seq = m.group(1) if m else ""
 
+            # 시장 구분 (코스피/코스닥/코넥스)
+            market_img = tds[1].find("img")
+            market = market_img.get("alt", "") if market_img else ""
+
+            # 종목코드 (companysummary_open('15371') → 015371)
+            corp_a = tds[1].find("a", onclick=lambda o: o and "companysummary_open" in o if o else False)
+            stock_code = ""
+            if corp_a:
+                m2 = re.search(r"companysummary_open\('(\d+)'\)", corp_a.get("onclick", ""))
+                if m2:
+                    stock_code = m2.group(1).zfill(6)
+
             item = {
-                "ir_seq":   ir_seq,
-                "corp":     tds[1].get_text(strip=True),
-                "date":     tds[2].get_text(strip=True),   # IR 개최 예정일
-                "category": tds[3].get_text(strip=True),
-                "filename": pdf_link.get_text(strip=True),
-                "pdf_path": pdf_link.get("href", ""),
+                "ir_seq":     ir_seq,
+                "corp":       tds[1].get_text(strip=True),
+                "date":       tds[2].get_text(strip=True),   # IR 개최 예정일
+                "category":   tds[3].get_text(strip=True),
+                "filename":   pdf_link.get_text(strip=True),
+                "pdf_path":   pdf_link.get("href", ""),
+                "market":     market,       # 코스피 / 코스닥 / 코넥스
+                "stock_code": stock_code,   # 종목코드 6자리
             }
             results.append(item)
             page_items += 1
@@ -335,12 +349,14 @@ def run_kind_ir_job(
     sent_ok     = 0
 
     for item in new_items:
-        ir_seq   = item["ir_seq"]
-        corp     = item["corp"]
-        dt_str   = item["date"]   # IR 개최 예정일
-        category = item["category"]
-        filename = item["filename"]
-        pdf_path = item["pdf_path"]
+        ir_seq     = item["ir_seq"]
+        corp       = item["corp"]
+        dt_str     = item["date"]   # IR 개최 예정일
+        category   = item["category"]
+        filename   = item["filename"]
+        pdf_path   = item["pdf_path"]
+        market     = item.get("market", "")
+        stock_code = item.get("stock_code", "")
 
         log.info(f"[KIND IR] 처리: irSeq={ir_seq} {corp} (IR일자={dt_str})")
 
@@ -350,19 +366,20 @@ def run_kind_ir_job(
             # 다운로드 실패는 재시도 가능성을 위해 sent에 추가하지 않음
             continue
 
-        # IR 개최 예정일 표시
-        today_str = date.today().strftime("%Y-%m-%d")
-        date_label = (
-            f"IR 개최: {dt_str}"
-            if dt_str > today_str
-            else f"IR 개최: {dt_str}"
-        )
+        # 캡션 구성
+        today_str   = date.today().strftime("%Y-%m-%d")
+        market_tag  = f" [{market}]" if market else ""
+        code_tag    = f" <code>{stock_code}</code>" if stock_code else ""
+        future_tag  = " 📅" if dt_str > today_str else ""
+        naver_url   = f"https://finance.naver.com/item/main.naver?code={stock_code}" if stock_code else ""
+        pdf_url     = urljoin(KIND_BASE, pdf_path)
 
         caption = (
-            f"📋 <b>[KIND IR자료]</b>\n"
-            f"<b>{corp}</b>\n"
-            f"{category}\n"
-            f"{date_label}"
+            f"📋 <b>[KIND IR자료]{market_tag}</b>\n"
+            f"<b>{corp}</b>{code_tag}\n"
+            f"IR 개최일: {dt_str}{future_tag}\n"
+            f"🔗 <a href='{pdf_url}'>PDF 다운로드</a>"
+            + (f"  |  <a href='{naver_url}'>네이버 금융</a>" if naver_url else "")
         )
 
         # 전송용 파일명: 기업명_IR_날짜.pdf
