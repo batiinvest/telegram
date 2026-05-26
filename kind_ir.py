@@ -29,9 +29,20 @@ import requests
 from bs4 import BeautifulSoup
 
 try:
-    from config import TELEGRAM_BOT_TOKEN
+    from config import (
+        TELEGRAM_BOT_TOKEN,
+        COMPANY_TO_INDUSTRY,
+        INDUSTRY_CHAT_IDS,
+    )
 except ImportError:
-    TELEGRAM_BOT_TOKEN = None
+    TELEGRAM_BOT_TOKEN    = None
+    COMPANY_TO_INDUSTRY   = {}
+    INDUSTRY_CHAT_IDS     = {}
+
+try:
+    from stock_api import get_company_chat_id as _get_company_chat_id
+except ImportError:
+    _get_company_chat_id = None
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)   # config.py 의 basicConfig(WARNING) 보다 먼저 고정
@@ -434,6 +445,24 @@ def run_kind_ir_job(
                 new_sent.add(ir_seq)
                 max_seq_ok = max(max_seq_ok, int(ir_seq))
                 sent_ok += 1
+
+                # ── 산업 채팅방 전달 ──────────────────────────
+                industry = COMPANY_TO_INDUSTRY.get(corp)
+                if industry and industry in INDUSTRY_CHAT_IDS:
+                    ind_chat = INDUSTRY_CHAT_IDS[industry]
+                    buf.seek(0)
+                    _send_doc(ind_chat, buf, send_filename, caption)
+                    log.info(f"  [산업] {corp} → [{industry}] {ind_chat}")
+                    time.sleep(1)
+
+                # ── 개별 채팅방 전달 ──────────────────────────
+                if _get_company_chat_id:
+                    cid = _get_company_chat_id(corp, stock_code)
+                    if cid:
+                        buf.seek(0)
+                        _send_doc(cid, buf, send_filename, caption)
+                        log.info(f"  [개별] {corp} → {cid}")
+                        time.sleep(1)
             else:
                 log.warning(f"  [FAIL] {corp}: {filename}")
 
