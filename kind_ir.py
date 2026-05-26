@@ -333,13 +333,19 @@ def _is_english_file(filename: str) -> bool:
 
 
 def _make_send_filename(safe_corp: str, dt_yy: str, orig_filename: str,
-                        idx: int, total: int) -> str:
-    """전송용 파일명 생성 (단일/복수 PDF 구분)"""
+                        idx: int, total: int, has_eng_sibling: bool = False) -> str:
+    """전송용 파일명 생성 (단일/복수 PDF 구분)
+    - 영문 파일: _Eng suffix
+    - 영문 파일과 쌍인 한글 파일: suffix 없음
+    - 둘 다 한글(또는 불명): (1) (2) numbering
+    """
     base = f"{safe_corp}_IR_{dt_yy}"
     if total == 1:
         return f"{base}.pdf"
     if _is_english_file(orig_filename):
         return f"{base}_Eng.pdf"
+    if has_eng_sibling:
+        return f"{base}.pdf"          # 한글 파일은 suffix 불필요
     return f"{base} ({idx + 1}).pdf"
 
 
@@ -478,13 +484,15 @@ def run_kind_ir_job(
             f"#IR자료 #{corp_tag}"
         )
 
+        has_eng = any(_is_english_file(p["filename"]) for p in pdfs)
+
         downloaded = []
         for idx, pdf in enumerate(pdfs):
             buf = download_pdf(session, pdf["path"])
             if buf is None:
                 log.warning(f"[KIND IR] PDF 다운로드 실패 ({idx+1}/{len(pdfs)}): {corp}")
                 continue
-            fname = _make_send_filename(safe_corp, dt_yy, pdf["filename"], idx, len(pdfs))
+            fname = _make_send_filename(safe_corp, dt_yy, pdf["filename"], idx, len(pdfs), has_eng)
             downloaded.append({"buf": buf, "filename": fname, "caption": caption if idx == 0 else ""})
 
         if not downloaded:
