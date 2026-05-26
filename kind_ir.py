@@ -228,23 +228,21 @@ def fetch_ir_list_recent(session: requests.Session, pages: int = 3) -> list[dict
             ir_date  = tds[2].get_text(strip=True)   # IR 개최 예정일
             category = tds[3].get_text(strip=True)
 
-            # PDF가 여러 개면 각각 별도 아이템으로 추가
-            # sent_set 키: 단일 파일은 ir_seq, 복수 파일은 ir_seq_N
-            for idx, pdf_link in enumerate(pdf_links):
-                seq_key = ir_seq if len(pdf_links) == 1 else f"{ir_seq}_{idx}"
-                item = {
-                    "ir_seq":     seq_key,
-                    "corp":       corp,
-                    "date":       ir_date,
-                    "category":   category,
-                    "filename":   pdf_link.get_text(strip=True),
-                    "pdf_path":   pdf_link.get("href", ""),
-                    "market":     market,
-                    "stock_code": stock_code,
-                    "base_seq":   ir_seq,   # 정렬/필터용 원본 irSeq
-                }
-                results.append(item)
-                page_items += 1
+            # 행 하나에 PDF 여러 개 → pdfs 리스트로 묶어 단일 아이템
+            item = {
+                "ir_seq":     ir_seq,
+                "corp":       corp,
+                "date":       ir_date,
+                "category":   category,
+                "market":     market,
+                "stock_code": stock_code,
+                "pdfs": [
+                    {"path": lnk.get("href", ""), "filename": lnk.get_text(strip=True)}
+                    for lnk in pdf_links
+                ],
+            }
+            results.append(item)
+            page_items += 1
 
         log.info(f"[KIND IR] page={page}, 수집={page_items}건 (누적 {len(results)}건)")
 
@@ -328,6 +326,56 @@ def _send_doc(chat_id: str, buf: BytesIO, filename: str, caption: str) -> bool:
         return False
 
 
+def _is_english_file(filename: str) -> bool:
+    """원본 KIND 파일명에서 영문 버전 여부 판단"""
+    fn = filename.lower()
+    return any(k in fn for k in ['eng', 'english', '_en.', '_en_', '(en)', ' en '])
+
+
+def _make_send_filename(safe_corp: str, dt_yy: str, orig_filename: str,
+                        idx: int, total: int) -> str:
+    """전송용 파일명 생성 (단일/복수 PDF 구분)"""
+    base = f"{safe_corp}_IR_{dt_yy}"
+    if total == 1:
+        return f"{base}.pdf"
+    if _is_english_file(orig_filename):
+        return f"{base}_Eng.pdf"
+    return f"{base} ({idx + 1}).pdf"
+
+
+def _send_media_group(chat_id: str,
+                      files: list[dict],   # [{"buf", "filename", "caption"}, ...]
+                      ) -> bool:
+    """PDF 여러 개를 한 메시지(미디어 그룹)로 전송. 캡션은 첫 번째에만."""
+    if not TELEGRAM_BOT_TOKEN:
+        log.warning("[KIND IR] TELEGRAM_BOT_TOKEN 없음 — _send_media_group 스킵")
+        return False
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMediaGroup"
+    media = []
+    attach = {}
+    for i, f in enumerate(files):
+        key = f"f{i}"
+        f["buf"].seek(0)
+        attach[key] = (f["filename"], f["buf"], "application/pdf")
+        entry = {"type": "document", "media": f"attach://{key}"}
+        if i == 0 and f.get("caption"):
+            entry["caption"]    = f["caption"][:1024]
+            entry["parse_mode"] = "HTML"
+        media.append(entry)
+    try:
+        r = requests.post(url, data={
+            "chat_id": chat_id,
+            "media":   json.dumps(media, ensure_ascii=False),
+        }, files=attach, timeout=120)
+        ok = r.json().get("ok", False)
+        if not ok:
+            log.warning(f"[KIND IR] TG 미디어그룹 전송 실패: {r.json().get('description')}")
+        return ok
+    except Exception as e:
+        log.error(f"[KIND IR] TG 미디어그룹 전송 오류: {e}")
+        return False
+
+
 # ══════════════════════════════════════════════════════════════
 #  4. 메인 실행 함수
 # ══════════════════════════════════════════════════════════════
@@ -368,14 +416,14 @@ def run_kind_ir_job(
         log.info("[KIND IR] 수집된 IR자료 없음")
         return
 
-    # base_seq 기준 내림차순 정렬 (최신 → 오래된 순)
-    items.sort(key=lambda x: int(x["base_seq"]) if x["base_seq"].isdigit() else 0, reverse=True)
+    # irSeq 기준 내림차순 정렬 (최신 → 오래된 순)
+    items.sort(key=lambda x: int(x["ir_seq"]) if x["ir_seq"].isdigit() else 0, reverse=True)
 
-    # 신규 항목만 필터 (base_seq > last_seq & 미전송)
+    # 신규 항목만 필터 (ir_seq > last_seq & 미전송)
     new_items = [
         it for it in items
-        if it["base_seq"].isdigit()
-        and int(it["base_seq"]) > last_seq
+        if it["ir_seq"].isdigit()
+        and int(it["ir_seq"]) > last_seq
         and it["ir_seq"] not in sent_set
     ]
 
@@ -385,11 +433,10 @@ def run_kind_ir_job(
 
     if not new_items:
         log.info("[KIND IR] 신규 자료 없음")
-        # last_seq는 갱신하지 않음
         return
 
     # 오래된 것부터 전송 (순서 보장)
-    new_items.sort(key=lambda x: int(x["base_seq"]))
+    new_items.sort(key=lambda x: int(x["ir_seq"]))
 
     # ── 전송 전 요약 메시지 ────────────────────────────────────
     today_str_hdr = date.today().strftime("%Y-%m-%d")
@@ -397,8 +444,7 @@ def run_kind_ir_job(
         f"📋 [{today_str_hdr}]  IR자료 (총 {len(new_items)}건)\n"
     ]
     for i, it in enumerate(new_items, 1):
-        dt = it["date"]
-        summary_lines.append(f"{i}. {it['corp']} - IR일자: {dt}")
+        summary_lines.append(f"{i}. {it['corp']} - IR일자: {it['date']}")
     summary_msg = "\n".join(summary_lines)
 
     if dry_run:
@@ -409,74 +455,80 @@ def run_kind_ir_job(
         time.sleep(1)
     # ──────────────────────────────────────────────────────────
 
-    new_sent    = set(sent_set)
-    max_seq_ok  = last_seq
-    sent_ok     = 0
+    new_sent   = set(sent_set)
+    max_seq_ok = last_seq
+    sent_ok    = 0
 
     for item in new_items:
         ir_seq     = item["ir_seq"]
         corp       = item["corp"]
-        dt_str     = item["date"]   # IR 개최 예정일
-        category   = item["category"]
-        filename   = item["filename"]
-        pdf_path   = item["pdf_path"]
-        market     = item.get("market", "")
+        dt_str     = item["date"]
         stock_code = item.get("stock_code", "")
+        pdfs       = item.get("pdfs", [])
 
-        log.info(f"[KIND IR] 처리: irSeq={ir_seq} {corp} (IR일자={dt_str})")
+        log.info(f"[KIND IR] 처리: irSeq={ir_seq} {corp} (IR일자={dt_str}, PDF {len(pdfs)}건)")
 
-        buf = download_pdf(session, pdf_path)
-        if buf is None:
-            log.warning(f"[KIND IR] PDF 다운로드 실패 — 스킵: {corp}")
-            # 다운로드 실패는 재시도 가능성을 위해 sent에 추가하지 않음
-            continue
-
-        # 캡션 구성
-        corp_tag = re.sub(r'\s+', '', corp)
-        caption = (
+        # ── 모든 PDF 다운로드 ──────────────────────────────────
+        safe_corp = re.sub(r'[\\/:*?"<>|]', '', corp)
+        dt_yy     = dt_str.replace("-", "")[2:]   # YYMMDD
+        corp_tag  = re.sub(r'\s+', '', corp)
+        caption   = (
             f"📋{corp} IR자료\n"
             f"IR일자: {dt_str}\n"
             f"#IR자료 #{corp_tag}"
         )
 
-        # 전송용 파일명: 기업명_IR_날짜.pdf
-        safe_corp = re.sub(r'[\\/:*?"<>|]', '', corp)   # 파일명 금지 문자 제거
-        send_filename = f"{safe_corp}_IR_{dt_str.replace('-', '')[2:]}.pdf"
+        downloaded = []
+        for idx, pdf in enumerate(pdfs):
+            buf = download_pdf(session, pdf["path"])
+            if buf is None:
+                log.warning(f"[KIND IR] PDF 다운로드 실패 ({idx+1}/{len(pdfs)}): {corp}")
+                continue
+            fname = _make_send_filename(safe_corp, dt_yy, pdf["filename"], idx, len(pdfs))
+            downloaded.append({"buf": buf, "filename": fname, "caption": caption if idx == 0 else ""})
 
-        base_seq = item.get("base_seq", ir_seq)
+        if not downloaded:
+            continue
+
+        # ── 전송 함수 선택: 1개=단일, 2개↑=미디어그룹 ─────────
+        def _do_send(target_chat: str) -> bool:
+            if len(downloaded) == 1:
+                return _send_doc(target_chat, downloaded[0]["buf"],
+                                 downloaded[0]["filename"], caption)
+            else:
+                # buf.seek(0) 은 _send_media_group 내부에서 처리
+                return _send_media_group(target_chat, downloaded)
 
         if dry_run:
-            log.info(f"  [DRY-RUN] 전송 생략: {send_filename} ({buf.getbuffer().nbytes:,}B)")
+            names = ", ".join(d["filename"] for d in downloaded)
+            log.info(f"  [DRY-RUN] 전송 생략: {names}")
             new_sent.add(ir_seq)
-            max_seq_ok = max(max_seq_ok, int(base_seq))
+            max_seq_ok = max(max_seq_ok, int(ir_seq))
             sent_ok += 1
         else:
-            ok = _send_doc(chat_id, buf, send_filename, caption)
+            ok = _do_send(chat_id)
             if ok:
-                log.info(f"  [OK] {corp}: {filename}")
+                log.info(f"  [OK] {corp} ({len(downloaded)}개)")
                 new_sent.add(ir_seq)
-                max_seq_ok = max(max_seq_ok, int(base_seq))
+                max_seq_ok = max(max_seq_ok, int(ir_seq))
                 sent_ok += 1
 
                 # ── 산업 채팅방 전달 ──────────────────────────
                 industry = COMPANY_TO_INDUSTRY.get(corp)
                 if industry and industry in INDUSTRY_CHAT_IDS:
-                    ind_chat = INDUSTRY_CHAT_IDS[industry]
-                    buf.seek(0)
-                    _send_doc(ind_chat, buf, send_filename, caption)
-                    log.info(f"  [산업] {corp} → [{industry}] {ind_chat}")
                     time.sleep(1)
+                    _do_send(INDUSTRY_CHAT_IDS[industry])
+                    log.info(f"  [산업] {corp} → [{industry}]")
 
                 # ── 개별 채팅방 전달 ──────────────────────────
                 if _get_company_chat_id:
                     cid = _get_company_chat_id(corp, stock_code)
                     if cid:
-                        buf.seek(0)
-                        _send_doc(cid, buf, send_filename, caption)
-                        log.info(f"  [개별] {corp} → {cid}")
                         time.sleep(1)
+                        _do_send(cid)
+                        log.info(f"  [개별] {corp} → {cid}")
             else:
-                log.warning(f"  [FAIL] {corp}: {filename}")
+                log.warning(f"  [FAIL] {corp}")
 
         time.sleep(1)  # 텔레그램 레이트 리밋
 
