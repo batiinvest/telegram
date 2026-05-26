@@ -34,6 +34,7 @@ except ImportError:
     TELEGRAM_BOT_TOKEN = None
 
 log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)   # config.py 의 basicConfig(WARNING) 보다 먼저 고정
 
 # ── 상수 ───────────────────────────────────────────────────────
 KIND_BASE        = "https://kind.krx.co.kr"
@@ -261,6 +262,30 @@ def download_pdf(session: requests.Session, pdf_path: str) -> BytesIO | None:
 #  3. 텔레그램 전송
 # ══════════════════════════════════════════════════════════════
 
+def _send_text(chat_id: str, text: str) -> bool:
+    """텍스트 메시지 전송 (요약/알림용)"""
+    if not TELEGRAM_BOT_TOKEN:
+        log.warning("[KIND IR] TELEGRAM_BOT_TOKEN 없음 — _send_text 스킵")
+        return False
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    log.info(f"[KIND IR] 텍스트 전송 시도: chat_id={chat_id}, len={len(text)}")
+    try:
+        r = requests.post(url, data={
+            "chat_id":                  chat_id,
+            "text":                     text[:4096],
+            "parse_mode":               "HTML",
+            "disable_web_page_preview": "true",
+        }, timeout=30)
+        resp = r.json()
+        ok = resp.get("ok", False)
+        if not ok:
+            log.warning(f"[KIND IR] TG 텍스트 전송 실패: {resp}")
+        return ok
+    except Exception as e:
+        log.error(f"[KIND IR] TG 텍스트 전송 오류: {e}")
+        return False
+
+
 def _send_doc(chat_id: str, buf: BytesIO, filename: str, caption: str) -> bool:
     if not TELEGRAM_BOT_TOKEN:
         log.warning("[KIND IR] TELEGRAM_BOT_TOKEN 없음")
@@ -344,6 +369,26 @@ def run_kind_ir_job(
     # 오래된 것부터 전송 (순서 보장)
     new_items.sort(key=lambda x: int(x["ir_seq"]))
 
+    # ── 전송 전 요약 메시지 ────────────────────────────────────
+    today_str_hdr = date.today().strftime("%Y-%m-%d")
+    summary_lines = [
+        f"📋 <b>[KIND IR자료] {today_str_hdr}</b> (총 {len(new_items)}건)\n"
+    ]
+    for it in new_items:
+        dt = it["date"]
+        future_mark = " 📅" if dt > today_str_hdr else ""
+        mkt = f" [{it['market']}]" if it.get("market") else ""
+        summary_lines.append(f"• {it['corp']}{mkt} — {dt}{future_mark}")
+    summary_msg = "\n".join(summary_lines)
+
+    if dry_run:
+        log.info(f"  [DRY-RUN] 요약 메시지:\n{summary_msg}")
+    else:
+        ok = _send_text(chat_id, summary_msg)
+        log.info(f"[KIND IR] 요약 메시지 전송: {'OK' if ok else 'FAIL'}")
+        time.sleep(1)
+    # ──────────────────────────────────────────────────────────
+
     new_sent    = set(sent_set)
     max_seq_ok  = last_seq
     sent_ok     = 0
@@ -367,8 +412,7 @@ def run_kind_ir_job(
             continue
 
         # 캡션 구성
-        today_str    = date.today().strftime("%Y-%m-%d")
-        future_tag   = " 📅" if dt_str > today_str else ""
+        future_tag   = " 📅" if dt_str > today_str_hdr else ""
         # 해시태그용 회사명 (공백 제거)
         corp_tag     = re.sub(r'\s+', '', corp)
 
@@ -416,6 +460,9 @@ def run_kind_ir_job(
 if __name__ == "__main__":
     import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # config.py 가 basicConfig 를 WARNING 레벨로 먼저 호출하므로
+    # no-op 이 되는 경우를 대비해 root 레벨을 명시적으로 재설정
+    logging.getLogger().setLevel(logging.INFO)
 
     parser = argparse.ArgumentParser(description="KIND IR자료 수집 → 텔레그램 전송")
     parser.add_argument("--dry-run",  action="store_true",         help="텔레그램 전송 생략")
