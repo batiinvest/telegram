@@ -367,19 +367,15 @@ def run_kind_ir_job(
             continue
 
         # 캡션 구성
-        today_str   = date.today().strftime("%Y-%m-%d")
-        market_tag  = f" [{market}]" if market else ""
-        code_tag    = f" <code>{stock_code}</code>" if stock_code else ""
-        future_tag  = " 📅" if dt_str > today_str else ""
-        naver_url   = f"https://finance.naver.com/item/main.naver?code={stock_code}" if stock_code else ""
-        pdf_url     = urljoin(KIND_BASE, pdf_path)
+        today_str    = date.today().strftime("%Y-%m-%d")
+        future_tag   = " 📅" if dt_str > today_str else ""
+        # 해시태그용 회사명 (공백 제거)
+        corp_tag     = re.sub(r'\s+', '', corp)
 
         caption = (
-            f"📋 <b>[KIND IR자료]{market_tag}</b>\n"
-            f"<b>{corp}</b>{code_tag}\n"
+            f"📋<b>{corp} IR자료</b>\n"
             f"IR 개최일: {dt_str}{future_tag}\n"
-            f"🔗 <a href='{pdf_url}'>PDF 다운로드</a>"
-            + (f"  |  <a href='{naver_url}'>네이버 금융</a>" if naver_url else "")
+            f"#IR자료 #{corp_tag}"
         )
 
         # 전송용 파일명: 기업명_IR_날짜.pdf
