@@ -358,8 +358,8 @@ def _send_media_group(chat_id: str,
         f["buf"].seek(0)
         attach[key] = (f["filename"], f["buf"], "application/pdf")
         entry = {"type": "document", "media": f"attach://{key}"}
-        if i == 0 and f.get("caption"):
-            entry["caption"]    = f["caption"][:1024]
+        if i == len(files) - 1 and f.get("caption"):   # 마지막 파일에 캡션 → 파일들 아래 배치
+            entry["caption"]    = files[0]["caption"][:1024]
             entry["parse_mode"] = "HTML"
         media.append(entry)
     try:
