@@ -52,6 +52,15 @@ except ImportError as _pe:
     _PRO_OK = False
     logging.warning(f"⚠️ [Pro] pro_channel 모듈 없음 (무시): {_pe}")
 
+# ✅ [추가] KIND IR자료 수집 모듈
+try:
+    import kind_ir as _kind_ir
+    _KIND_IR_OK = True
+    logging.info("✅ [KIND IR] 모듈 로드 완료")
+except ImportError as _kie:
+    _KIND_IR_OK = False
+    logging.warning(f"⚠️ [KIND IR] kind_ir 모듈 없음 (무시): {_kie}")
+
 # ✅ [추가] SMS 웹훅 서버 (입금 자동 처리)
 try:
     import sms_webhook as _sms_wh
@@ -1154,6 +1163,20 @@ def job_watchlist_alert():
         logging.error(f"❌ [관심가알림] 오류: {e}")
 
 
+def job_kind_ir():
+    """매일 2회 (09:05, 18:05) — KIND IR자료실 수집 → @batiarchive 전송"""
+    if not _KIND_IR_OK:
+        return
+    if not _is_enabled("kind_ir"):
+        logging.info("⏸ KIND IR 수집 비활성화 (DB 설정)")
+        return
+    try:
+        logging.info("📋 [KIND IR] 수집 시작")
+        _kind_ir.run_kind_ir_job(days=1)
+    except Exception as e:
+        logging.error(f"❌ [KIND IR] 오류: {e}")
+
+
 def job_pro_channel_check():
     """매일 09:00 — 프로 채널 구독 만료 멤버 퇴장 + D-3 예고 알림"""
     if not _PRO_OK:
@@ -1224,6 +1247,7 @@ def run_scheduler():
     logging.info("🚀 [스케줄러] 시작 (schedule 라이브러리 적용)")
 
     schedule.every().day.at("09:00").do(job_pro_channel_check)  # 프로 채널 구독 만료 체크
+    schedule.every().day.at("09:05").do(job_kind_ir)             # KIND IR자료 오전 수집
     schedule.every().day.at("08:50").do(job_naver_report)
     schedule.every().day.at("08:55").do(job_collect_analyst_opinions)  # 투자의견 (장전)
     schedule.every().day.at("06:10").do(job_collect_macro)             # 글로벌 매크로 수집 (미국 장 마감 직후, 서머타임 06:00 기준)
@@ -1241,6 +1265,7 @@ def run_scheduler():
     schedule.every().day.at("13:25").do(job_collect_foreign_institution)
     schedule.every().day.at("14:35").do(job_collect_foreign_institution)
     schedule.every().day.at("18:00").do(job_naver_report)
+    schedule.every().day.at("18:05").do(job_kind_ir)             # KIND IR자료 오후 수집
     schedule.every().day.at("18:30").do(job_daily_closing)
     # 봇 시작 시 초기 재무 데이터 수집 (최초 1회만)
     import threading
