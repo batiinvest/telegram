@@ -224,8 +224,8 @@ def fetch_ir_list_recent(session: requests.Session, pages: int = 3) -> list[dict
                 if m2:
                     stock_code = m2.group(1).zfill(6)
 
-            corp = tds[1].get_text(strip=True)
-            date = tds[2].get_text(strip=True)
+            corp     = tds[1].get_text(strip=True)
+            ir_date  = tds[2].get_text(strip=True)   # IR 개최 예정일
             category = tds[3].get_text(strip=True)
 
             # PDF가 여러 개면 각각 별도 아이템으로 추가
@@ -235,7 +235,7 @@ def fetch_ir_list_recent(session: requests.Session, pages: int = 3) -> list[dict
                 item = {
                     "ir_seq":     seq_key,
                     "corp":       corp,
-                    "date":       date,
+                    "date":       ir_date,
                     "category":   category,
                     "filename":   pdf_link.get_text(strip=True),
                     "pdf_path":   pdf_link.get("href", ""),
