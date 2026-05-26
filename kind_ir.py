@@ -373,13 +373,11 @@ def run_kind_ir_job(
     # ── 전송 전 요약 메시지 ────────────────────────────────────
     today_str_hdr = date.today().strftime("%Y-%m-%d")
     summary_lines = [
-        f"📋 <b>[{today_str_hdr}] IR자료</b>  (총 {len(new_items)}건)\n"
+        f"📋 [{today_str_hdr}]  IR자료 (총 {len(new_items)}건)\n"
     ]
     for i, it in enumerate(new_items, 1):
         dt = it["date"]
-        future_mark = " 📅" if dt > today_str_hdr else ""
-        mkt = f" [{it['market']}]" if it.get("market") else ""
-        summary_lines.append(f"{i}. {it['corp']}{mkt} - IR일자: {dt}{future_mark}")
+        summary_lines.append(f"{i}. {it['corp']} - IR일자: {dt}")
     summary_msg = "\n".join(summary_lines)
 
     if dry_run:
