@@ -336,7 +336,8 @@ def run_kind_ir_job(
 
     if reset:
         last_seq = 0
-        log.info("[KIND IR] reset=True — last_seq 초기화")
+        sent_set = set()
+        log.info("[KIND IR] reset=True — last_seq·sent_set 초기화")
 
     log.info(f"[KIND IR] 마지막 처리 irSeq={last_seq}, 전송이력={len(sent_set)}개")
 
