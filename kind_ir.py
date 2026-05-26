@@ -499,7 +499,8 @@ def run_kind_ir_job(
         caption   = (
             f"📋{corp} IR자료\n"
             f"IR일자: {dt_str}\n"
-            f"#IR자료 #{corp_tag}"
+            f"#IR자료 #{corp_tag}\n"
+            f"📢 <a href=\"https://t.me/batiarchive\">@batiarchive</a>"
         )
 
         has_eng = any(_is_english_file(p["filename"]) for p in pdfs)
