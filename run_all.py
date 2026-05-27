@@ -1268,11 +1268,6 @@ def run_scheduler():
     schedule.every().day.at("16:20").do(job_collect_us_etf)            # US ETF 수집 (미장 전일 종가)
     schedule.every().day.at("16:30").do(job_collect_new_high)          # 신고가 종목 수집
     schedule.every().day.at("17:00").do(job_collect_market_closing)    # 장 마감 확정치 수집 (외국인 집계 완료 후)
-    # 기관/외국인 가집계 — 장중 참고용 (16:35 전체수집으로 확정치 덮어씀)
-    schedule.every().day.at("09:35").do(job_collect_foreign_institution)
-    schedule.every().day.at("11:25").do(job_collect_foreign_institution)
-    schedule.every().day.at("13:25").do(job_collect_foreign_institution)
-    schedule.every().day.at("14:35").do(job_collect_foreign_institution)
     schedule.every().day.at("18:00").do(job_naver_report)
     schedule.every().day.at("18:10").do(job_kind_ir)             # KIND IR자료 오후 수집
     schedule.every().day.at("18:30").do(job_daily_closing)
