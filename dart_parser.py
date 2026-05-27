@@ -214,19 +214,37 @@ def parse_investment_decision(kv: dict) -> list:
 def parse_clinical_trial(kv: dict) -> list:
     """투자판단관련주요경영사항(임상시험결과)"""
     lines = []
-    # 후보물질 / 시험약
     if v := _get(kv, '시험약명', '후보물질', '시험물질', '의약품명', '물질명'):
         lines.append(f'🔬 후보물질: {v}')
-    # 임상단계
     if v := _get(kv, '임상단계', '시험단계', '개발단계'):
         lines.append(f'📊 임상단계: {v}')
-    # 대상질환 / 적응증
     if v := _get(kv, '대상질환', '적응증', '목표질환', '질환'):
         lines.append(f'💊 대상질환: {v}')
-    # 임상결과
     if v := _get(kv, '임상결과', '시험결과', '결과'):
         lines.append(f'📋 결과: {_trunc(v)}')
-    # 주요내용 (결과 없을 때 fallback)
+    # 결과 필드 없을 때 fallback
+    if not lines or len(lines) < 2:
+        if v := _get(kv, '주요내용', '주요 내용', '내용'):
+            lines.append(f'📋 내용: {_trunc(v)}')
+    return lines
+
+
+def parse_clinical_trial_plan(kv: dict) -> list:
+    """투자판단관련주요경영사항(임상시험계획승인신청등결정)
+    IND 신청 / 임상시험 계획 승인 관련 공시.
+    """
+    lines = []
+    if v := _get(kv, '시험약명', '후보물질', '시험물질', '의약품명', '물질명'):
+        lines.append(f'🔬 후보물질: {v}')
+    if v := _get(kv, '임상단계', '시험단계', '개발단계'):
+        lines.append(f'📊 임상단계: {v}')
+    if v := _get(kv, '대상질환', '적응증', '목표질환', '질환'):
+        lines.append(f'💊 대상질환: {v}')
+    if v := _get(kv, '신청기관', '승인기관', '규제기관', '제출기관'):
+        lines.append(f'🏛️ 신청기관: {v}')
+    if v := _get(kv, '신청일', '결정일', '승인일', '제출일'):
+        lines.append(f'📅 신청일: {v}')
+    # 주요내용 fallback
     if not lines or len(lines) < 2:
         if v := _get(kv, '주요내용', '주요 내용', '내용'):
             lines.append(f'📋 내용: {_trunc(v)}')
@@ -248,8 +266,9 @@ _PARSER_MAP = [
     (['합병'],                                      parse_merger),
     (['관리종목'],                                  parse_mgmt_issue),
     (['거래정지', '매매거래정지'],                   parse_halt),
-    (['임상시험결과'],                              parse_clinical_trial),   # ← 구체 타입 먼저
-    (['투자판단관련주요경영사항'],                   parse_investment_decision),
+    (['임상시험계획승인신청'],                       parse_clinical_trial_plan),  # IND 신청/승인
+    (['임상시험결과'],                              parse_clinical_trial),       # 임상 결과
+    (['투자판단관련주요경영사항'],                   parse_investment_decision),  # 일반 (fallback)
 ]
 
 
