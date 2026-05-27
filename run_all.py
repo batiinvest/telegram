@@ -4,6 +4,8 @@ import logging
 import sys
 import os
 import datetime
+import json
+import re
 from logging.handlers import RotatingFileHandler
 from managers import market_timer, HistoryManager
 
@@ -335,7 +337,6 @@ def job_cleanup_market_data():
             logging.error("❌ [정리] Supabase 연결 없음 — 스킵")
             return
 
-        import datetime
         cutoff_all = (datetime.date.today() - datetime.timedelta(days=KEEP_ALL)).isoformat()
         cutoff_mon = (datetime.date.today() - datetime.timedelta(days=KEEP_MON)).isoformat()
 
@@ -363,7 +364,6 @@ def job_cleanup_market_data():
         logging.info(f"🗑️ [정리] market_data 정리 완료 — 모니터링 {KEEP_MON}일 / 전체 {KEEP_ALL}일 보존")
     except Exception as e:
         logging.error(f"❌ [정리] market_data 정리 오류: {e}")
-        logging.error(f"❌ [정리] market_data 정리 오류: {e}")
 
 
 
@@ -377,7 +377,6 @@ def _preprocess_disclosures(all_disc_records: list, sb) -> list:
       5. insider 요약 — insider_summary 필드 추가 (rcept_no 기준)
     반환: 전처리된 레코드 리스트 (각 항목에 category, market_cap, insider_summary 포함)
     """
-    import json
 
     # ── 1. 노이즈 제거 ──────────────────────────────────────────────
     NOISE_KEYWORDS = [
@@ -493,8 +492,7 @@ def _preprocess_disclosures(all_disc_records: list, sb) -> list:
 
     # ── 5. insider 요약 첨부 (insider_trades DB에서 오늘 데이터 조회) ──
     try:
-        import datetime as _dt
-        today_str = _dt.date.today().isoformat()
+        today_str = datetime.date.today().isoformat()
         ins_res = sb.table('insider_trades') \
                     .select('rcept_no,corp_code,reporter,shares_change,hold_ratio_before,hold_ratio_after,plan_period,report_type') \
                     .eq('base_date', today_str).execute()
@@ -555,7 +553,7 @@ def job_collect_financials():
         logging.info("⏸ 재무수집 비활성화 (DB 설정)")
         return
     try:
-        import OpenDartReader, datetime, json
+        import OpenDartReader
         dart   = OpenDartReader(os.environ.get('DART_API_KEY',''))
         today  = datetime.date.today().strftime('%Y%m%d')
         today_display = datetime.date.today().strftime('%Y-%m-%d')  # 가독성용
@@ -600,8 +598,6 @@ def job_collect_financials():
                     seen_rcept.add(rno)
 
         # ── 분기/반기/사업보고서만 필터 (재무수집 + 실적공시 카드용) ──
-        import re
-
         def _parse_quarter(report_nm: str):
             """report_nm에서 실제 분기 파싱. 예: '사업보고서 (2025.12)' → ('2025', 'Q4')"""
             m = re.search(r'\((\d{4})\.(\d{2})\)', report_nm)
@@ -713,8 +709,7 @@ def job_collect_financials():
             }, on_conflict='key').execute()
 
             # ── 2. 전체 공시 → daily_disclosures 테이블 (app_config JSON 탈출) ──
-            import datetime as _dt
-            _today_str = _dt.date.today().isoformat()
+            _today_str = datetime.date.today().isoformat()
 
             # 오늘 기존 데이터 삭제 후 재삽입 (전체 갱신)
             sb.table('daily_disclosures').delete().eq('base_date', _today_str).execute()
@@ -838,13 +833,12 @@ def job_collect_macro():
     logging.info("=== 매크로 데이터 수집 시작 ===")
     try:
         import collect_macro
-        import datetime as _dt
         data = collect_macro.collect_all()
         collect_macro.save_to_db(data)
         logging.info("=== 매크로 데이터 수집 완료 ===")
 
         # 06:xx 아침 수집에만 메인 채널 브리핑 발송 (16:10 저녁 수집 제외)
-        if _dt.datetime.now().hour == 6 and _is_enabled('macro_briefing'):
+        if datetime.datetime.now().hour == 6 and _is_enabled('macro_briefing'):
             msg = stock_api.get_macro_briefing(data)
             if msg:
                 stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
@@ -856,8 +850,7 @@ def job_collect_macro():
 
 def job_collect_analyst_opinions():
     """증권사 투자의견 수집 (하루 2회: 장전 + 장후)"""
-    import datetime as _dt
-    if _dt.datetime.now().weekday() >= 5:
+    if datetime.datetime.now().weekday() >= 5:
         return
     logging.info("📋 [투자의견] 증권사 투자의견 수집 시작")
     try:
@@ -870,8 +863,7 @@ def job_collect_analyst_opinions():
 
 def job_collect_foreign_institution():
     """기관/외국인 매매가집계 수집 (장중 4회 + 장마감 후)"""
-    import datetime as _dt
-    if _dt.datetime.now().weekday() >= 5:
+    if datetime.datetime.now().weekday() >= 5:
         return
     logging.info("=== 기관/외국인 수급 수집 시작 ===")
     try:
@@ -884,8 +876,7 @@ def job_collect_foreign_institution():
 
 def job_collect_new_high():
     """장 마감 후 신고가 종목 수집"""
-    import datetime as _dt
-    if _dt.datetime.now().weekday() >= 5:
+    if datetime.datetime.now().weekday() >= 5:
         return
     logging.info("=== 신고가 종목 수집 시작 ===")
     try:
@@ -911,7 +902,6 @@ def job_collect_us_etf():
 
 def job_collect_market():
     """평일 장중 — KIS 모니터링 종목(306개) 시장 데이터 수집"""
-    import datetime
     if datetime.datetime.now().weekday() >= 5 or market_timer.is_kr_holiday():
         logging.info("⏸ [시장수집] 주말/공휴일 스킵")
         return
@@ -936,8 +926,7 @@ def _check_market_warnings():
     if not _BRIDGE_OK:
         return
     try:
-        import datetime as _dt
-        today = _dt.date.today().isoformat()
+        today = datetime.date.today().isoformat()
         sb = _bridge._get_client()
 
         # 오늘 수집된 모니터링 종목 중 경보 있는 것 조회
@@ -952,8 +941,7 @@ def _check_market_warnings():
             return
 
         # 어제 경보 이력 조회 (신규 진입만 알림)
-        import datetime as _dt2
-        yesterday = (_dt2.date.today() - _dt2.timedelta(days=1)).isoformat()
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
         prev_res = sb.table('market_data') \
                      .select('stock_code,market_warn_code,is_caution') \
                      .eq('base_date', yesterday) \
@@ -1000,7 +988,6 @@ def _check_market_warnings():
 
 def job_collect_market_closing():
     """평일 장 마감 후 (15:40) — 전체 상장사 시장 데이터 수집"""
-    import datetime
     if market_timer.is_kr_holiday():  # 주말/공휴일 스킵
         logging.info("⏸ [시장수집-전체] 주말/공휴일 스킵")
         return
@@ -1045,8 +1032,6 @@ def job_watchlist_alert():
     """
     if not _BRIDGE_OK:
         return
-
-    import datetime, json
 
     today = datetime.date.today().isoformat()
 
@@ -1272,7 +1257,6 @@ def run_scheduler():
     schedule.every().day.at("18:10").do(job_kind_ir)             # KIND IR자료 오후 수집
     schedule.every().day.at("18:30").do(job_daily_closing)
     # 봇 시작 시 초기 재무 데이터 수집 (최초 1회만)
-    import threading
     # job_initial_financials 제거 — 필요시 수동 실행
     logging.info("🚀 [초기수집] 백그라운드 스레드 시작")
 
@@ -1382,8 +1366,7 @@ def main():
 
                         # ── 제거된 종목 → 90일 초과 데이터 삭제 ──────────
                         if _removed:
-                            import datetime as _dt
-                            _cutoff90 = (_dt.date.today() - _dt.timedelta(days=90)).isoformat()
+                            _cutoff90 = (datetime.date.today() - datetime.timedelta(days=90)).isoformat()
                             _rm_list = list(_removed)
                             _chunk = 200
                             for _i in range(0, len(_rm_list), _chunk):
@@ -1395,12 +1378,9 @@ def main():
                         # ── 신규 추가 종목 → 90일 시장 데이터 백필 ────────
                         if _added and _COLLECTOR_OK:
                             logging.info(f"📈 [Reload] 신규 모니터링 {len(_added)}개 — 90일 시장 데이터 백필 시작")
-                            import threading as _th2
                             def _backfill_market(_codes):
                                 try:
-                                    import time as _t2
                                     from stock_api import _call_kis_api
-                                    from datetime import datetime as _dt2, timedelta as _td
                                     _sb4 = _bridge._get_client()
 
                                     # 회사 정보 (name, market)
@@ -1415,8 +1395,8 @@ def main():
                                     _total = 0
                                     for _code in _codes:
                                         _info = _comp_map.get(_code, {'name':'', 'market':'KOSDAQ'})
-                                        _end = _dt2.now().strftime('%Y%m%d')
-                                        _start = (_dt2.now() - _td(days=95)).strftime('%Y%m%d')
+                                        _end = datetime.datetime.now().strftime('%Y%m%d')
+                                        _start = (datetime.datetime.now() - datetime.timedelta(days=95)).strftime('%Y%m%d')
                                         try:
                                             _data = _call_kis_api(
                                                 tr_id='FHKST03010100',
@@ -1432,7 +1412,7 @@ def main():
                                             _daily = _data.get('output2', []) if _data else []
                                         except Exception as _ae:
                                             logging.error(f"  [{_code}] API 오류: {_ae}")
-                                            _t2.sleep(0.5)
+                                            time.sleep(0.5)
                                             continue
 
                                         _rows = []
@@ -1469,13 +1449,13 @@ def main():
                                             ).execute()
                                         _total += len(_rows)
                                         logging.info(f"  [{_code}] {_info['name']}: {len(_rows)}건 저장")
-                                        _t2.sleep(0.15)
+                                        time.sleep(0.15)
 
                                     logging.info(f"📈 [Reload] 백필 완료: 총 {_total}건")
                                 except Exception as _be:
                                     logging.error(f"❌ [Reload] 백필 오류: {_be}")
-                            _th2.Thread(target=_backfill_market, args=(list(_added),),
-                                       name="Thread-MarketBackfill", daemon=True).start()
+                            threading.Thread(target=_backfill_market, args=(list(_added),),
+                                             name="Thread-MarketBackfill", daemon=True).start()
 
                         # ── 신규 종목 기업정보 자동수집 ───────────────────
                         if _added and _COLLECTOR_OK:
@@ -1486,7 +1466,6 @@ def main():
                                 _new_codes = list(_added - _done)
                                 if _new_codes:
                                     logging.info(f"📋 [기업정보] 신규 모니터링 종목 {len(_new_codes)}개 감지 → 자동수집")
-                                    import threading as _th
                                     def _collect_new():
                                         try:
                                             _dart2 = __import__('OpenDartReader')(
@@ -1495,14 +1474,14 @@ def main():
                                             for _c in _new_codes:
                                                 try:
                                                     _collect_company_one(_dart2, _sb3, _c, force=False)
-                                                    import time as _t; _t.sleep(0.5)
+                                                    time.sleep(0.5)
                                                 except Exception as _e:
                                                     logging.error(f"  [{_c}] 기업정보 수집 오류: {_e}")
                                             logging.info(f"📋 [기업정보] 자동수집 완료 ({len(_new_codes)}개)")
                                         except Exception as _fe:
                                             logging.error(f"❌ [기업정보] 자동수집 스레드 오류: {_fe}")
-                                    _th.Thread(target=_collect_new,
-                                              name="Thread-CompanyInfo", daemon=True).start()
+                                    threading.Thread(target=_collect_new,
+                                                     name="Thread-CompanyInfo", daemon=True).start()
                             except Exception as _cie:
                                 logging.debug(f"기업정보 신규감지 오류: {_cie}")
 
@@ -1518,7 +1497,6 @@ def main():
                                 ]
                                 if _new_corp_codes:
                                     logging.info(f"💰 [재무] 신규 종목 {len(_new_corp_codes)}개 — 2023년~현재 재무 수집 시작")
-                                    import threading as _th3
                                     def _collect_fin_new(_corp_codes):
                                         try:
                                             from collect_financials import run_by_corp_codes_all_history
@@ -1526,9 +1504,9 @@ def main():
                                             logging.info(f"💰 [재무] 신규 종목 재무 수집 완료 ({len(_corp_codes)}개)")
                                         except Exception as _fe2:
                                             logging.error(f"❌ [재무] 신규 종목 재무 수집 오류: {_fe2}")
-                                    _th3.Thread(target=_collect_fin_new,
-                                               args=(_new_corp_codes,),
-                                               name="Thread-FinancialsNew", daemon=True).start()
+                                    threading.Thread(target=_collect_fin_new,
+                                                     args=(_new_corp_codes,),
+                                                     name="Thread-FinancialsNew", daemon=True).start()
                             except Exception as _fie:
                                 logging.debug(f"재무 신규감지 오류: {_fie}")
 
@@ -1546,15 +1524,13 @@ def main():
                     _req = _sb.table('app_config').select('value') \
                               .eq('key', 'collect_company_info_request').single().execute()
                     if _req.data and _req.data.get('value'):
-                        import json as _json
-                        _req_data = _json.loads(_req.data['value'])
+                        _req_data = json.loads(_req.data['value'])
                         _req_code = _req_data.get('code', '')
                         _req_time = _req_data.get('requested_at', '')
                         # 5분 이내 요청만 처리
                         if _req_code and _req_time:
-                            from datetime import timezone as _tz
-                            _elapsed = (datetime.now(tz=_tz.utc) -
-                                       datetime.fromisoformat(_req_time.replace('Z','+00:00'))).total_seconds()
+                            _elapsed = (datetime.datetime.now(tz=datetime.timezone.utc) -
+                                       datetime.datetime.fromisoformat(_req_time.replace('Z','+00:00'))).total_seconds()
                             if _elapsed < 300:
                                 logging.info(f"📋 [기업정보] 수동 수집 요청 감지: {_req_code}")
                                 _dart = __import__('OpenDartReader')(
@@ -1575,8 +1551,7 @@ def main():
                     _mktf = _sb_mkt.table('app_config').select('value') \
                                    .eq('key', 'run_market_all_flag').single().execute()
                     if _mktf.data and _mktf.data.get('value', '0').isdigit():
-                        import time as _tm2
-                        _mkt_elapsed = (_tm2.time() * 1000 - float(_mktf.data['value'])) / 1000
+                        _mkt_elapsed = (time.time() * 1000 - float(_mktf.data['value'])) / 1000
                         if 0 < _mkt_elapsed < 300:
                             if market_timer.is_kr_holiday():
                                 logging.info("⏸ [시장수집-전체] 주말/공휴일 — 수동 트리거 무시")
@@ -1612,8 +1587,7 @@ def main():
                         _mf_val = _mf.data['value']
                         # 값이 숫자(타임스탬프)이고 3분 이내면 실행
                         if _mf_val.isdigit():
-                            import time as _tm
-                            _elapsed = (_tm.time() * 1000 - float(_mf_val)) / 1000
+                            _elapsed = (time.time() * 1000 - float(_mf_val)) / 1000
                             if _elapsed < 180:
                                 logging.info("📡 [매크로] 수동 수집 트리거 감지 → job_collect_macro 실행")
                                 # 플래그 초기화 (중복 실행 방지)
@@ -1634,14 +1608,12 @@ def main():
                     _sb_etf = _bridge._get_client()
                     _etff = _sb_etf.table('app_config').select('value')                                    .eq('key', 'etf_collect_flag').single().execute()
                     if _etff.data and _etff.data.get('value', '0').isdigit():
-                        import time as _tm_etf
-                        _etf_elapsed = (_tm_etf.time() * 1000 - float(_etff.data['value'])) / 1000
+                        _etf_elapsed = (time.time() * 1000 - float(_etff.data['value'])) / 1000
                         if 0 < _etf_elapsed < 300:
                             logging.info("📡 [US ETF] 수집 트리거 감지 → collect_us_etf 실행")
                             _sb_etf.table('app_config').upsert({
                                 'key': 'etf_collect_flag', 'value': '0'
                             }, on_conflict='key').execute()
-                            import threading as _th_etf
                             def _run_etf_collect():
                                 try:
                                     import collect_us_etf
@@ -1649,8 +1621,8 @@ def main():
                                     logging.info("✅ [US ETF] 수집 완료")
                                 except Exception as _ee:
                                     logging.error(f"❌ [US ETF] 수집 오류: {_ee}")
-                            _th_etf.Thread(target=_run_etf_collect,
-                                           name="Thread-EtfCollect", daemon=True).start()
+                            threading.Thread(target=_run_etf_collect,
+                                             name="Thread-EtfCollect", daemon=True).start()
                 except Exception as _etfe:
                     logging.debug(f"etf_collect_flag 체크 오류: {_etfe}")
 
