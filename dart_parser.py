@@ -197,6 +197,76 @@ def parse_halt(kv: dict) -> list:
     return lines
 
 
+def parse_dividend(kv: dict) -> list:
+    """현금ㆍ현물배당결정"""
+    lines = []
+    if v := _get(kv, '주당배당금', '1주당 배당금', '배당금액'):
+        lines.append(f'💰 주당배당금: {v}')
+    if v := _get(kv, '시가배당률', '배당수익률'):
+        lines.append(f'📊 시가배당률: {v}')
+    if v := _get(kv, '배당기준일', '주주확정일'):
+        lines.append(f'📅 배당기준일: {v}')
+    if v := _get(kv, '배당지급예정일', '지급예정일', '배당금지급일'):
+        lines.append(f'📅 지급예정일: {v}')
+    return lines
+
+
+def parse_acquisition(kv: dict) -> list:
+    """타법인주식및출자증권취득결정"""
+    lines = []
+    if v := _get(kv, '취득대상회사', '피투자회사', '취득법인'):
+        lines.append(f'🏢 취득대상: {v}')
+    if v := _get(kv, '취득금액', '취득예정금액'):
+        lines.append(f'💰 취득금액: {v}')
+    if v := _get(kv, '취득후지분율', '취득 후 지분율', '지분율'):
+        lines.append(f'📊 취득 후 지분: {v}')
+    if v := _get(kv, '취득목적', '취득사유', '목적'):
+        lines.append(f'📋 목적: {_trunc(v)}')
+    return lines
+
+
+def parse_facility_investment(kv: dict) -> list:
+    """신규시설투자등"""
+    lines = []
+    if v := _get(kv, '투자내용', '시설내용', '투자목적물'):
+        lines.append(f'🏭 투자내용: {_trunc(v)}')
+    if v := _get(kv, '투자금액', '총투자금액'):
+        lines.append(f'💰 투자금액: {v}')
+    if v := _get(kv, '투자기간', '사업기간', '준공예정'):
+        lines.append(f'📅 투자기간: {v}')
+    if v := _get(kv, '투자목적', '투자사유', '목적'):
+        lines.append(f'📋 목적: {_trunc(v)}')
+    return lines
+
+
+def parse_large_holding(kv: dict) -> list:
+    """주식등의대량보유상황보고서"""
+    lines = []
+    if v := _get(kv, '보고자', '대량보유자'):
+        lines.append(f'👤 보고자: {v}')
+    if v := _get(kv, '보유주식수', '보유수량'):
+        lines.append(f'🔢 보유주식수: {v}')
+    if v := _get(kv, '보유비율', '지분율'):
+        lines.append(f'📊 보유비율: {v}')
+    if v := _get(kv, '변동사유', '보유목적'):
+        lines.append(f'📋 사유: {_trunc(v)}')
+    return lines
+
+
+def parse_treasury_dispose(kv: dict) -> list:
+    """자기주식처분결정"""
+    lines = []
+    if v := _get(kv, '처분주식수', '처분예정주식수'):
+        lines.append(f'🔢 처분주식수: {v}')
+    if v := _get(kv, '처분금액', '처분예정금액', '1주당처분가액'):
+        lines.append(f'💰 처분가액: {v}')
+    if v := _get(kv, '처분기간', '처분예정기간'):
+        lines.append(f'📅 처분기간: {v}')
+    if v := _get(kv, '처분목적', '처분사유'):
+        lines.append(f'📋 목적: {_trunc(v)}')
+    return lines
+
+
 def parse_investment_decision(kv: dict) -> list:
     """투자판단관련주요경영사항 (일반)"""
     lines = []
@@ -266,8 +336,13 @@ _PARSER_MAP = [
     (['합병'],                                      parse_merger),
     (['관리종목'],                                  parse_mgmt_issue),
     (['거래정지', '매매거래정지'],                   parse_halt),
-    (['임상시험계획승인신청'],                       parse_clinical_trial_plan),  # IND 신청/승인
-    (['임상시험결과'],                              parse_clinical_trial),       # 임상 결과
+    (['현금', '현물배당'],                          parse_dividend),
+    (['타법인주식', '출자증권취득'],                 parse_acquisition),
+    (['신규시설투자'],                              parse_facility_investment),
+    (['주식등의대량보유'],                          parse_large_holding),
+    (['자기주식처분결정'],                          parse_treasury_dispose),
+    (['임상시험계획승인신청'],                       parse_clinical_trial_plan),
+    (['임상시험결과'],                              parse_clinical_trial),
     (['투자판단관련주요경영사항'],                   parse_investment_decision),  # 일반 (fallback)
 ]
 
