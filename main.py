@@ -347,8 +347,8 @@ class DartRoutingBot:
                                 _cid = self._get_company_chat_id(corp_name, stock_code)
                                 if _cid:
                                     stock_api.send_telegram(_cid, msg)
-                                # 시장 전체 중요 공시는 메인에도 (시총 무관 — stock_code 없음)
-                                if is_market_wide:
+                                # 시장 전체 중요 공시는 메인에도 (시총 1000억↑만)
+                                if is_market_wide and self._is_main_worthy(stock_code):
                                     stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
 
                             elif level == 'skip':
