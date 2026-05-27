@@ -1757,6 +1757,110 @@ def _send_telegram_doc(chat_id: str, document, file_name: str, caption: str = No
             time.sleep(5)
             _send_telegram_doc(chat_id, document, file_name, caption, retry_count + 1)
 
+def get_macro_briefing(data: dict) -> str | None:
+    """
+    글로벌 매크로 브리핑 메시지 생성 (06:30 KST 아침 발송용)
+
+    data: collect_macro.collect_all() 반환 딕셔너리
+      Keys: sp500/nasdaq/dow/vix/us10y,
+            sp500_fut/nasdaq_fut,
+            bitcoin,
+            usd_krw/jpy_krw/eur_krw/cny_krw,
+            wti/gold/gas/copper
+            (+ 각 키 + '_chg' 로 전일 대비 등락률 %)
+    """
+    if not data:
+        return None
+
+    def _chg(chg):
+        """등락률 포맷: ▲/▼ + 소수점 2자리. None이면 빈 문자열."""
+        if chg is None:
+            return ''
+        arrow = '▲' if chg >= 0 else '▼'
+        return f"  {arrow}{abs(chg):.2f}%"
+
+    date_str = datetime.now().strftime('%m.%d')
+    lines = [f"🌏 <b>글로벌 매크로</b>  {date_str}", ""]
+
+    # ── 미국 마감 ────────────────────────────────────────────────
+    sp = data.get('sp500');    sp_c = data.get('sp500_chg')
+    nq = data.get('nasdaq');   nq_c = data.get('nasdaq_chg')
+    dw = data.get('dow');      dw_c = data.get('dow_chg')
+    vx = data.get('vix');      vx_c = data.get('vix_chg')
+
+    if any(v is not None for v in [sp, nq, dw, vx]):
+        lines.append("🇺🇸 <b>미국 마감</b>")
+        if sp is not None: lines.append(f"S&amp;P500    {sp:>10,.0f}{_chg(sp_c)}")
+        if nq is not None: lines.append(f"나스닥    {nq:>10,.0f}{_chg(nq_c)}")
+        if dw is not None: lines.append(f"다우       {dw:>10,.0f}{_chg(dw_c)}")
+        if vx is not None:
+            # VIX는 하락이 긍정적(공포 완화) — 방향에 맥락 추가
+            vix_note = ''
+            if vx_c is not None:
+                if vx_c <= -2.0:   vix_note = '  (공포 완화)'
+                elif vx_c >= 2.0:  vix_note = '  (공포 확산)'
+            lines.append(f"VIX         {vx:>10.2f}{_chg(vx_c)}{vix_note}")
+        lines.append("")
+
+    # ── 야간 선물 ────────────────────────────────────────────────
+    sf = data.get('sp500_fut');  sf_c = data.get('sp500_fut_chg')
+    nf = data.get('nasdaq_fut'); nf_c = data.get('nasdaq_fut_chg')
+
+    if sf is not None or nf is not None:
+        lines.append("📡 <b>야간 선물</b>")
+        if sf is not None: lines.append(f"S&amp;P500F   {sf:>10,.0f}{_chg(sf_c)}")
+        if nf is not None: lines.append(f"나스닥F   {nf:>10,.0f}{_chg(nf_c)}")
+        lines.append("")
+
+    # ── 미 10년물 + 달러/원 (자금흐름 핵심 지표) ─────────────────
+    y10 = data.get('us10y');    y10_c = data.get('us10y_chg')
+    usd = data.get('usd_krw');  usd_c = data.get('usd_krw_chg')
+
+    if y10 is not None:
+        lines.append(f"🏦 미 10년물  <b>{y10:.2f}%</b>{_chg(y10_c)}")
+    if usd is not None:
+        lines.append(f"💵 달러/원   <b>{usd:,.0f}원</b>{_chg(usd_c)}")
+    if y10 is not None or usd is not None:
+        lines.append("")
+
+    # ── 기타 환율 ────────────────────────────────────────────────
+    jpy = data.get('jpy_krw');  jpy_c = data.get('jpy_krw_chg')
+    eur = data.get('eur_krw');  eur_c = data.get('eur_krw_chg')
+    cny = data.get('cny_krw');  cny_c = data.get('cny_krw_chg')
+
+    if any(v is not None for v in [jpy, eur, cny]):
+        lines.append("💱 <b>기타 환율</b>")
+        if jpy is not None: lines.append(f"엔화    {jpy:,.1f}원/100엔{_chg(jpy_c)}")
+        if eur is not None: lines.append(f"유로    {eur:,.0f}원{_chg(eur_c)}")
+        if cny is not None: lines.append(f"위안    {cny:.1f}원{_chg(cny_c)}")
+        lines.append("")
+
+    # ── 원자재 ──────────────────────────────────────────────────
+    wti = data.get('wti');    wti_c = data.get('wti_chg')
+    gld = data.get('gold');   gld_c = data.get('gold_chg')
+    gas = data.get('gas');    gas_c = data.get('gas_chg')
+    cop = data.get('copper'); cop_c = data.get('copper_chg')
+
+    if any(v is not None for v in [wti, gld, gas, cop]):
+        lines.append("🛢 <b>원자재</b>")
+        if wti is not None: lines.append(f"WTI        {wti:.1f}${_chg(wti_c)}")
+        if gld is not None: lines.append(f"금        {gld:,.0f}${_chg(gld_c)}")
+        if gas is not None: lines.append(f"천연가스   {gas:.3f}${_chg(gas_c)}")
+        if cop is not None: lines.append(f"구리       {cop:.3f}${_chg(cop_c)}")
+        lines.append("")
+
+    # ── 비트코인 ────────────────────────────────────────────────
+    btc = data.get('bitcoin'); btc_c = data.get('bitcoin_chg')
+    if btc is not None:
+        lines.append(f"₿  <b>{btc:,.0f}$</b>{_chg(btc_c)}")
+
+    # 마지막 빈줄 정리
+    while lines and lines[-1] == '':
+        lines.pop()
+
+    return '\n'.join(lines)
+
+
 def run_naver_report_job():
     """
     [최종 수정] 네이버 리포트 수집/전송 (페이지네이션 복원 + 중복 방지 + 메시지 분할)

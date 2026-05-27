@@ -832,15 +832,24 @@ def job_save_grade_history(year: str = None, quarter: str = None):
 
 
 def job_collect_macro():
-    """글로벌 매크로 데이터 수집 (지수/환율/원자재)"""
+    """글로벌 매크로 데이터 수집 (지수/환율/원자재) — 06:30 아침 수집 시 메인 채널 발송 포함"""
     if not _is_enabled('collect_macro'):
         return
     logging.info("=== 매크로 데이터 수집 시작 ===")
     try:
         import collect_macro
+        import datetime as _dt
         data = collect_macro.collect_all()
         collect_macro.save_to_db(data)
         logging.info("=== 매크로 데이터 수집 완료 ===")
+
+        # 06:xx 아침 수집에만 메인 채널 브리핑 발송 (16:10 저녁 수집 제외)
+        if _dt.datetime.now().hour == 6 and _is_enabled('macro_briefing'):
+            msg = stock_api.get_macro_briefing(data)
+            if msg:
+                stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
+                _log_notice(DEFAULT_CHAT_ID, "[매크로 브리핑] 발송")
+                logging.info("📊 [매크로 브리핑] 메인 채널 발송 완료")
     except Exception as e:
         logging.error(f"매크로 데이터 수집 실패: {e}")
 
@@ -1250,8 +1259,8 @@ def run_scheduler():
     schedule.every().day.at("09:05").do(job_kind_ir)             # KIND IR자료 오전 수집
     schedule.every().day.at("08:50").do(job_naver_report)
     schedule.every().day.at("08:55").do(job_collect_analyst_opinions)  # 투자의견 (장전)
-    schedule.every().day.at("06:10").do(job_collect_macro)             # 글로벌 매크로 수집 (미국 장 마감 직후, 서머타임 06:00 기준)
-    schedule.every().day.at("06:15").do(job_collect_us_etf)            # US ETF 수집 (미국 장 마감 직후)
+    schedule.every().day.at("06:30").do(job_collect_macro)             # 글로벌 매크로 수집 + 메인 채널 브리핑 (서머타임 05:00/겨울 06:00 마감 → 06:30 안전)
+    schedule.every().day.at("06:35").do(job_collect_us_etf)            # US ETF 수집 (미국 장 마감 직후)
     schedule.every().day.at("09:30").do(job_collect_market)            # 장 시작 모니터링 수집
     schedule.every().day.at("11:30").do(job_lunch_briefing)
     schedule.every().day.at("12:00").do(job_collect_market)            # 점심 모니터링 수집
@@ -1265,7 +1274,7 @@ def run_scheduler():
     schedule.every().day.at("13:25").do(job_collect_foreign_institution)
     schedule.every().day.at("14:35").do(job_collect_foreign_institution)
     schedule.every().day.at("18:00").do(job_naver_report)
-    schedule.every().day.at("18:05").do(job_kind_ir)             # KIND IR자료 오후 수집
+    schedule.every().day.at("18:10").do(job_kind_ir)             # KIND IR자료 오후 수집
     schedule.every().day.at("18:30").do(job_daily_closing)
     # 봇 시작 시 초기 재무 데이터 수집 (최초 1회만)
     import threading
