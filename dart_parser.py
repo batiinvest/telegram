@@ -198,7 +198,7 @@ def parse_halt(kv: dict) -> list:
 
 
 def parse_investment_decision(kv: dict) -> list:
-    """투자판단관련주요경영사항"""
+    """투자판단관련주요경영사항 (일반)"""
     lines = []
     if v := _get(kv, '주요내용', '결정내용', '주요 내용', '내용'):
         lines.append(f'📋 내용: {_trunc(v)}')
@@ -211,8 +211,31 @@ def parse_investment_decision(kv: dict) -> list:
     return lines
 
 
+def parse_clinical_trial(kv: dict) -> list:
+    """투자판단관련주요경영사항(임상시험결과)"""
+    lines = []
+    # 후보물질 / 시험약
+    if v := _get(kv, '시험약명', '후보물질', '시험물질', '의약품명', '물질명'):
+        lines.append(f'🔬 후보물질: {v}')
+    # 임상단계
+    if v := _get(kv, '임상단계', '시험단계', '개발단계'):
+        lines.append(f'📊 임상단계: {v}')
+    # 대상질환 / 적응증
+    if v := _get(kv, '대상질환', '적응증', '목표질환', '질환'):
+        lines.append(f'💊 대상질환: {v}')
+    # 임상결과
+    if v := _get(kv, '임상결과', '시험결과', '결과'):
+        lines.append(f'📋 결과: {_trunc(v)}')
+    # 주요내용 (결과 없을 때 fallback)
+    if not lines or len(lines) < 2:
+        if v := _get(kv, '주요내용', '주요 내용', '내용'):
+            lines.append(f'📋 내용: {_trunc(v)}')
+    return lines
+
+
 # ══════════════════════════════════════════════
 #  공시 타입 → 파서 매핑
+#  ※ 구체적인 타입을 먼저, 일반 타입을 나중에 등록
 # ══════════════════════════════════════════════
 
 _PARSER_MAP = [
@@ -225,6 +248,7 @@ _PARSER_MAP = [
     (['합병'],                                      parse_merger),
     (['관리종목'],                                  parse_mgmt_issue),
     (['거래정지', '매매거래정지'],                   parse_halt),
+    (['임상시험결과'],                              parse_clinical_trial),   # ← 구체 타입 먼저
     (['투자판단관련주요경영사항'],                   parse_investment_decision),
 ]
 
