@@ -399,15 +399,11 @@ def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
             if not code:
                 continue
 
-            # 신고가 갱신 여부 및 구분
-            if near == 0.0:
-                cls_label = '52주 신고가'
-                cls_code  = '1'
-            elif near >= -1.0:   # 1% 이내 근접
-                cls_label = '신고가 근접'
-                cls_code  = '0'
-            else:
-                continue   # 근접하지 않으면 제외
+            # 52주 신고가 갱신 종목만 수집 (near_rate == 0.00 → 오늘 갱신)
+            if near != 0.0:
+                continue   # 근접(미갱신) 포함하지 않음
+            cls_label = '신고가'
+            cls_code  = '1'
 
             result.append({
                 'code':          code,
