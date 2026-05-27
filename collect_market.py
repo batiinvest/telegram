@@ -429,7 +429,14 @@ def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
 
 
 def save_new_high_to_db(rows: list[dict], base_date: str, sb_client=None):
-    """신고가 정보를 market_data.new_hgpr_cls 컬럼에 업데이트"""
+    """신고가 정보를 market_data.hgpr_cls_code 컬럼에 업데이트
+
+    오전 run_market()이 FHKST01010100 기반으로 hgpr_cls_code를 설정했다가
+    장중에 신고가에서 벗어나도 pop() 로직으로 기존값이 보존되는 문제 방지를 위해
+    ① 오늘 전체 hgpr_cls_code를 null로 초기화
+    ② near-new-highlow API 결과 종목만 재설정
+    순서로 처리한다.
+    """
     if not rows:
         logging.warning("[신고가] 저장할 데이터 없음")
         return
@@ -440,15 +447,27 @@ def save_new_high_to_db(rows: list[dict], base_date: str, sb_client=None):
             return
         sb_client = create_client(SB_URL, SB_SERVICE_KEY)
 
+    # ① 오늘 전체 초기화 — 오전 수집에서 잘못 설정된 stale 값 제거
+    try:
+        sb_client.table('market_data') \
+            .update({'hgpr_cls_code': None, 'hgpr_cls': None}) \
+            .eq('base_date', base_date) \
+            .not_.is_('hgpr_cls_code', 'null') \
+            .execute()
+        logging.info(f"[신고가] {base_date} hgpr_cls_code 초기화 완료")
+    except Exception as e:
+        logging.warning(f"[신고가] 초기화 실패 (이어서 진행): {e}")
+
+    # ② near-new-highlow API 결과만 재설정
     updated = 0
     for r in rows:
         code = r['code'].strip()
-        # near-new-highlow API → FHKST01010100과 동일하게 '신고가'/'신고가 근접' 텍스트 저장
         cls_code  = r.get('new_hgpr_code', '')
         cls_label = {'1':'신고가', '0':'신고가 근접'}.get(cls_code, cls_code)
-        upd  = {'hgpr_cls_code': cls_label, 'hgpr_cls': cls_label}
+        upd = {'hgpr_cls_code': cls_label, 'hgpr_cls': cls_label}
         try:
-            res = sb_client.table('market_data').update(upd)                 .eq('stock_code', code).eq('base_date', base_date).execute()
+            res = sb_client.table('market_data').update(upd) \
+                .eq('stock_code', code).eq('base_date', base_date).execute()
             if res.data:
                 updated += len(res.data)
         except Exception as e:
