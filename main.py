@@ -16,6 +16,7 @@ from managers import market_timer, HistoryManager, get_session
 
 import stock_api
 from ai_analyst import analyze_disclosure_gemini
+from dart_parser import get_disclosure_detail
 
 from config import (
     DART_API_KEY,
@@ -233,15 +234,16 @@ class DartRoutingBot:
         """stock_api.get_company_chat_id()로 위임 (모든 파일 공통 사용)"""
         return stock_api.get_company_chat_id(corp_name, stock_code)
 
-    def _build_msg(self, corp_name, report_nm, rcept_no, stock_code, prefix=""):
+    def _build_msg(self, corp_name, report_nm, rcept_no, stock_code, prefix="", detail=""):
         emoji      = self.get_emoji(report_nm)
         link       = f"http://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
         target_code = COMPANY_CODES.get(corp_name, stock_code)
         price_info = stock_api.get_stock_price(target_code)
-        stock_msg  = f"<b>{price_info}</b>\n" if price_info else ""
+        stock_msg    = f"<b>{price_info}</b>\n" if price_info else ""
+        detail_block = f"\n\n{detail}" if detail else ""
         return (
             f"{prefix}{emoji} <b>[{corp_name}]</b>\n"
-            f"{stock_msg}{report_nm}\n"
+            f"{stock_msg}{report_nm}{detail_block}\n"
             f"🔗 <a href='{link}'>공시 원문</a> | "
             f"📈 <a href='https://finance.naver.com/item/main.nhn?code={target_code}'>네이버</a>"
         )
@@ -325,7 +327,8 @@ class DartRoutingBot:
                             # ── 메시지 생성 ──
                             is_market_wide = not is_my_stock and is_global_important
                             prefix = "🔥 <b>[시장속보]</b> " if is_market_wide else ""
-                            msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix)
+                            detail = get_disclosure_detail(rcept_no, report_nm)
+                            msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
 
                             # ── 채널 라우팅 ──
                             industry = COMPANY_TO_INDUSTRY.get(corp_name)
