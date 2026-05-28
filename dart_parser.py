@@ -23,13 +23,43 @@ _MOBILE_UA = (
 # ══════════════════════════════════════════════
 
 def _fetch_html(rcept_no: str) -> str | None:
-    """모바일 DART 페이지 HTML 가져오기."""
-    url = f'http://m.dart.fss.or.kr/html_mdart/MD1007.html?rcpNo={rcept_no}'
+    """DART 공시 본문 HTML 가져오기.
+    ① MD1007(목차) 에서 첫 번째 본문 문서(MD1002 계열) 링크를 추출
+    ② 본문 링크가 있으면 본문 HTML 반환, 없으면 목차 HTML 반환(단일 문서)"""
+    headers = {'User-Agent': _MOBILE_UA}
+    base      = 'http://m.dart.fss.or.kr'
+    index_url = f'{base}/html_mdart/MD1007.html?rcpNo={rcept_no}'
     try:
-        res = _session.get(url, headers={'User-Agent': _MOBILE_UA}, timeout=5)
-        res.encoding = 'utf-8'
-        if res.status_code == 200:
-            return res.text
+        idx = _session.get(index_url, headers=headers, timeout=5)
+        idx.encoding = 'utf-8'
+        if idx.status_code != 200:
+            return None
+
+        # 목차에서 본문 문서 링크 탐색 (MD1002 또는 dcmNo 파라미터 포함)
+        soup     = BeautifulSoup(idx.text, 'html.parser')
+        doc_link = None
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if 'MD1002' in href or 'dcmNo' in href:
+                if href.startswith('http'):
+                    doc_link = href
+                elif href.startswith('/'):
+                    doc_link = base + href
+                else:
+                    doc_link = f'{base}/html_mdart/{href}'
+                break
+
+        if doc_link:
+            doc = _session.get(doc_link, headers=headers, timeout=5)
+            doc.encoding = 'utf-8'
+            if doc.status_code == 200:
+                log.debug(f'[DART 파서] 본문 fetch 성공: {doc_link}')
+                return doc.text
+            log.warning(f'[DART 파서] 본문 fetch 실패 (status {doc.status_code}): {doc_link}')
+
+        # 본문 링크 없음 — 목차 = 본문인 단일 문서 케이스
+        return idx.text
+
     except Exception as e:
         log.warning(f'[DART 파서] HTML 요청 실패 ({rcept_no}): {e}')
     return None
