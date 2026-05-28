@@ -1247,8 +1247,13 @@ def run_scheduler():
     schedule.every().day.at("06:30").do(job_collect_macro)             # 글로벌 매크로 수집 + 메인 채널 브리핑 (서머타임 05:00/겨울 06:00 마감 → 06:30 안전)
     schedule.every().day.at("06:35").do(job_collect_us_etf)            # US ETF 수집 (미국 장 마감 직후)
     schedule.every().day.at("09:30").do(job_collect_market)            # 장 시작 모니터링 수집
+    schedule.every().day.at("09:35").do(job_collect_foreign_institution)  # 기관/외국인 수급 ①
+    schedule.every().day.at("11:25").do(job_collect_foreign_institution)  # 기관/외국인 수급 ②
     schedule.every().day.at("11:30").do(job_lunch_briefing)
     schedule.every().day.at("12:00").do(job_collect_market)            # 점심 모니터링 수집
+    schedule.every().day.at("13:25").do(job_collect_foreign_institution)  # 기관/외국인 수급 ③
+    schedule.every().day.at("14:35").do(job_collect_foreign_institution)  # 기관/외국인 수급 ④
+    schedule.every().day.at("15:35").do(job_collect_foreign_institution)  # 기관/외국인 수급 ⑤ (장 마감 최종)
     schedule.every().day.at("16:10").do(job_collect_macro)             # 장 마감 후 매크로 수집
     schedule.every().day.at("16:20").do(job_collect_us_etf)            # US ETF 수집 (미장 전일 종가)
     schedule.every().day.at("16:30").do(job_collect_new_high)          # 신고가 종목 수집
