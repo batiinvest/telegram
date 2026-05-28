@@ -175,7 +175,8 @@ class DartRoutingBot:
         _load_dart_filters()
 
     def _load_cap_cache(self):
-        """Supabase market_data에서 최신 시총 캐시 로드 (24시간마다 갱신)."""
+        """Supabase market_data에서 최신 시총 캐시 로드 (24시간마다 갱신).
+        ※ 전체 상장사(2000개+) 처리를 위해 페이지네이션 사용."""
         if not _BRIDGE_OK:
             return
         try:
@@ -184,11 +185,22 @@ class DartRoutingBot:
                          .order('base_date', desc=True).limit(1).execute()
             max_date = (date_res.data or [{}])[0].get('base_date')
             if max_date:
-                mkt_res = sb.table('market_data').select('stock_code,market_cap') \
-                            .eq('base_date', max_date).execute()
+                # ✅ 페이지네이션: Supabase 기본 limit(1000)으로 잘리지 않도록
+                all_rows, from_ = [], 0
+                while True:
+                    mkt_res = sb.table('market_data') \
+                                .select('stock_code,market_cap') \
+                                .eq('base_date', max_date) \
+                                .range(from_, from_ + 999).execute()
+                    rows = mkt_res.data or []
+                    all_rows.extend(rows)
+                    if len(rows) < 1000:
+                        break
+                    from_ += 1000
+
                 self._cap_cache = {
                     m['stock_code']: m['market_cap']
-                    for m in (mkt_res.data or [])
+                    for m in all_rows
                     if m.get('market_cap') is not None
                 }
                 self._cap_loaded = datetime.datetime.now()

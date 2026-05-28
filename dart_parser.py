@@ -59,10 +59,18 @@ def _build_kv(html: str) -> dict:
 
 
 def _get(kv: dict, *keys: str) -> str | None:
-    """키 후보들 중 첫 번째로 부분일치하는 값 반환."""
+    """키 후보들 중 첫 번째로 부분일치하는 값 반환.
+    기재정정 공시에서는 '정정후' 키를 '정정전' 키보다 우선 반환."""
     for key in keys:
+        # 1순위: '정정후' 포함 키 (기재정정 공시의 수정된 값)
         for k, v in kv.items():
-            if key in k:
+            if key in k and '정정후' in k:
+                clean = re.sub(r'\s+', ' ', v).strip()
+                if clean and clean not in ('-', '—', '없음', 'N/A'):
+                    return clean
+        # 2순위: 일반 키 ('정정전' 제외 — 기재정정이 아닌 경우엔 동일하게 동작)
+        for k, v in kv.items():
+            if key in k and '정정전' not in k:
                 clean = re.sub(r'\s+', ' ', v).strip()
                 if clean and clean not in ('-', '—', '없음', 'N/A'):
                     return clean
@@ -355,11 +363,16 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
     """
     공시 원문을 파싱하여 핵심 필드 텍스트 반환.
     파싱 실패 또는 미지원 타입이면 빈 문자열 반환 (graceful fallback).
+    ※ [기재정정] 공시: _get()이 '정정후' 키를 우선 반환하므로 자동 처리됨.
     """
+    # [기재정정] 등 접두어 제거 후 파서 선택 (예: "[기재정정]단일판매·공급계약체결" → 계약 파서)
+    clean_nm = re.sub(r'^\[[^\]]+\]', '', report_nm).strip()
+    is_amendment = report_nm.startswith('[기재정정]')
+
     # 파서 선택
     parser = None
     for keywords, fn in _PARSER_MAP:
-        if any(k in report_nm for k in keywords):
+        if any(k in clean_nm for k in keywords):
             parser = fn
             break
     if parser is None:
@@ -368,12 +381,17 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
     # HTML 가져오기
     html = _fetch_html(rcept_no)
     if not html:
+        log.debug(f'[DART 파서] HTML 없음 ({rcept_no})')
         return ''
 
     # 파싱
     try:
         kv = _build_kv(html)
+        if is_amendment:
+            log.debug(f'[DART 파서] 기재정정 kv 키 목록: {list(kv.keys())[:10]}')
         lines = parser(kv)
+        if not lines:
+            log.debug(f'[DART 파서] 파싱 결과 없음 ({report_nm}) — kv 키: {list(kv.keys())[:5]}')
         return '\n'.join(lines)
     except Exception as e:
         log.warning(f'[DART 파서] 파싱 실패 ({report_nm}): {e}')
