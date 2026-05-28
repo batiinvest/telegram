@@ -406,14 +406,15 @@ def _preprocess_disclosures(all_disc_records: list, sb) -> list:
             for c in (res.data or []):
                 listed_set.add(c['corp_code'])
 
-        # 3. 시총 — 최신 base_date 1건 조회 후 stock_code 배치 조회
+        # 3. 시총 — 전체 corp_codes → stock_code 매핑 (500개 제한 버그 수정)
         stock_map = {}   # corp_code → stock_code
-        res2 = sb.table('companies').select('corp_code,code') \
-                  .in_('corp_code', corp_codes[:chunk]).execute()
-        for c in (res2.data or []):
-            sc = (c.get('code') or '').replace('.KS', '').replace('.KQ', '')
-            if sc:
-                stock_map[c['corp_code']] = sc
+        for i in range(0, len(corp_codes), chunk):
+            res2 = sb.table('companies').select('corp_code,code') \
+                      .in_('corp_code', corp_codes[i:i+chunk]).execute()
+            for c in (res2.data or []):
+                sc = (c.get('code') or '').replace('.KS', '').replace('.KQ', '')
+                if sc:
+                    stock_map[c['corp_code']] = sc
 
         stock_codes = list(set(stock_map.values()))
         if stock_codes:
@@ -421,10 +422,12 @@ def _preprocess_disclosures(all_disc_records: list, sb) -> list:
                          .order('base_date', desc=True).limit(1).execute()
             max_date = (date_res.data or [{}])[0].get('base_date')
             if max_date:
-                mkt_res = sb.table('market_data').select('stock_code,market_cap') \
-                            .eq('base_date', max_date) \
-                            .in_('stock_code', stock_codes[:chunk]).execute()
-                mkt_map = {m['stock_code']: m['market_cap'] for m in (mkt_res.data or [])}
+                mkt_map = {}
+                for i in range(0, len(stock_codes), chunk):
+                    mkt_res = sb.table('market_data').select('stock_code,market_cap') \
+                                .eq('base_date', max_date) \
+                                .in_('stock_code', stock_codes[i:i+chunk]).execute()
+                    mkt_map.update({m['stock_code']: m['market_cap'] for m in (mkt_res.data or [])})
                 for cc, sc in stock_map.items():
                     if sc in mkt_map:
                         cap_map[cc] = mkt_map[sc]
