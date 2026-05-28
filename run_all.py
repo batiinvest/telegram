@@ -1288,6 +1288,24 @@ def run_scheduler():
             time.sleep(60)
 
 
+# ══════════════════════════════════════════
+# 🔧 워치독 타임스탬프 플래그 유틸
+#   app_config 테이블에 Unix ms 타임스탬프를 저장하는 트리거 플래그
+#   값이 '0' 이거나 숫자가 아니면 미발동으로 간주
+# ══════════════════════════════════════════
+def _read_ts_flag(sb_client, key):
+    """플래그 경과 시간(초) 반환. 미발동(0·빈값·비숫자)이면 None."""
+    res = sb_client.table('app_config').select('value').eq('key', key).single().execute()
+    val = (res.data or {}).get('value', '0')
+    if not val or not str(val).isdigit() or val == '0':
+        return None
+    return (time.time() * 1000 - float(val)) / 1000
+
+def _clear_ts_flag(sb_client, key):
+    """플래그를 '0'으로 초기화 (중복 실행 방지)."""
+    sb_client.table('app_config').upsert({'key': key, 'value': '0'}, on_conflict='key').execute()
+
+
 # ==========================================
 # 🚑 스레드 심폐소생술
 # ==========================================
@@ -1547,82 +1565,61 @@ def main():
             # ✅ [추가] run_market_all_flag 체크 — 새로고침 버튼으로 전체 종목 시장 데이터 수집
             if _BRIDGE_OK and _COLLECTOR_OK:
                 try:
-                    _sb_mkt = _bridge._get_client()
-                    _mktf = _sb_mkt.table('app_config').select('value') \
-                                   .eq('key', 'run_market_all_flag').single().execute()
-                    if _mktf.data and _mktf.data.get('value', '0').isdigit():
-                        _mkt_elapsed = (time.time() * 1000 - float(_mktf.data['value'])) / 1000
-                        if 0 < _mkt_elapsed < 300:
-                            if market_timer.is_kr_holiday():
-                                logging.info("⏸ [시장수집-전체] 주말/공휴일 — 수동 트리거 무시")
-                                _sb_mkt.table('app_config').upsert({
-                                    'key': 'run_market_all_flag', 'value': '0'
-                                }, on_conflict='key').execute()
-                            else:
-                                logging.info("📡 [시장수집-전체] 수동 트리거 감지 → 전체 상장사 수집 시작")
-                                _sb_mkt.table('app_config').upsert({
-                                    'key': 'run_market_all_flag', 'value': '0'
-                                }, on_conflict='key').execute()
-                                def _run_market_all():
-                                    try:
-                                        ok, fail = run_market(all_listed=True)
-                                        logging.info(f"📡 [시장수집-전체] 완료: 성공 {ok}개, 실패 {fail}개")
-                                    except Exception as _me:
-                                        logging.error(f"❌ [시장수집-전체] 오류: {_me}")
-                                threading.Thread(
-                                    target=_run_market_all,
-                                    name="Thread-ManualMarketAll",
-                                    daemon=True
-                                ).start()
+                    _sb_mkt    = _bridge._get_client()
+                    _mkt_elapsed = _read_ts_flag(_sb_mkt, 'run_market_all_flag')
+                    if _mkt_elapsed is not None and 0 < _mkt_elapsed < 300:
+                        _clear_ts_flag(_sb_mkt, 'run_market_all_flag')
+                        if market_timer.is_kr_holiday():
+                            logging.info("⏸ [시장수집-전체] 주말/공휴일 — 수동 트리거 무시")
+                        else:
+                            logging.info("📡 [시장수집-전체] 수동 트리거 감지 → 전체 상장사 수집 시작")
+                            def _run_market_all():
+                                try:
+                                    ok, fail = run_market(all_listed=True)
+                                    logging.info(f"📡 [시장수집-전체] 완료: 성공 {ok}개, 실패 {fail}개")
+                                except Exception as _me:
+                                    logging.error(f"❌ [시장수집-전체] 오류: {_me}")
+                            threading.Thread(
+                                target=_run_market_all,
+                                name="Thread-ManualMarketAll",
+                                daemon=True
+                            ).start()
                 except Exception as _mktfe:
                     logging.debug(f"market_all_flag 체크 오류: {_mktfe}")
 
             # ✅ [추가] run_macro_flag 체크 — 대시보드 새로고침 버튼으로 매크로 즉시 수집
             if _BRIDGE_OK and _COLLECTOR_OK:
                 try:
-                    _sb_m = _bridge._get_client()
-                    _mf = _sb_m.table('app_config').select('value') \
-                               .eq('key', 'run_macro_flag').single().execute()
-                    if _mf.data and _mf.data.get('value'):
-                        _mf_val = _mf.data['value']
-                        # 값이 숫자(타임스탬프)이고 3분 이내면 실행
-                        if _mf_val.isdigit():
-                            _elapsed = (time.time() * 1000 - float(_mf_val)) / 1000
-                            if _elapsed < 180:
-                                logging.info("📡 [매크로] 수동 수집 트리거 감지 → job_collect_macro 실행")
-                                # 플래그 초기화 (중복 실행 방지)
-                                _sb_m.table('app_config').upsert({
-                                    'key': 'run_macro_flag', 'value': '0'
-                                }, on_conflict='key').execute()
-                                threading.Thread(
-                                    target=job_collect_macro,
-                                    name="Thread-ManualMacro",
-                                    daemon=True
-                                ).start()
+                    _sb_m    = _bridge._get_client()
+                    _m_elapsed = _read_ts_flag(_sb_m, 'run_macro_flag')
+                    if _m_elapsed is not None and _m_elapsed < 180:
+                        logging.info("📡 [매크로] 수동 수집 트리거 감지 → job_collect_macro 실행")
+                        _clear_ts_flag(_sb_m, 'run_macro_flag')
+                        threading.Thread(
+                            target=job_collect_macro,
+                            name="Thread-ManualMacro",
+                            daemon=True
+                        ).start()
                 except Exception as _mfe:
                     logging.debug(f"macro_flag 체크 오류: {_mfe}")
 
             # ✅ [추가] etf_collect_flag 체크 — US ETF 매핑 변경 후 데이터 수집 트리거
             if _BRIDGE_OK:
                 try:
-                    _sb_etf = _bridge._get_client()
-                    _etff = _sb_etf.table('app_config').select('value')                                    .eq('key', 'etf_collect_flag').single().execute()
-                    if _etff.data and _etff.data.get('value', '0').isdigit():
-                        _etf_elapsed = (time.time() * 1000 - float(_etff.data['value'])) / 1000
-                        if 0 < _etf_elapsed < 300:
-                            logging.info("📡 [US ETF] 수집 트리거 감지 → collect_us_etf 실행")
-                            _sb_etf.table('app_config').upsert({
-                                'key': 'etf_collect_flag', 'value': '0'
-                            }, on_conflict='key').execute()
-                            def _run_etf_collect():
-                                try:
-                                    import collect_us_etf
-                                    collect_us_etf.collect_and_save(days=90)
-                                    logging.info("✅ [US ETF] 수집 완료")
-                                except Exception as _ee:
-                                    logging.error(f"❌ [US ETF] 수집 오류: {_ee}")
-                            threading.Thread(target=_run_etf_collect,
-                                             name="Thread-EtfCollect", daemon=True).start()
+                    _sb_etf      = _bridge._get_client()
+                    _etf_elapsed = _read_ts_flag(_sb_etf, 'etf_collect_flag')
+                    if _etf_elapsed is not None and 0 < _etf_elapsed < 300:
+                        logging.info("📡 [US ETF] 수집 트리거 감지 → collect_us_etf 실행")
+                        _clear_ts_flag(_sb_etf, 'etf_collect_flag')
+                        def _run_etf_collect():
+                            try:
+                                import collect_us_etf
+                                collect_us_etf.collect_and_save(days=90)
+                                logging.info("✅ [US ETF] 수집 완료")
+                            except Exception as _ee:
+                                logging.error(f"❌ [US ETF] 수집 오류: {_ee}")
+                        threading.Thread(target=_run_etf_collect,
+                                         name="Thread-EtfCollect", daemon=True).start()
                 except Exception as _etfe:
                     logging.debug(f"etf_collect_flag 체크 오류: {_etfe}")
 
