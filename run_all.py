@@ -1557,6 +1557,18 @@ def _run_watchdog_flags(threads: dict):
         except Exception as _etfe:
             logging.debug(f"etf_collect_flag 체크 오류: {_etfe}")
 
+    # ── run_flow_flag — 기관/외국인 수급 즉시 수집 ──
+    if _BRIDGE_OK and _COLLECTOR_OK:
+        try:
+            _sb_fl      = _bridge._get_client()
+            _fl_elapsed = _read_ts_flag(_sb_fl, 'run_flow_flag')
+            if _fl_elapsed is not None and 0 < _fl_elapsed < 300:
+                logging.info("📡 [수급수집] 수동 트리거 감지 → job_collect_foreign_institution 실행")
+                _clear_ts_flag(_sb_fl, 'run_flow_flag')
+                _start_daemon(job_collect_foreign_institution, "Thread-ManualFlow")
+        except Exception as _fle:
+            logging.debug(f"run_flow_flag 체크 오류: {_fle}")
+
     # ── run_disclosure_flag — 공시수집 즉시 실행 ──
     if _BRIDGE_OK:
         try:
