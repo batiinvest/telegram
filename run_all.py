@@ -1317,12 +1317,27 @@ def run_scheduler():
 #   값이 '0' 이거나 숫자가 아니면 미발동으로 간주
 # ══════════════════════════════════════════
 def _read_ts_flag(sb_client, key):
-    """플래그 경과 시간(초) 반환. 미발동(0·빈값·비숫자)이면 None."""
-    res = sb_client.table('app_config').select('value').eq('key', key).single().execute()
-    val = (res.data or {}).get('value', '0')
-    if not val or not str(val).isdigit() or val == '0':
+    """플래그 경과 시간(초) 반환. 미발동(0·빈값·비숫자·row없음)이면 None."""
+    try:
+        res = sb_client.table('app_config').select('value').eq('key', key).maybe_single().execute()
+    except Exception:
+        # maybe_single 미지원 구버전 supabase-py fallback
+        try:
+            res = sb_client.table('app_config').select('value').eq('key', key).limit(1).execute()
+            if not res.data:
+                return None
+            res = type('R', (), {'data': res.data[0]})()
+        except Exception:
+            return None
+    if res.data is None:
         return None
-    return (time.time() * 1000 - float(val)) / 1000
+    val = res.data.get('value', '0') if isinstance(res.data, dict) else '0'
+    if not val or val == '0':
+        return None
+    val_str = str(val).strip()
+    if not val_str.isdigit():
+        return None
+    return (time.time() * 1000 - float(val_str)) / 1000
 
 def _clear_ts_flag(sb_client, key):
     """플래그를 '0'으로 초기화 (중복 실행 방지)."""
