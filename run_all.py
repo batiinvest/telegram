@@ -1017,6 +1017,20 @@ def job_collect_market_closing():
     job_watchlist_alert()
 
 
+def job_leading_stocks():
+    """평일 장 마감 후 (17:30) — 주도주 탐색기 스코어 계산 및 저장"""
+    if market_timer.is_kr_holiday():
+        logging.info("⏸ [주도주] 주말/공휴일 스킵")
+        return
+    try:
+        logging.info("🚀 [주도주] leading_stocks_generator 실행 시작")
+        from leading_stocks_generator import run as run_leading
+        run_leading()
+        logging.info("✅ [주도주] 생성 완료")
+    except Exception as e:
+        logging.error(f"❌ [주도주] 생성 오류: {e}")
+
+
 def job_watchlist_alert():
     """
     장 마감 후 — watchlist 종목의 관심가/목표가 도달 여부 체크 & 개별 알림.
@@ -1261,6 +1275,7 @@ def run_scheduler():
     schedule.every().day.at("16:20").do(job_collect_us_etf)            # US ETF 수집 (미장 전일 종가)
     schedule.every().day.at("16:30").do(job_collect_new_high)          # 신고가 종목 수집
     schedule.every().day.at("17:00").do(job_collect_market_closing)    # 장 마감 확정치 수집 (외국인 집계 완료 후)
+    schedule.every().day.at("17:30").do(job_leading_stocks)            # 주도주 탐색기 스코어 계산
     schedule.every().day.at("18:00").do(job_naver_report)
     schedule.every().day.at("18:10").do(job_kind_ir)             # KIND IR자료 오후 수집
     schedule.every().day.at("18:30").do(job_daily_closing)
@@ -1587,6 +1602,25 @@ def _run_watchdog_flags(threads: dict):
                 _start_daemon(_run_disclosure, "Thread-ManualDisclosure")
         except Exception as _de:
             logging.debug(f"disclosure_flag 체크 오류: {_de}")
+
+    # ── run_leading_stocks_flag — 주도주 탐색기 수동 트리거 ──
+    if _BRIDGE_OK:
+        try:
+            _sb_ls      = _bridge._get_client()
+            _ls_elapsed = _read_ts_flag(_sb_ls, 'run_leading_stocks_flag')
+            if _ls_elapsed is not None and 0 < _ls_elapsed < 300:
+                _clear_ts_flag(_sb_ls, 'run_leading_stocks_flag')
+                logging.info("📡 [주도주] 수동 트리거 감지 → leading_stocks_generator 실행")
+                def _run_leading_stocks():
+                    try:
+                        from leading_stocks_generator import run as run_leading
+                        run_leading()
+                        logging.info("✅ [주도주] 수동 생성 완료")
+                    except Exception as _le:
+                        logging.error(f"❌ [주도주] 수동 생성 오류: {_le}")
+                _start_daemon(_run_leading_stocks, "Thread-LeadingStocks")
+        except Exception as _lse:
+            logging.debug(f"leading_stocks_flag 체크 오류: {_lse}")
 
     # ── pro_action_flag — 프로 채널 초대/퇴장/연장 ──
     if _PRO_OK:
