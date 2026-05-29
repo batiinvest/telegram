@@ -154,10 +154,20 @@ def build_message(rooms: list) -> str:
             lines.append(f'└ <a href="{ind_r["link"]}">{cat} 산업방</a>')
         lines.append('')
 
-        for r in sorted(full,  key=lambda x: x.get('name', '')):
-            lines.append(f'🔴 {_link(r)}')
-        for r in sorted(open_, key=lambda x: x.get('name', '')):
-            lines.append(f'🟢 {_link(r)}')
+        def _chunk(lst, n=4):
+            return [lst[i:i+n] for i in range(0, len(lst), n)]
+
+        s_full  = sorted(full,  key=lambda x: x.get('name', ''))
+        s_open  = sorted(open_, key=lambda x: x.get('name', ''))
+
+        if s_full:
+            lines.append('[🔴정원 마감]')
+            for row in _chunk(s_full):
+                lines.append('   '.join(_link(r) for r in row))
+        if s_open:
+            lines.append('[🟢입장 가능]')
+            for row in _chunk(s_open):
+                lines.append('   '.join(_link(r) for r in row))
 
     # ── 하단 안내 ─────────────────────────────────────────────────────────────
     lines += [
