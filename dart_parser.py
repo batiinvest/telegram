@@ -12,9 +12,9 @@ from managers import global_session as _session
 
 log = logging.getLogger(__name__)
 
-_MOBILE_UA = (
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) '
-    'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
+_DESKTOP_UA = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 )
 
 
@@ -24,41 +24,46 @@ _MOBILE_UA = (
 
 def _fetch_html(rcept_no: str) -> str | None:
     """DART 공시 본문 HTML 가져오기.
-    ① MD1007(목차) 에서 첫 번째 본문 문서(MD1002 계열) 링크를 추출
-    ② 본문 링크가 있으면 본문 HTML 반환, 없으면 목차 HTML 반환(단일 문서)"""
-    headers = {'User-Agent': _MOBILE_UA}
-    base      = 'http://m.dart.fss.or.kr'
-    index_url = f'{base}/html_mdart/MD1007.html?rcpNo={rcept_no}'
+    ① dsaf001/main.do 에서 viewDoc(rcpNo, dcmNo, ...) 패턴으로 dcmNo 추출
+    ② report/viewer.do?rcpNo=...&dcmNo=... 로 실제 본문 HTML 반환 (EUC-KR 디코딩)"""
+    headers = {'User-Agent': _DESKTOP_UA}
+    base    = 'http://dart.fss.or.kr'
     try:
-        idx = _session.get(index_url, headers=headers, timeout=5)
-        idx.encoding = 'utf-8'
+        # ① 목차 페이지에서 dcmNo 추출
+        idx_url = f'{base}/dsaf001/main.do?rcpNo={rcept_no}'
+        idx = _session.get(idx_url, headers=headers, timeout=8)
         if idx.status_code != 200:
+            log.warning(f'[DART 파서] 목차 fetch 실패 (status {idx.status_code}): {idx_url}')
             return None
 
-        # 목차에서 본문 문서 링크 탐색 (MD1002 또는 dcmNo 파라미터 포함)
-        soup     = BeautifulSoup(idx.text, 'html.parser')
-        doc_link = None
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            if 'MD1002' in href or 'dcmNo' in href:
-                if href.startswith('http'):
-                    doc_link = href
-                elif href.startswith('/'):
-                    doc_link = base + href
-                else:
-                    doc_link = f'{base}/html_mdart/{href}'
-                break
+        # viewDoc("rcpNo", "dcmNo", ...) 패턴 탐색
+        m = re.search(r'viewDoc\("(\d+)",\s*"(\d+)"', idx.content.decode('utf-8', errors='replace'))
+        if not m:
+            log.debug(f'[DART 파서] viewDoc 패턴 없음 ({rcept_no})')
+            return None
 
-        if doc_link:
-            doc = _session.get(doc_link, headers=headers, timeout=5)
-            doc.encoding = 'utf-8'
-            if doc.status_code == 200:
-                log.debug(f'[DART 파서] 본문 fetch 성공: {doc_link}')
+        rcp_no_found = m.group(1)
+        dcm_no       = m.group(2)
+        log.debug(f'[DART 파서] dcmNo={dcm_no} 추출 성공 ({rcept_no})')
+
+        # ② 본문 HTML 가져오기
+        doc_url = (f'{base}/report/viewer.do'
+                   f'?rcpNo={rcp_no_found}&dcmNo={dcm_no}'
+                   f'&eleId=0&offset=0&length=0&dtd=HTML')
+        doc = _session.get(doc_url, headers=headers, timeout=8)
+        if doc.status_code != 200:
+            log.warning(f'[DART 파서] 본문 fetch 실패 (status {doc.status_code}): {doc_url}')
+            return None
+
+        # DART 본문은 EUC-KR 인코딩
+        try:
+            return doc.content.decode('euc-kr')
+        except Exception:
+            try:
+                return doc.content.decode('utf-8')
+            except Exception:
+                doc.encoding = 'utf-8'
                 return doc.text
-            log.warning(f'[DART 파서] 본문 fetch 실패 (status {doc.status_code}): {doc_link}')
-
-        # 본문 링크 없음 — 목차 = 본문인 단일 문서 케이스
-        return idx.text
 
     except Exception as e:
         log.warning(f'[DART 파서] HTML 요청 실패 ({rcept_no}): {e}')
