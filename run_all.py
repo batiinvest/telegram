@@ -1657,6 +1657,25 @@ def _run_watchdog_flags(threads: dict):
         except Exception as _lse:
             logging.debug(f"leading_stocks_flag 체크 오류: {_lse}")
 
+    # ── run_sector_summary_flag — 산업별 요약·신호 수동 트리거 ──
+    if _BRIDGE_OK:
+        try:
+            _sb_ss      = _bridge._get_client()
+            _ss_elapsed = _read_ts_flag(_sb_ss, 'run_sector_summary_flag')
+            if _ss_elapsed is not None and 0 < _ss_elapsed < 300:
+                _clear_ts_flag(_sb_ss, 'run_sector_summary_flag')
+                logging.info("📡 [섹터요약] 수동 트리거 감지 → collect_sector_summary 실행")
+                def _run_sector_summary():
+                    try:
+                        from collect_sector_summary import run as run_ss
+                        run_ss()
+                        logging.info("✅ [섹터요약] 수동 집계 완료")
+                    except Exception as _sse:
+                        logging.error(f"❌ [섹터요약] 수동 집계 오류: {_sse}")
+                _start_daemon(_run_sector_summary, "Thread-SectorSummary")
+        except Exception as _ssfe:
+            logging.debug(f"sector_summary_flag 체크 오류: {_ssfe}")
+
     # ── pro_action_flag — 프로 채널 초대/퇴장/연장 ──
     if _PRO_OK:
         try:
