@@ -1,41 +1,43 @@
 """
-collect_sector_summary.py — 산업별 일별 요약 계산 및 저장
-─────────────────────────────────────────────────────────
-모니터링 종목 기준으로 산업별 기간별 집계값을 계산해
+collect_sector_summary.py — 산업별 일별 요약 + 신호탐지 계산 및 저장
+──────────────────────────────────────────────────────────────────────
+모니터링 종목(KR) + US ETF 기준으로 산업별 기간별 집계값 및 신호를 계산해
 sector_daily_summary 테이블에 upsert합니다.
 
 저장 컬럼:
-  avg_chg_1d/5d/20d   : 산업 평균 등락률 (일별 평균의 누적합)
-  foreign_net_1d/5d/20d : 외국인 순매수 합산 (백만원)
-  inst_net_1d/5d/20d    : 기관 순매수 합산 (백만원)
+  avg_chg_1d/5d/20d    : KR 산업 평균 등락률 (%)
+  us_chg_1d/5d/20d     : US ETF 산업별 누적 등락률 (%)
+  foreign_net_Nd        : 외국인 순매수 합산 (백만원)
+  inst_net_Nd           : 기관 순매수 합산 (백만원)
+  signal_1d/5d/20d     : 신호 키 문자열 (us_lead_bull|us_lead_bear|kr_outrun|co_bull|co_bear|None)
   stock_count           : 집계 종목 수
+
+신호 판단 로직 (industry-matrix.js _imDetect() 동일):
+  us_lead_bull : US > base  AND  (US-KR) > lead   → KR 추격 예상
+  us_lead_bear : US < -base AND  (KR-US) > lead   → KR 하락 경고
+  kr_outrun    : (KR-US) > lead AND KR > base*0.6 → KR 독주
+  co_bull      : US > base*0.7 AND KR > base*0.7  → 동조 강세
+  co_bear      : US < -base*0.7 AND KR < -base*0.7 → 동조 약세
 
 Supabase SQL (최초 1회 실행):
 ──────────────────────────────
 CREATE TABLE IF NOT EXISTS sector_daily_summary (
-  base_date       DATE    NOT NULL,
-  industry        TEXT    NOT NULL,
-  avg_chg_1d      NUMERIC,
-  avg_chg_5d      NUMERIC,
-  avg_chg_20d     NUMERIC,
-  foreign_net_1d  BIGINT,
-  foreign_net_5d  BIGINT,
-  foreign_net_20d BIGINT,
-  inst_net_1d     BIGINT,
-  inst_net_5d     BIGINT,
-  inst_net_20d    BIGINT,
-  stock_count     INT,
+  base_date DATE, industry TEXT,
+  avg_chg_1d NUMERIC, avg_chg_5d NUMERIC, avg_chg_20d NUMERIC,
+  us_chg_1d  NUMERIC, us_chg_5d  NUMERIC, us_chg_20d  NUMERIC,
+  foreign_net_1d BIGINT, foreign_net_5d BIGINT, foreign_net_20d BIGINT,
+  inst_net_1d    BIGINT, inst_net_5d    BIGINT, inst_net_20d    BIGINT,
+  signal_1d TEXT, signal_5d TEXT, signal_20d TEXT,
+  stock_count INT,
   PRIMARY KEY (base_date, industry)
 );
 
 사용법:
-  python collect_sector_summary.py          # 최신 날짜 실행
+  python collect_sector_summary.py            # 최신 날짜
   python collect_sector_summary.py 2026-05-28  # 특정 날짜
 """
 
 import os, sys, logging
-from collections import defaultdict
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -50,25 +52,52 @@ _URL = os.environ['SUPABASE_URL']
 _KEY = os.environ.get('SUPABASE_KEY', os.environ.get('SUPABASE_SERVICE_ROLE_KEY', ''))
 sb   = create_client(_URL, _KEY)
 
-PERIODS = [1, 5, 20]   # 집계 기간 (거래일)
-LOOKBACK = 25          # 최근 N 거래일 조회
+# ── 기간 / 신호 상수 ──────────────────────────────────────────────────────────
+PERIODS  = [1, 5, 20]
+LOOKBACK = 25
+
+_THRESH = {
+    1:  {'base': 1.0, 'lead': 0.8},
+    5:  {'base': 2.5, 'lead': 2.0},
+    20: {'base': 5.0, 'lead': 4.0},
+}
 
 
-# ── 거래일 목록 조회 ──────────────────────────────────────────────────────────
+# ── 신호 탐지 (JS _imDetect() 동일 로직) ────────────────────────────────────
+def detect_signal(us_v: float | None, kr_v: float | None, period: int) -> str | None:
+    if us_v is None or kr_v is None:
+        return None
+    thr  = _THRESH.get(period, _THRESH[5])
+    base = thr['base']
+    lead = thr['lead']
+
+    if us_v > base and (us_v - kr_v) > lead:
+        return 'us_lead_bull'
+    if us_v < -base and (kr_v - us_v) > lead:
+        return 'us_lead_bear'
+    if (kr_v - us_v) > lead and kr_v > base * 0.6:
+        return 'kr_outrun'
+    if us_v > base * 0.7 and kr_v > base * 0.7:
+        return 'co_bull'
+    if us_v < -base * 0.7 and kr_v < -base * 0.7:
+        return 'co_bear'
+    return None
+
+
+# ── 거래일 목록 ───────────────────────────────────────────────────────────────
 def get_trading_days(base_date: str) -> list[str]:
-    """base_date 기준 최근 LOOKBACK 거래일 목록 (최신→구) 반환."""
+    """base_date 기준 최근 LOOKBACK 거래일 (최신→구)."""
     rows = sb.from_('macro_data') \
         .select('base_date') \
         .lte('base_date', base_date) \
         .order('base_date', desc=True) \
         .limit(LOOKBACK) \
         .execute().data or []
-    return [r['base_date'] for r in rows]  # [최신, ..., 구]
+    return [r['base_date'] for r in rows]
 
 
-# ── 산업 매핑 조회 ────────────────────────────────────────────────────────────
+# ── 산업 매핑 ─────────────────────────────────────────────────────────────────
 def get_industry_map() -> dict[str, str]:
-    """모니터링 종목 code → industry 매핑."""
     rows = fetch_all_pages(
         sb.from_('companies')
           .select('code,industry')
@@ -81,9 +110,8 @@ def get_industry_map() -> dict[str, str]:
     }
 
 
-# ── 시장 데이터 조회 ──────────────────────────────────────────────────────────
-def get_market_data(codes: list[str], cutoff: str, base_date: str) -> list[dict]:
-    """모니터링 종목의 기간 내 등락률·수급 데이터 조회."""
+# ── KR 시장 데이터 ────────────────────────────────────────────────────────────
+def get_kr_data(codes: list[str], cutoff: str, base_date: str) -> list[dict]:
     return fetch_all_pages(
         sb.from_('market_data')
           .select('base_date,stock_code,price_change_rate,foreign_net_buy,institution_net_buy')
@@ -93,22 +121,63 @@ def get_market_data(codes: list[str], cutoff: str, base_date: str) -> list[dict]
     )
 
 
-# ── 집계 계산 ─────────────────────────────────────────────────────────────────
-def calc_summary(trading_days: list[str], market_rows: list[dict],
-                 ind_map: dict[str, str]) -> list[dict]:
+# ── US ETF 데이터 ─────────────────────────────────────────────────────────────
+def get_us_data(cutoff: str, base_date: str) -> list[dict]:
+    return fetch_all_pages(
+        sb.from_('us_market')
+          .select('base_date,industry,chg_pct')
+          .gte('base_date', cutoff)
+          .lte('base_date', base_date)
+          .not_.is_('chg_pct', 'null')
+    )
+
+
+# ── US ETF 누적 등락률 계산 ───────────────────────────────────────────────────
+def calc_us_chg(trading_days: list[str], us_rows: list[dict]) -> dict[str, dict[int, float | None]]:
     """
-    trading_days[0] = 최신 날짜
-    반환: sector_daily_summary upsert용 레코드 리스트
+    US ETF 산업별 기간별 누적 등락률.
+    trading_days[0] = 최신, day_idx 0 = 최신 → idx < period = 최근 period일.
+    반환: {industry: {1: val, 5: val, 20: val}}
     """
-    base_date = trading_days[0]
-    # 날짜 → 인덱스 (0 = 최신)
     day_idx = {d: i for i, d in enumerate(trading_days)}
 
-    # industry → period → 합산 버킷
-    # buckets[ind][period] = {'chg': [], 'frgn': 0, 'inst': 0}
+    # ind → date → [chg_pct, ...]
+    ind_date: dict[str, dict[str, list]] = {}
+    for r in us_rows:
+        ind = r.get('industry')
+        d   = r.get('base_date')
+        chg = r.get('chg_pct')
+        if not ind or not d or chg is None:
+            continue
+        ind_date.setdefault(ind, {}).setdefault(d, []).append(chg)
+
+    result: dict[str, dict[int, float | None]] = {}
+    for ind, date_vals in ind_date.items():
+        result[ind] = {}
+        for period in PERIODS:
+            total, count = 0.0, 0
+            for d, vals in date_vals.items():
+                idx = day_idx.get(d)
+                if idx is not None and idx < period:
+                    total += sum(vals) / len(vals)
+                    count += 1
+            result[ind][period] = round(total, 2) if count > 0 else None
+
+    return result
+
+
+# ── KR 집계 + 신호 계산 ───────────────────────────────────────────────────────
+def calc_summary(trading_days: list[str],
+                 kr_rows: list[dict],
+                 ind_map: dict[str, str],
+                 us_chg: dict[str, dict[int, float | None]]) -> list[dict]:
+    base_date = trading_days[0]
+    day_idx   = {d: i for i, d in enumerate(trading_days)}
+
+    # buckets[ind][period] = {'chg': [], 'frgn': 0, 'inst': 0, 'cnt': 0}
     buckets: dict[str, dict[int, dict]] = {}
 
-    for row in market_rows:
+    for row in kr_rows:
         ind = ind_map.get(row['stock_code'])
         if not ind:
             continue
@@ -121,11 +190,11 @@ def calc_summary(trading_days: list[str], market_rows: list[dict],
                             for p in PERIODS}
 
         chg  = row.get('price_change_rate') or 0
-        frgn = row.get('foreign_net_buy') or 0
+        frgn = row.get('foreign_net_buy')    or 0
         inst = row.get('institution_net_buy') or 0
 
         for p in PERIODS:
-            if idx < p:   # 0~(p-1) 인덱스 = 최근 p 거래일
+            if idx < p:
                 b = buckets[ind][p]
                 if row.get('price_change_rate') is not None:
                     b['chg'].append(chg)
@@ -135,17 +204,36 @@ def calc_summary(trading_days: list[str], market_rows: list[dict],
 
     records = []
     all_industries = set(ind_map.values())
+
     for ind in all_industries:
-        b = buckets.get(ind, {})
-        rec = {'base_date': base_date, 'industry': ind}
+        b    = buckets.get(ind, {})
+        us_d = us_chg.get(ind, {})
+        rec  = {'base_date': base_date, 'industry': ind}
+
         for p in PERIODS:
-            pb = b.get(p, {})
+            pb       = b.get(p, {})
             chg_list = pb.get('chg', [])
-            rec[f'avg_chg_{p}d']      = round(sum(chg_list) / len(chg_list), 3) if chg_list else None
-            rec[f'foreign_net_{p}d']  = pb.get('frgn') or None
-            rec[f'inst_net_{p}d']     = pb.get('inst') or None
+            kr_avg   = round(sum(chg_list) / len(chg_list), 3) if chg_list else None
+            us_avg   = us_d.get(p)
+
+            rec[f'avg_chg_{p}d']     = kr_avg
+            rec[f'us_chg_{p}d']      = us_avg
+            rec[f'foreign_net_{p}d'] = pb.get('frgn') or None
+            rec[f'inst_net_{p}d']    = pb.get('inst') or None
+            rec[f'signal_{p}d']      = detect_signal(us_avg, kr_avg, p)
+
         rec['stock_count'] = b.get(1, {}).get('cnt', 0)
         records.append(rec)
+
+    # 요약 로그
+    signals = [(r['industry'], p, r[f'signal_{p}d'])
+               for r in records for p in PERIODS if r.get(f'signal_{p}d')]
+    if signals:
+        log.info(f'신호 탐지: {len(signals)}건')
+        for ind, p, sig in signals:
+            log.info(f'  [{p}d] {ind}: {sig}')
+    else:
+        log.info('신호 탐지: 없음 (모두 중립)')
 
     return records
 
@@ -172,6 +260,7 @@ def run(target_date: str | None = None):
         log.error('market_data 최신 날짜 없음'); return
 
     log.info(f'=== sector_daily_summary 계산: {target_date} ===')
+
     trading_days = get_trading_days(target_date)
     if not trading_days:
         log.error('거래일 없음'); return
@@ -180,12 +269,17 @@ def run(target_date: str | None = None):
     if not ind_map:
         log.error('산업 매핑 없음'); return
 
-    codes   = list(ind_map.keys())
-    cutoff  = trading_days[-1]
-    mkt     = get_market_data(codes, cutoff, target_date)
-    log.info(f'market_data {len(mkt):,}행 조회')
+    codes  = list(ind_map.keys())
+    cutoff = trading_days[-1]
 
-    records = calc_summary(trading_days, mkt, ind_map)
+    kr_rows = get_kr_data(codes, cutoff, target_date)
+    log.info(f'KR market_data {len(kr_rows):,}행')
+
+    us_rows = get_us_data(cutoff, target_date)
+    log.info(f'US ETF us_market {len(us_rows):,}행')
+
+    us_chg  = calc_us_chg(trading_days, us_rows)
+    records = calc_summary(trading_days, kr_rows, ind_map, us_chg)
     save(records)
     log.info(f'=== 완료: {len(records)}개 산업 저장 ===')
 
