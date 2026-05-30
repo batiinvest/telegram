@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS sector_daily_summary (
 import os, sys, logging
 from dotenv import load_dotenv
 
-load_dotenv()
+from pathlib import Path
+load_dotenv(Path(__file__).parent / '.env')   # 스크립트 위치 기준 .env 명시 로드
 logging.basicConfig(level=logging.INFO,
     format='[%(asctime)s] %(levelname)s %(message)s', datefmt='%H:%M:%S')
 log = logging.getLogger(__name__)
