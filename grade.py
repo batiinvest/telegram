@@ -145,21 +145,15 @@ def save_grade_history(sb, year: str, quarter: str) -> dict:
     log.info(f"📊 [등급이력] {year} {quarter} 등급 계산 시작")
 
     # ── 해당 분기 재무 데이터 전체 조회 ──
-    all_rows, offset = [], 0
-    while True:
-        res = (sb.table('financials')
-               .select('stock_code,corp_name,bsns_year,quarter,'
-                       'revenue,operating_profit,operating_margin,'
-                       'revenue_yoy,op_profit_yoy,other_operating_income,'
-                       'revenue_qoq,op_profit_qoq')
-               .eq('bsns_year', year).eq('quarter', quarter).eq('fs_div', 'CFS')
-               .range(offset, offset + 999).execute())
-        if not res.data:
-            break
-        all_rows.extend(res.data)
-        if len(res.data) < 1000:
-            break
-        offset += 1000
+    from db_utils import fetch_all_pages
+    all_rows = fetch_all_pages(
+        sb.table('financials')
+          .select('stock_code,corp_name,bsns_year,quarter,'
+                  'revenue,operating_profit,operating_margin,'
+                  'revenue_yoy,op_profit_yoy,other_operating_income,'
+                  'revenue_qoq,op_profit_qoq')
+          .eq('bsns_year', year).eq('quarter', quarter).eq('fs_div', 'CFS')
+    )
 
     if not all_rows:
         log.info(f"📊 [등급이력] {year} {quarter} 재무 데이터 없음 — 스킵")

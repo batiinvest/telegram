@@ -1017,6 +1017,20 @@ def job_collect_market_closing():
     job_watchlist_alert()
 
 
+def job_sector_summary():
+    """평일 장 마감 후 (17:15) — 산업별 일별 요약 집계 (sector_daily_summary)"""
+    if market_timer.is_kr_holiday():
+        logging.info("⏸ [섹터요약] 주말/공휴일 스킵")
+        return
+    try:
+        logging.info("📊 [섹터요약] collect_sector_summary 실행")
+        from collect_sector_summary import run as run_sector
+        run_sector()
+        logging.info("✅ [섹터요약] 완료")
+    except Exception as e:
+        logging.error(f"❌ [섹터요약] 오류: {e}")
+
+
 def job_leading_stocks():
     """평일 장 마감 후 (17:30) — 주도주 탐색기 스코어 계산 및 저장"""
     if market_timer.is_kr_holiday():
@@ -1275,6 +1289,7 @@ def run_scheduler():
     schedule.every().day.at("16:20").do(job_collect_us_etf)            # US ETF 수집 (미장 전일 종가)
     schedule.every().day.at("16:30").do(job_collect_new_high)          # 신고가 종목 수집
     schedule.every().day.at("17:00").do(job_collect_market_closing)    # 장 마감 확정치 수집 (외국인 집계 완료 후)
+    schedule.every().day.at("17:15").do(job_sector_summary)            # 산업별 일별 요약 집계
     schedule.every().day.at("17:30").do(job_leading_stocks)            # 주도주 탐색기 스코어 계산
     schedule.every().day.at("18:00").do(job_naver_report)
     schedule.every().day.at("18:10").do(job_kind_ir)             # KIND IR자료 오후 수집
@@ -1379,6 +1394,11 @@ def _run_watchdog_flags(threads: dict):
                 from config import reload_company_data
                 reload_company_data()
                 logging.info("🔄 [Reload] 봇 종목 데이터 갱신 완료")
+                # 산업 매핑 캐시 갱신 (프론트엔드 app_config 조회용)
+                try:
+                    _bridge.update_industry_map_cache()
+                except Exception as _ice:
+                    logging.debug(f"industry_map 캐시 갱신 오류 (무시): {_ice}")
 
                 _all = _sb_r.table('companies').select('code,name') \
                            .eq('is_monitored', True).execute()

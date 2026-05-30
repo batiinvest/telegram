@@ -34,6 +34,7 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from db_utils import fetch_all_pages
 
 load_dotenv()
 logging.basicConfig(
@@ -87,42 +88,29 @@ def fetch_history(base_date: str) -> list[dict]:
     from_str = from_dt.strftime('%Y-%m-%d')
 
     log.info(f'market_data 조회: {from_str} ~ {base_date}')
-    rows, offset = [], 0
-    while True:
-        res = sb.from_('market_data') \
-            .select('base_date,stock_code,corp_name,market,price,volume,market_cap,foreign_net_buy,hgpr_cls_code') \
-            .gte('base_date', from_str) \
-            .lte('base_date', base_date) \
-            .order('base_date', desc=False) \
-            .range(offset, offset + 999) \
-            .execute()
-        chunk = res.data or []
-        rows.extend(chunk)
-        if len(chunk) < 1000:
-            break
-        offset += 1000
+    rows = fetch_all_pages(
+        sb.from_('market_data')
+          .select('base_date,stock_code,corp_name,market,price,volume,market_cap,foreign_net_buy,hgpr_cls_code')
+          .gte('base_date', from_str)
+          .lte('base_date', base_date)
+          .order('base_date', desc=False)
+    )
     log.info(f'조회 완료: {len(rows):,}행')
     return rows
 
 
 def fetch_industry_map() -> dict[str, str]:
     """companies 테이블에서 전체 stock_code → industry 매핑 (is_monitored 무관)"""
-    ind_map, offset = {}, 0
-    while True:
-        res = sb.from_('companies') \
-            .select('code,industry') \
-            .not_.is_('industry', 'null') \
-            .range(offset, offset + 999) \
-            .execute()
-        chunk = res.data or []
-        for r in chunk:
-            code = (r.get('code') or '').replace('.KS', '').replace('.KQ', '')
-            ind  = r.get('industry')
-            if code and ind:
-                ind_map[code] = ind
-        if len(chunk) < 1000:
-            break
-        offset += 1000
+    rows = fetch_all_pages(
+        sb.from_('companies')
+          .select('code,industry')
+          .not_.is_('industry', 'null')
+    )
+    ind_map = {
+        (r.get('code') or '').replace('.KS', '').replace('.KQ', ''): r.get('industry')
+        for r in rows
+        if (r.get('code') or '').replace('.KS', '').replace('.KQ', '') and r.get('industry')
+    }
     log.info(f'산업 매핑: {len(ind_map):,}개 종목')
     return ind_map
 

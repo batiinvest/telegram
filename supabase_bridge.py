@@ -390,6 +390,50 @@ class SupabaseBridge:
             logging.debug(f"[Bridge] disclosure_flag 체크 실패: {e}")
             return False
 
+    def update_industry_map_cache(self):
+        """
+        모니터링 종목의 산업 매핑을 app_config 에 JSON 으로 스냅샷 저장.
+        프론트엔드 getIndustryMap()이 app_config 에서 바로 읽어 DB 조회 생략 가능.
+
+        저장 키:
+          industry_map     : JSON {code: industry}
+          sub_industry_map : JSON {code: sub_industry}
+        """
+        import json
+        client = self._get_client()
+        if not client:
+            return
+        try:
+            from db_utils import fetch_all_pages
+            rows = fetch_all_pages(
+                client.table('companies')
+                      .select('code,industry,sub_industry')
+                      .eq('is_monitored', True)
+            )
+            ind_map = {}
+            sub_map = {}
+            for r in rows:
+                code = (r.get('code') or '').replace('.KS', '').replace('.KQ', '')
+                if not code:
+                    continue
+                if r.get('industry'):
+                    ind_map[code] = r['industry']
+                if r.get('sub_industry'):
+                    sub_map[code] = r['sub_industry']
+
+            client.table('app_config').upsert([
+                {'key': 'industry_map',
+                 'value': json.dumps(ind_map, ensure_ascii=False),
+                 'description': f'모니터링 종목 산업 매핑 캐시 ({len(ind_map)}개)'},
+                {'key': 'sub_industry_map',
+                 'value': json.dumps(sub_map, ensure_ascii=False),
+                 'description': f'모니터링 종목 세부섹터 매핑 캐시 ({len(sub_map)}개)'},
+            ], on_conflict='key').execute()
+
+            logging.info(f"[Bridge] industry_map 캐시 갱신 완료: {len(ind_map)}개 종목")
+        except Exception as e:
+            logging.warning(f"[Bridge] industry_map 캐시 갱신 실패 (무시): {e}")
+
     def seed_industry_rooms(self, industry_chat_ids: dict):
         """
         rooms 테이블에 없는 산업 채팅방을 자동 삽입.

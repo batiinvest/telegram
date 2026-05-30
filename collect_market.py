@@ -187,21 +187,14 @@ def calculate_returns(sb, target_codes: list = None, target_date: str = None):
     for i in range(0, len(codes), chunk):
         batch = codes[i:i+chunk]
         # 페이지네이션으로 전체 조회
-        all_rows = []
-        from_idx = 0
-        while True:
-            res = sb.table("market_data") \
-                .select("stock_code,base_date,price") \
-                .in_("stock_code", batch) \
-                .not_.is_("price", "null") \
-                .order("base_date", desc=False) \
-                .range(from_idx, from_idx + 999).execute()
-            if not res.data:
-                break
-            all_rows.extend(res.data)
-            if len(res.data) < 1000:
-                break
-            from_idx += 1000
+        from db_utils import fetch_all_pages
+        all_rows = fetch_all_pages(
+            sb.table("market_data")
+              .select("stock_code,base_date,price")
+              .in_("stock_code", batch)
+              .not_.is_("price", "null")
+              .order("base_date", desc=False)
+        )
 
         hist = {}
         for r in all_rows:
