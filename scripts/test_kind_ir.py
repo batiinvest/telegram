@@ -97,6 +97,9 @@ def fetch_kind_ir_list(page: int = 1) -> list:
 # ── 2. KIND 다운로드 URL 패턴 테스트 ──────────────────────────
 def test_download_patterns():
     """알려진 KIND 다운로드 URL 패턴들 테스트"""
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
     patterns = [
         # 공식 IR자료실
         "https://kind.krx.co.kr/ir/irnotice.do?method=searchIrNoticeMain",

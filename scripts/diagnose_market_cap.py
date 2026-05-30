@@ -7,6 +7,9 @@ diagnose_market_cap.py
     python diagnose_market_cap.py 001820
     python diagnose_market_cap.py 001820 삼화콘덴서공업
 """
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 
 import sys
 import os

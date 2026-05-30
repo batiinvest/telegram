@@ -37,12 +37,8 @@ from dotenv import load_dotenv
 from db_utils import fetch_all_pages
 
 load_dotenv()
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s %(message)s',
-    datefmt='%H:%M:%S',
-)
-log = logging.getLogger(__name__)
+from logger_config import get_logger
+log = get_logger(__name__)
 
 # ── Supabase 클라이언트 ──────────────────────────────────────────────────────
 try:

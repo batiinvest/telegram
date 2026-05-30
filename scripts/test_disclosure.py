@@ -6,6 +6,9 @@
   python3 test_disclosure.py --date 20260425   # 지난주 금요일
   python3 test_disclosure.py --dry-run         # 실제 수집 없이 공시 목록만 확인
 """
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import os, sys, json, argparse, logging
 from datetime import date, timedelta
 from dotenv import load_dotenv

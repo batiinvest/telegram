@@ -1,3 +1,6 @@
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 from dotenv import load_dotenv; load_dotenv()
 from supabase_bridge import bridge as b
 from collections import defaultdict

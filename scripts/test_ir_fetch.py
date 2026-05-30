@@ -101,6 +101,9 @@ def fetch_document_files(rcpt_no: str) -> list[tuple[str, BytesIO]]:
     document.json API로 ZIP 다운로드 → (파일명, BytesIO) 리스트 반환.
     PDF/HWP 파일만 추출.
     """
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
     url = f"{DART_BASE}/document.json"
     params = {"crtfc_key": DART_API_KEY, "rcpNo": rcpt_no}
 

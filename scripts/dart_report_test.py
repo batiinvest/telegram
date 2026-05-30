@@ -144,6 +144,9 @@ def default_search_window_for_business_year(year: str) -> Tuple[str, str]:
     사업보고서는 통상 해당 사업연도 다음 해에 제출된다.
     예: 2025년 사업보고서(2025.12)는 2026년에 제출.
     """
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
     y = int(year)
     submit_year = y + 1
     today = dt.date.today()

@@ -17,9 +17,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / '.env')
-logging.basicConfig(level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s %(message)s', datefmt='%H:%M:%S')
-log = logging.getLogger(__name__)
+from logger_config import get_logger
+log = get_logger(__name__)
 
 from supabase import create_client
 from db_utils import fetch_all_pages

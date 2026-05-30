@@ -25,8 +25,8 @@ from collections import defaultdict
 from dotenv import load_dotenv
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(message)s', datefmt='%H:%M:%S')
-log = logging.getLogger(__name__)
+from logger_config import get_logger
+log = get_logger(__name__)
 
 DRY_RUN    = '--dry-run' in sys.argv or '--preview' in sys.argv
 TARGET_CID = next((a.split('=', 1)[1] for a in sys.argv[1:] if a.startswith('--chat-id=')), None)

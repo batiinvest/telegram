@@ -10,6 +10,9 @@ DART 사업보고서 XML 섹션 추출 테스트 스크립트
 출력
     dart_test_output/314930_바이오다인/extracted_sections/{xml파일명}/
 """
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 
 from __future__ import annotations
 

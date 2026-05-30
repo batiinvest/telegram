@@ -3,6 +3,9 @@
 DART Q2/Q3가 누적값인지 단독값인지 종목별로 판별하는 스크립트
 사용법: python3 check_cumulative.py
 """
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import os, time, requests, OpenDartReader
 from dotenv import load_dotenv
 load_dotenv('/home/kjhofone/.env')

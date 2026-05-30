@@ -6,7 +6,6 @@ import os
 import datetime
 import json
 import re
-from logging.handlers import RotatingFileHandler
 from managers import market_timer, HistoryManager
 
 # ✅ 스케줄링 라이브러리
@@ -102,21 +101,10 @@ except Exception as _be:
 _disclosure_running = False
 
 # ==========================================
-# ⚙️ 통합 로깅 설정 (10MB x 3개 유지)
+# ⚙️ 통합 로깅 설정 — logger_config.py 위임
 # ==========================================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(threadName)s - %(message)s',
-    handlers=[
-        RotatingFileHandler(
-            "bati_integrated.log",
-            maxBytes=10*1024*1024,
-            backupCount=3,
-            encoding='utf-8'
-        ),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+from logger_config import setup_root_logger
+setup_root_logger()   # logs/bati.log (RotatingFileHandler 10MB×5) + 콘솔
 
 # ==========================================
 # 🔧 스케줄 ON/OFF 헬퍼

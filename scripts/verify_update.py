@@ -12,6 +12,9 @@ verify_update.py — 배포 후 동작 검증 스크립트
   6. 산업 분석 함수 6개 _get_industry_targets 사용 여부
   7. job_* 함수들 for 루프 제거 여부
 """
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 
 import sys
 import os

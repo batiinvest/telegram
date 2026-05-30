@@ -1,3 +1,6 @@
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import sys, os
 sys.path.insert(0, '/home/kjhofone')
 with open('/home/kjhofone/.env') as f:
