@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 환경변수 / 시크릿
+.env
+.env.*
+*.key
+*.pem
+
+# 로그 파일
+logs/
+*.log
+*.log.*
+
+# 임시 파일
+*.tmp
+*.temp
+C*AppDataLocalTemp*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 테스트 아티팩트
+.pytest_cache/
+htmlcov/
