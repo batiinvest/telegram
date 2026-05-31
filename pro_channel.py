@@ -292,22 +292,16 @@ def kick_member(telegram_id: int, reason: str = '구독 만료') -> bool:
     success = ban_res.get('ok', False)
 
     if success:
-        # DB 업데이트
+        # DB 업데이트 — 기존 메모 먼저 조회 후 단일 update 호출 (이중 write 방지)
         try:
+            current    = get_member(telegram_id)
+            old_memo   = (current.get('memo') or '') if current else ''
             _sb().table('pro_members').update({
                 'in_channel': False,
                 'is_active':  False,
                 'updated_at': 'now()',
-                'memo':       '',   # 아래에서 기존 메모 보존
+                'memo':       old_memo + f'\n[퇴장 {date.today()} — {reason}]',
             }).eq('telegram_id', telegram_id).execute()
-
-            # 메모 보존하며 퇴장 기록 추가
-            member = get_member(telegram_id)
-            if member:
-                old_memo = member.get('memo') or ''
-                _sb().table('pro_members').update({
-                    'memo': old_memo + f'\n[퇴장 {date.today()} — {reason}]'
-                }).eq('telegram_id', telegram_id).execute()
         except Exception as e:
             log.warning(f"[pro] kick DB 업데이트 실패: {e}")
 

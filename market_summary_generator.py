@@ -45,7 +45,6 @@ except ImportError:
     sb = None
     logging.warning("[SummaryGen] supabase-py 미설치. pip install supabase")
 
-s %(levelname)s %(message)s")
 
 
 # ── 임계값 ────────────────────────────────────────────────────────────────────

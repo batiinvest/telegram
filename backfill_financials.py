@@ -31,10 +31,10 @@ from datetime import datetime
 from typing import Optional
 
 try:
-    from supabase import create_client
+    from db_client import get_supabase_client as _get_sb
 except ImportError:
-    print("pip install supabase 필요")
-    sys.exit(1)
+    from supabase import create_client as _cs
+    def _get_sb(): return _cs(os.getenv("SB_URL",""), os.getenv("SB_SERVICE_KEY",""))
 
 try:
     import OpenDartReader
@@ -58,8 +58,6 @@ from collect_financials import (
     auto_detect_quarter,
 )
 
-s [%(levelname)s] %(message)s",
-)
 
 
 DART_API_KEY   = os.getenv("DART_API_KEY", "")
@@ -297,7 +295,7 @@ def run_backfill(from_year: int, monitored_only: bool = False,
         sys.exit(1)
 
     dart = OpenDartReader(DART_API_KEY)
-    sb   = create_client(SB_URL, SB_SERVICE_KEY)
+    sb   = _get_sb()
 
     quarters = _build_quarter_list(from_year)
     log.info(f"📅 수집 대상 분기: {quarters[0]} ~ {quarters[-1]} ({len(quarters)}개 분기)")

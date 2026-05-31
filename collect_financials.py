@@ -25,10 +25,11 @@ from datetime import datetime, timezone
 from typing import Optional
 
 try:
-    from supabase import create_client
+    from db_client import get_supabase_client as _get_sb
 except ImportError:
-    print("pip install supabase 필요")
-    sys.exit(1)
+    from supabase import create_client as _cs
+    def _get_sb():
+        return _cs(os.getenv("SB_URL",""), os.getenv("SB_SERVICE_KEY",""))
 
 try:
     import OpenDartReader
@@ -427,8 +428,6 @@ def convert_to_pure_quarter(row: dict, prev_row: Optional[dict]) -> dict:
     converted["is_cumulative"] = False
     return converted
 
-s [%(levelname)s] %(message)s"
-)
 
 
 def parse_amount(val: str) -> Optional[int]:
@@ -760,7 +759,7 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
         return 0, 0
 
     dart = OpenDartReader(DART_API_KEY)
-    sb   = create_client(SB_URL, SB_SERVICE_KEY)
+    sb   = _get_sb()
 
     log.info(f"=== 공시 기반 재무 수집: {year} {quarter} — {len(corp_codes)}개 종목 ===")
 
@@ -964,7 +963,7 @@ def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,
         sys.exit(1)
 
     dart = OpenDartReader(DART_API_KEY)
-    sb   = create_client(SB_URL, SB_SERVICE_KEY)
+    sb   = _get_sb()
 
     log.info(f"=== 재무 데이터 수집 시작: {year} {quarter} ===")
 
@@ -1094,7 +1093,7 @@ def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,
                             # 폴백: DB에서 Q1+Q2+Q3 단독값 합산
                             log.warning(f"[Q3누적조회실패] {t['corp_name']} {year} — DB Q1+Q2+Q3 합산으로 폴백")
                             try:
-                                _sb_fb = create_client(SB_URL, SB_SERVICE_KEY)
+                                _sb_fb = _get_sb()
                                 _code_fb = t["stock_code"].split(".")[0]
                                 _fb_res = _sb_fb.table("financials") \
                                     .select(",".join(["quarter","fs_div"] + FLOW_COLS)) \

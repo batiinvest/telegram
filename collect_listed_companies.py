@@ -29,9 +29,10 @@ except ImportError:
     print("pip install dart-fss 필요"); sys.exit(1)
 
 try:
-    from supabase import create_client
+    from db_client import get_supabase_client as _get_sb
 except ImportError:
-    print("pip install supabase 필요"); sys.exit(1)
+    from supabase import create_client as _cs
+    def _get_sb(): return _cs(os.getenv("SB_URL",""), os.getenv("SB_SERVICE_KEY",""))
 
 DART_API_KEY   = os.getenv("DART_API_KEY", "")
 SB_URL         = os.getenv("SB_URL", "")
@@ -44,7 +45,7 @@ def run(dry_run: bool = False):
         log.error("DART_API_KEY, SB_URL, SB_SERVICE_KEY 환경변수 필요"); sys.exit(1)
 
     dart.set_api_key(DART_API_KEY)
-    sb = create_client(SB_URL, SB_SERVICE_KEY)
+    sb = _get_sb()
     mode = "[DRY-RUN] " if dry_run else ""
     log.info(f"=== {mode}코스피+코스닥 전체 상장사 동기화 시작 ===")
 

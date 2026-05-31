@@ -14,7 +14,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-s [%(levelname)s] %(message)s')
 
 
 try:
@@ -24,8 +23,8 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from supabase import create_client
-    _sb = create_client(os.getenv('SB_URL'), os.getenv('SB_SERVICE_KEY'))
+    from db_client import get_supabase_client
+    _sb = get_supabase_client()
 except Exception as e:
     log.error(f"Supabase 연결 실패: {e}")
     sys.exit(1)

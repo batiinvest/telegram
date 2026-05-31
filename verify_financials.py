@@ -38,8 +38,6 @@ except ImportError:
 from dotenv import load_dotenv
 load_dotenv()
 
-s [%(levelname)s] %(message)s",
-)
 
 
 SB_URL         = os.getenv("SB_URL", "")

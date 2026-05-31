@@ -1342,10 +1342,6 @@ def _start_daemon(target, name: str, args: tuple = ()):
     threading.Thread(target=target, name=name, args=args, daemon=True).start()
 
 
-# 워치독 루프 공유 상태 — disclosure 중복 실행 방지 플래그
-_disclosure_running = False
-
-
 def _run_watchdog_flags(threads: dict):
     """워치독 루프 1회 tick — 각종 앱 플래그 체크 및 배경 작업 트리거.
     main() while True 루프에서 매 60초마다 호출됨."""
@@ -1386,65 +1382,13 @@ def _run_watchdog_flags(threads: dict):
                              .in_('stock_code', _rm_list[_i:_i+200]).execute()
                     logging.info(f"🗑️ [Reload] 제거 종목 {len(_removed)}개 — 90일 초과 데이터 삭제")
 
-                # 신규 추가 종목 → 90일 시장 데이터 백필
+                # 신규 추가 종목 → 90일 시장 데이터 백필 (backfill_market_90d.run_for_codes 위임)
                 if _added and _COLLECTOR_OK:
                     logging.info(f"📈 [Reload] 신규 모니터링 {len(_added)}개 — 90일 시장 데이터 백필 시작")
                     def _backfill_market(_codes):
                         try:
-                            from stock_api import _call_kis_api
-                            _sb4 = _bridge._get_client()
-                            _comp = _sb4.table('companies').select('code,name') \
-                                       .in_('code', list(_codes)).execute()
-                            _comp_map = {}
-                            for _r in (_comp.data or []):
-                                _c   = _r['code'].split('.')[0]
-                                _mkt = 'KOSPI' if _r['code'].endswith('.KS') else 'KOSDAQ'
-                                _comp_map[_c] = {'name': _r.get('name',''), 'market': _mkt}
-                            _total = 0
-                            for _code in _codes:
-                                _info  = _comp_map.get(_code, {'name':'', 'market':'KOSDAQ'})
-                                _end   = datetime.datetime.now().strftime('%Y%m%d')
-                                _start = (datetime.datetime.now() - datetime.timedelta(days=95)).strftime('%Y%m%d')
-                                try:
-                                    _data  = _call_kis_api(
-                                        tr_id='FHKST03010100',
-                                        path='quotations/inquire-daily-itemchartprice',
-                                        code=_code, custtype='P',
-                                        extra_params={
-                                            'FID_INPUT_DATE_1': _start, 'FID_INPUT_DATE_2': _end,
-                                            'FID_PERIOD_DIV_CODE': 'D', 'FID_ORG_ADJ_PRC': '1',
-                                        }
-                                    )
-                                    _daily = _data.get('output2', []) if _data else []
-                                except Exception as _ae:
-                                    logging.error(f"  [{_code}] API 오류: {_ae}")
-                                    time.sleep(0.5); continue
-                                _rows = []
-                                for _d in _daily:
-                                    _ds = _d.get('stck_bsop_date', '')
-                                    if not _ds or len(_ds) != 8: continue
-                                    try:
-                                        _price = int(_d.get('stck_clpr', 0)) or None
-                                        _vrss  = int(_d.get('prdy_vrss', 0))
-                                        _sign  = _d.get('prdy_vrss_sign', '3')
-                                        _vrss  = -abs(_vrss) if _sign in ('4','5') else abs(_vrss)
-                                        _prev_ = (_price or 0) - _vrss
-                                        _rows.append({
-                                            'stock_code': _code, 'corp_name': _info['name'],
-                                            'base_date':  f"{_ds[:4]}-{_ds[4:6]}-{_ds[6:]}",
-                                            'market': _info['market'], 'price': _price,
-                                            'price_change_rate': round(_vrss/_prev_*100,2) if _prev_ else 0.0,
-                                            'market_cap': int(_d.get('hts_avls',0)) or None,
-                                            'volume':     int(_d.get('acml_vol', 0)) or None,
-                                        })
-                                    except (ValueError, TypeError): continue
-                                for _j in range(0, len(_rows), 50):
-                                    _sb4.table('market_data').upsert(
-                                        _rows[_j:_j+50], on_conflict='stock_code,base_date').execute()
-                                _total += len(_rows)
-                                logging.info(f"  [{_code}] {_info['name']}: {len(_rows)}건 저장")
-                                time.sleep(0.15)
-                            logging.info(f"📈 [Reload] 백필 완료: 총 {_total}건")
+                            from backfill_market_90d import run_for_codes
+                            run_for_codes(list(_codes))
                         except Exception as _be:
                             logging.error(f"❌ [Reload] 백필 오류: {_be}")
                     _start_daemon(_backfill_market, "Thread-MarketBackfill", (list(_added),))

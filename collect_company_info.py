@@ -37,9 +37,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
-    from supabase import create_client
+    from db_client import get_supabase_client as _get_sb
 except ImportError:
-    print("pip install supabase 필요"); sys.exit(1)
+    from supabase import create_client as _cs
+    def _get_sb(): return _cs(os.getenv("SB_URL",""), os.getenv("SB_SERVICE_KEY",""))
 
 try:
     import OpenDartReader
@@ -317,7 +318,7 @@ def run(stock_codes: list, force: bool = False) -> tuple[int, int]:
         return 0, 0
 
     dart = OpenDartReader(DART_API_KEY)
-    sb   = create_client(SB_URL, SB_SERVICE_KEY)
+    sb   = _get_sb()
 
     ok = fail = 0
     for i, code in enumerate(stock_codes, 1):
@@ -340,7 +341,7 @@ def run_monitored(force: bool = False) -> tuple[int, int]:
     if not SB_URL or not SB_SERVICE_KEY:
         log.error("SB_URL, SB_SERVICE_KEY 환경변수 필요")
         return 0, 0
-    sb = create_client(SB_URL, SB_SERVICE_KEY)
+    sb = _get_sb()
     res = sb.table('companies').select('code').eq('is_monitored', True).execute()
     codes = [r['code'].split('.')[0] for r in (res.data or []) if r.get('code')]
     log.info(f"모니터링 종목 {len(codes)}개 수집 시작")

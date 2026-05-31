@@ -19,7 +19,6 @@ from datetime import date, timedelta
 from urllib.parse import urlencode
 from bs4 import BeautifulSoup
 
-s %(levelname)s %(message)s')
 
 
 try:
