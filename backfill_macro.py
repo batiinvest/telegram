@@ -1,3 +1,6 @@
+
+from logger_config import get_logger
+log = get_logger(__name__)
 #!/usr/bin/env python3
 """
 과거 매크로 데이터 일괄 수집 스크립트
@@ -13,8 +16,8 @@ from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
-log = logging.getLogger(__name__)
+s %(message)s')
+
 
 try:
     import yfinance as yf

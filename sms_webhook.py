@@ -37,11 +37,13 @@ import os
 import re
 import json
 import logging
+from logger_config import get_logger
+log = get_logger(__name__)
+
 import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-log = logging.getLogger(__name__)
 
 # ── 의존 임포트 ──────────────────────────────────────────────
 try:
@@ -70,6 +72,8 @@ try:
 except ImportError:
     _BRIDGE_OK = False
 
+from telegram_utils import get_admin_chat_id as _get_admin_chat
+
 # ── 설정 ─────────────────────────────────────────────────────
 PORT               = int(os.getenv('SMS_WEBHOOK_PORT', 5001))
 DEFAULT_MONTHS     = 1          # 입금 1회당 기본 연장 개월
@@ -90,9 +94,6 @@ def _get_config(key: str, default: str = '') -> str:
     except Exception:
         return default
 
-
-def _get_admin_chat() -> Optional[str]:
-    return _get_config('admin_chat_id') or None
 
 
 def _check_token(req) -> bool:
@@ -337,6 +338,5 @@ def start_thread(host: str = '0.0.0.0', port: int = PORT) -> threading.Thread:
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s %(levelname)s %(message)s')
+    s %(levelname)s %(message)s')
     run_server()

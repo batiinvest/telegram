@@ -26,6 +26,7 @@ try:
         COMPANY_CODES,
         COMMON_BUTTON
     )
+    from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 except ImportError as e:
     print(f"❌ 필수 파일이 누락되었습니다: {e}")
     sys.exit(1)
@@ -799,14 +800,7 @@ def job_save_grade_history(year: str = None, quarter: str = None):
         )
 
         # 개인 채팅방(admin_chat_id)으로만 발송
-        try:
-            cfg = sb.table('app_config').select('value') \
-                    .eq('key', 'admin_chat_id').single().execute()
-            admin_chat = cfg.data['value'] if cfg.data else None
-        except Exception:
-            admin_chat = None
-
-        target = admin_chat or DEFAULT_CHAT_ID
+        target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
         stock_api.send_telegram(target, msg)
         logging.info(
             f"📢 [등급알림] {year} {quarter} → {target} — "
@@ -945,14 +939,7 @@ def _check_market_warnings():
         if not new_alerts:
             return
 
-        # 개인 채팅방 조회
-        try:
-            cfg = sb.table('app_config').select('value') \
-                    .eq('key', 'admin_chat_id').single().execute()
-            admin_chat = cfg.data['value'] if cfg.data else None
-        except Exception:
-            admin_chat = None
-        target = admin_chat or DEFAULT_CHAT_ID
+        target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
 
         WARN_LABEL = {'00': '정상', '01': '⚠️ 주의', '02': '🚨 경고', '03': '🆘 위험'}
         lines = []
@@ -1144,15 +1131,7 @@ def job_watchlist_alert():
 
         # ── 알림 발송 ──
         if alerts:
-            # 개인 채팅방(admin_chat_id)으로만 발송
-            try:
-                cfg = sb.table('app_config').select('value') \
-                        .eq('key', 'admin_chat_id').single().execute()
-                admin_chat = cfg.data['value'] if cfg.data else None
-            except Exception:
-                admin_chat = None
-
-            target = admin_chat or DEFAULT_CHAT_ID
+            target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
 
             for code, name, alert_type, msg in alerts:
                 stock_api.send_telegram(target, msg)

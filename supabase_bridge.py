@@ -390,6 +390,25 @@ class SupabaseBridge:
             logging.debug(f"[Bridge] disclosure_flag 체크 실패: {e}")
             return False
 
+    def get_admin_chat_id(self, fallback: str = '') -> str:
+        """
+        app_config에서 admin_chat_id 조회.
+        bot_commands.py / pro_channel.py / sms_webhook.py의 중복 _get_admin_chat() 통합.
+        """
+        client = self._get_client()
+        if not client:
+            return fallback
+        try:
+            res = client.table('app_config') \
+                        .select('value') \
+                        .in_('key', ['pro_admin_chat_id', 'admin_chat_id']) \
+                        .execute()
+            cfg = {r['key']: r['value'] for r in (res.data or [])}
+            return cfg.get('pro_admin_chat_id') or cfg.get('admin_chat_id') or fallback
+        except Exception as e:
+            logging.debug(f'[Bridge] get_admin_chat_id 오류: {e}')
+            return fallback
+
     def update_industry_map_cache(self):
         """
         모니터링 종목의 산업 매핑을 app_config 에 JSON 으로 스냅샷 저장.

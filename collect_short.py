@@ -24,6 +24,9 @@ import os
 import sys
 import time
 import logging
+from logger_config import get_logger
+log = get_logger(__name__)
+
 from datetime import date, timedelta
 from typing import Optional
 
@@ -37,7 +40,6 @@ except ImportError:
     print("pip install supabase 필요")
     sys.exit(1)
 
-log = logging.getLogger(__name__)
 
 SB_URL         = os.getenv("SB_URL", "")
 SB_SERVICE_KEY = os.getenv("SB_SERVICE_KEY", "")
@@ -388,9 +390,7 @@ def backfill(stock_codes: list[str], days: int = 252) -> int:
 
 if __name__ == "__main__":
     import argparse
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s"
+    s [%(levelname)s] %(message)s"
     )
     parser = argparse.ArgumentParser(description="KRX 공매도 거래 비중 수집")
     parser.add_argument("--date", type=str, default=None,

@@ -76,13 +76,9 @@ def format_volume(val):
     return f"{val}"
 
 def format_money(val_100m: int, short: bool = False) -> str:
-    """[통합] 억 단위 변환 (short=True: 1.5조, False: 1조 5000억)"""
-    val = int(val_100m)
-    if val >= 10000:
-        if short: return f"{val/10000:.1f}조"
-        res = f"{val // 10000}조 {val % 10000}억"
-        return res.replace(" 0억", "").strip()
-    return f"{val}억"
+    """억 단위 변환 — format_utils.fmt_money() 위임 (인터페이스 유지)"""
+    from format_utils import fmt_money
+    return fmt_money(val_100m, short=short)
 
 def get_weather_icon(rate: float) -> str:
     if rate >= 1.0: return "🔥"

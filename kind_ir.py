@@ -19,6 +19,9 @@ KIND(한국거래소 기업공시채널)의 IR자료실에서 새로 업로드�
 
 import json
 import logging
+from logger_config import get_logger
+log = get_logger(__name__)
+
 import re
 import time
 from datetime import date, timedelta
@@ -44,8 +47,6 @@ try:
 except ImportError:
     _get_company_chat_id = None
 
-log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)   # config.py 의 basicConfig(WARNING) 보다 먼저 고정
 
 # ── 상수 ───────────────────────────────────────────────────────
 KIND_BASE        = "https://kind.krx.co.kr"
@@ -576,7 +577,7 @@ def run_kind_ir_job(
 
 if __name__ == "__main__":
     import argparse
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    s %(levelname)s %(message)s")
     # config.py 가 basicConfig 를 WARNING 레벨로 먼저 호출하므로
     # no-op 이 되는 경우를 대비해 root 레벨을 명시적으로 재설정
     logging.getLogger().setLevel(logging.INFO)

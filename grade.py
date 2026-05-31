@@ -26,26 +26,13 @@ score (정렬용):
 
 import logging
 from typing import Optional
+from format_utils import get_prev_quarter  # 공통 유틸로 이관
+from logger_config import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 MIN_REVENUE = 5_000_000_000  # 50억
-
-GRADE_RANK = {'S': 4, 'A': 3, 'B': 2, '관찰': 1}
-
-Q_PREV_MAP = {
-    'Q1': ('Q4', -1),
-    'Q2': ('Q1',  0),
-    'Q3': ('Q2',  0),
-    'Q4': ('Q3',  0),
-}
-
-
-def get_prev_quarter(year: str, quarter: str):
-    prev_q, year_offset = Q_PREV_MAP.get(quarter, (None, 0))
-    if not prev_q:
-        return None, None
-    return str(int(year) + year_offset), prev_q
+GRADE_RANK  = {'S': 4, 'A': 3, 'B': 2, '관찰': 1}
 
 
 def grade_row(r: dict, prev_cache: dict, prev_year_cache: dict,

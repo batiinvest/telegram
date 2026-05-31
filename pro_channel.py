@@ -19,12 +19,14 @@ Supabase `pro_members` 테이블 + Telegram Bot API를 이용해
 """
 
 import logging
+from logger_config import get_logger
+log = get_logger(__name__)
+
 import time
 import requests
 from datetime import date, timedelta
 from typing import Optional
 
-log = logging.getLogger(__name__)
 
 # ── 의존 임포트 ──────────────────────────────────────────────
 try:
@@ -38,6 +40,8 @@ try:
 except ImportError:
     _BRIDGE_OK = False
     log.warning("supabase_bridge 없음 — pro_channel 기능 비활성화")
+
+from telegram_utils import get_admin_chat_id as _get_admin_chat
 
 # ── 상수 ─────────────────────────────────────────────────────
 _TG_API = "https://api.telegram.org/bot{token}/{method}"
@@ -415,16 +419,6 @@ def check_expired(admin_chat_id: str = None) -> dict:
     return result
 
 
-def _get_admin_chat() -> Optional[str]:
-    """app_config에서 admin_chat_id 조회."""
-    try:
-        sb = _sb()
-        res = sb.table('app_config').select('value') \
-                .eq('key', 'admin_chat_id').single().execute()
-        return (res.data or {}).get('value')
-    except Exception:
-        return None
-
 
 # ══════════════════════════════════════════════════════════════
 # 🔄  채널 상태 동기화
@@ -555,7 +549,7 @@ def get_stats() -> dict:
 
 if __name__ == '__main__':
     import sys
-    logging.basicConfig(level=logging.INFO)
+    
 
     cmd = sys.argv[1] if len(sys.argv) > 1 else 'stats'
 

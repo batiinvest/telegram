@@ -1,3 +1,6 @@
+
+from logger_config import get_logger
+log = get_logger(__name__)
 """
 collect_listed_companies.py
 ───────────────────────────
@@ -34,8 +37,6 @@ DART_API_KEY   = os.getenv("DART_API_KEY", "")
 SB_URL         = os.getenv("SB_URL", "")
 SB_SERVICE_KEY = os.getenv("SB_SERVICE_KEY", "")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
-log = logging.getLogger(__name__)
 
 
 def run(dry_run: bool = False):

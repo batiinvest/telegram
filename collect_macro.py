@@ -1,3 +1,6 @@
+
+from logger_config import get_logger
+log = get_logger(__name__)
 #!/usr/bin/env python3
 """
 글로벌 매크로 데이터 수집 스크립트
@@ -16,11 +19,9 @@ from datetime import date, datetime, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s'
+s [%(levelname)s] %(message)s'
 )
-log = logging.getLogger(__name__)
+
 
 try:
     import yfinance as yf

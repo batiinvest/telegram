@@ -34,6 +34,8 @@ try:
 except ImportError:
     _BRIDGE_OK = False
 
+from telegram_utils import get_admin_chat_id as _get_admin_chat
+
 _TG = "https://api.telegram.org/bot{token}/{method}"
 _running = False
 
@@ -55,33 +57,6 @@ def _post(method: str, **params) -> dict:
 def _reply(chat_id: int, text: str):
     _post('sendMessage', chat_id=chat_id, text=text, parse_mode='HTML')
 
-
-def _get_admin_chat() -> str:
-    """
-    어드민 chat_id 조회.
-    우선순위: app_config[pro_admin_chat_id] → app_config[admin_chat_id] → config.py DEFAULT_CHAT_ID
-    ※ 개인 계정은 숫자 ID만 동작 (봇이 먼저 말 건 적 있어야 함)
-    """
-    # 1) Supabase에서 pro 전용 어드민 chat_id 조회
-    if _BRIDGE_OK:
-        try:
-            sb  = _bridge._get_client()
-            res = sb.table('app_config').select('key,value') \
-                    .in_('key', ['pro_admin_chat_id', 'admin_chat_id']) \
-                    .execute()
-            cfg = {r['key']: r['value'] for r in (res.data or [])}
-            cid = cfg.get('pro_admin_chat_id') or cfg.get('admin_chat_id') or ''
-            if cid:
-                return cid
-        except Exception as e:
-            log.debug(f"[cmd] admin_chat_id 조회 실패: {e}")
-
-    # 2) config.py DEFAULT_CHAT_ID 폴백
-    try:
-        from config import DEFAULT_CHAT_ID
-        return DEFAULT_CHAT_ID or ''
-    except Exception:
-        return ''
 
 
 def _notify_admin_subscribe(uid: int, fname: str, lname: str, username: str):

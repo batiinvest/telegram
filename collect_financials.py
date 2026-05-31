@@ -16,6 +16,9 @@ import os
 import sys
 import time
 import logging
+from logger_config import get_logger
+log = get_logger(__name__)
+
 import argparse
 import requests
 from datetime import datetime, timezone
@@ -424,11 +427,8 @@ def convert_to_pure_quarter(row: dict, prev_row: Optional[dict]) -> dict:
     converted["is_cumulative"] = False
     return converted
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+s [%(levelname)s] %(message)s"
 )
-log = logging.getLogger(__name__)
 
 
 def parse_amount(val: str) -> Optional[int]:
@@ -583,14 +583,7 @@ def calc_growth(new_val, old_val) -> Optional[float]:
         return None
 
 
-def get_prev_quarter(year: str, quarter: str) -> tuple:
-    """이전 분기 반환 (year, quarter)"""
-    q_map = {'Q1': ('Q4', str(int(year)-1)),  # Q1 → 전년 Q4
-             'Q2': ('Q1', year),
-             'Q3': ('Q2', year),
-             'Q4': ('Q3', year)}
-    prev_q, prev_y = q_map.get(quarter, (None, None))
-    return prev_y, prev_q
+from format_utils import get_prev_quarter   # 공통 유틸로 이관
 
 
 def get_prev_year_quarter(year: str, quarter: str) -> tuple:

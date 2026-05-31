@@ -25,6 +25,9 @@ import io
 import re
 import time
 import logging
+from logger_config import get_logger
+log = get_logger(__name__)
+
 import zipfile
 import argparse
 from datetime import datetime
@@ -43,7 +46,6 @@ try:
 except ImportError:
     print("pip install opendartreader 필요"); sys.exit(1)
 
-log = logging.getLogger(__name__)
 
 DART_API_KEY   = os.getenv("DART_API_KEY", "")
 SB_URL         = os.getenv("SB_URL", "")
@@ -346,9 +348,7 @@ def run_monitored(force: bool = False) -> tuple[int, int]:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s"
+    s [%(levelname)s] %(message)s"
     )
     parser = argparse.ArgumentParser(description="DART 기업정보 수집")
     parser.add_argument("--code",      nargs="+",      help="종목코드 (예: 005930 000660)")

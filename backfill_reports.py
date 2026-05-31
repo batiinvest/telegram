@@ -1,3 +1,6 @@
+
+from logger_config import get_logger
+log = get_logger(__name__)
 #!/usr/bin/env python3
 """
 네이버 증권 과거 리포트 일괄 전송 스크립트
@@ -16,8 +19,8 @@ from datetime import date, timedelta
 from urllib.parse import urlencode
 from bs4 import BeautifulSoup
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-log = logging.getLogger(__name__)
+s %(levelname)s %(message)s')
+
 
 try:
     import stock_api as sa

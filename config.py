@@ -156,50 +156,57 @@ _raw_data = load_company_data_from_db() or load_company_data_from_json()
 logging.info(f"📊 총 {len(_raw_data)}개 종목 로드 완료")
 
 # ==========================================
-# 3. 데이터 구조 변환 (전역 변수 생성)
-#    DB 컬럼명(keywords_additional 등)으로 통일
+# 3. 데이터 구조 변환 헬퍼 + 전역 변수 생성
 # ==========================================
-COMPANY_CODES = {
-    item["name"]: item["code"]
-    for item in _raw_data
-    if item.get("code") and item.get("active", True)
-}
 
-COMPANY_KEYWORDS = [
-    {
-        "name": item["name"],
-        "related_keywords":    [k.strip() for k in (item.get("keywords") or "").split(",") if k.strip()],
-        "additional_keywords": [k.strip() for k in (item.get("keywords") or "").split(",") if k.strip()],
+def _build_company_dicts(data: list) -> tuple:
+    """
+    raw_data 리스트 → (COMPANY_CODES, COMPANY_KEYWORDS,
+                       INDUSTRY_HIERARCHY, THEME_MAP, COMPANY_TO_INDUSTRY)
+    초기화와 reload_company_data() 양쪽에서 공유.
+    DB 컬럼명: keywords_related / keywords_additional 사용.
+    """
+    codes = {
+        item["name"]: item["code"]
+        for item in data
+        if item.get("code") and item.get("active", True)
     }
-    for item in _raw_data
-    if item.get("active", True)
-]
+
+    keywords = [
+        {
+            "name": item["name"],
+            "related_keywords":    [k.strip() for k in (item.get("keywords_related")    or "").split(",") if k.strip()],
+            "additional_keywords": [k.strip() for k in (item.get("keywords_additional") or "").split(",") if k.strip()],
+        }
+        for item in data
+        if item.get("active", True)
+    ]
+
+    hierarchy: dict = {}
+    theme_map: dict = {}
+    company_to_industry: dict = {}
+
+    for item in data:
+        if not item.get("active", True):
+            continue
+        name = item["name"]
+        ind  = item.get("industry")
+        sub  = item.get("sub_industry")
+        if ind:
+            safe_sub = sub or "기타"
+            hierarchy.setdefault(ind, {}).setdefault(safe_sub, []).append(name)
+            company_to_industry[name] = ind
+        if sub:
+            theme_map.setdefault(sub, []).append(name)
+
+    return codes, keywords, hierarchy, theme_map, company_to_industry
+
+
+COMPANY_CODES, COMPANY_KEYWORDS, INDUSTRY_HIERARCHY, THEME_MAP, COMPANY_TO_INDUSTRY = \
+    _build_company_dicts(_raw_data)
 
 COMPANY_CHAT_IDS = {}  # rooms 테이블에서 로드 (아래 Bridge 블록에서 덮어씀)
 CHAT_IDS_BY_CODE = {}  # stock_code → chat_id (종목명 변경 시 fallback용)
-
-INDUSTRY_HIERARCHY = {}
-THEME_MAP = {}
-
-for item in _raw_data:
-    if not item.get("active", True):
-        continue
-    name = item["name"]
-    ind  = item.get("industry")
-    sub  = item.get("sub_industry")
-
-    if ind:
-        if ind not in INDUSTRY_HIERARCHY:
-            INDUSTRY_HIERARCHY[ind] = {}
-        safe_sub = sub if sub else "기타"
-        if safe_sub not in INDUSTRY_HIERARCHY[ind]:
-            INDUSTRY_HIERARCHY[ind][safe_sub] = []
-        INDUSTRY_HIERARCHY[ind][safe_sub].append(name)
-
-    if sub:
-        if sub not in THEME_MAP:
-            THEME_MAP[sub] = []
-        THEME_MAP[sub].append(name)
 
 # ==========================================
 # 5. 산업별 뉴스 검색 키워드
@@ -224,16 +231,6 @@ KEYWORD_TO_COMPANIES = {
 }
 
 # ==========================================
-# 11. 전역 산업 매핑 생성
-# ==========================================
-COMPANY_TO_INDUSTRY = {}
-
-for industry, sub_sectors in INDUSTRY_HIERARCHY.items():
-    for sector, companies in sub_sectors.items():
-        for company in companies:
-            COMPANY_TO_INDUSTRY[company] = industry
-
-# ==========================================
 # 12. [신규] 런타임 종목 데이터 재로드 함수
 #     봇 재시작 없이 DB 변경사항을 반영할 때 호출
 # ==========================================
@@ -254,21 +251,8 @@ def reload_company_data():
 
     _raw_data = new_data
 
-    COMPANY_CODES = {
-        item["name"]: item["code"]
-        for item in _raw_data
-        if item.get("code") and item.get("active", True)
-    }
-
-    COMPANY_KEYWORDS = [
-        {
-            "name": item["name"],
-            "related_keywords":    [k.strip() for k in (item.get("keywords") or "").split(",") if k.strip()],
-            "additional_keywords": [k.strip() for k in (item.get("keywords") or "").split(",") if k.strip()],
-        }
-        for item in _raw_data
-        if item.get("active", True)
-    ]
+    COMPANY_CODES, COMPANY_KEYWORDS, INDUSTRY_HIERARCHY, THEME_MAP, COMPANY_TO_INDUSTRY = \
+        _build_company_dicts(_raw_data)
 
     COMPANY_CHAT_IDS = {}  # rooms 테이블에서 아래에서 덮어씀
 
@@ -279,7 +263,6 @@ def reload_company_data():
         if _rooms_chat:
             COMPANY_CHAT_IDS = _rooms_chat
             logging.info(f"✅ [Reload] 채팅방 ID {len(COMPANY_CHAT_IDS)}개 rooms 테이블에서 로드")
-        # 코드 기준 fallback 갱신
         if hasattr(_b, 'chat_ids_by_code') and _b.chat_ids_by_code:
             CHAT_IDS_BY_CODE = _b.chat_ids_by_code
             logging.info(f"✅ [Reload] 코드 기준 채팅방 {len(CHAT_IDS_BY_CODE)}개 갱신")
@@ -289,31 +272,6 @@ def reload_company_data():
             logging.info(f"✅ [Reload] 산업 채팅방 {len(INDUSTRY_CHAT_IDS)}개 rooms 테이블에서 로드")
     except Exception as _ce:
         logging.warning(f"⚠️ [Reload] rooms 채팅방 로드 실패: {_ce}")
-
-    INDUSTRY_HIERARCHY = {}
-    THEME_MAP = {}
-    for item in _raw_data:
-        if not item.get("active", True): continue
-        name = item["name"]
-        ind  = item.get("industry")
-        sub  = item.get("sub_industry")
-        if ind:
-            if ind not in INDUSTRY_HIERARCHY:
-                INDUSTRY_HIERARCHY[ind] = {}
-            safe_sub = sub if sub else "기타"
-            if safe_sub not in INDUSTRY_HIERARCHY[ind]:
-                INDUSTRY_HIERARCHY[ind][safe_sub] = []
-            INDUSTRY_HIERARCHY[ind][safe_sub].append(name)
-        if sub:
-            if sub not in THEME_MAP:
-                THEME_MAP[sub] = []
-            THEME_MAP[sub].append(name)
-
-    COMPANY_TO_INDUSTRY = {}
-    for industry, sub_sectors in INDUSTRY_HIERARCHY.items():
-        for sector, companies in sub_sectors.items():
-            for company in companies:
-                COMPANY_TO_INDUSTRY[company] = industry
 
     logging.info(f"✅ [Reload] 완료 — {len(COMPANY_CODES)}개 종목, {len(COMPANY_CHAT_IDS)}개 채팅방")
 

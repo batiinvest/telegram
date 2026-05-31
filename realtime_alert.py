@@ -35,8 +35,8 @@ ALERT_DOWN_THRESHOLD  = -5.0   # 약세 기준 (%)
 # 어드민 채팅방 (기본값 — DB에서 덮어씀)
 ADMIN_CHAT_ID = "@batiinvest"
 
-# 신뢰도 낮은 뉴스 출처 (기본값 — DB에서 덮어씀)
-LOW_TRUST_SOURCES = ['blog.naver', 'cafe.naver', 'tistory', 'brunch', 'newspim', 'fntoday', 'edaily']
+# 신뢰도 낮은 뉴스 출처 — telegram_utils.py 단일 정의에서 로드
+from telegram_utils import LOW_TRUST_SOURCES
 
 
 def _load_alert_config():

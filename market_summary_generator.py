@@ -20,6 +20,9 @@ import os
 import sys
 import json
 import logging
+from logger_config import get_logger
+log = get_logger(__name__)
+
 from datetime import datetime, timedelta, date as date_type
 from typing import Optional
 
@@ -42,8 +45,8 @@ except ImportError:
     sb = None
     logging.warning("[SummaryGen] supabase-py 미설치. pip install supabase")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("market_summary_generator")
+s %(levelname)s %(message)s")
+
 
 # ── 임계값 ────────────────────────────────────────────────────────────────────
 THR_STRONG   =  0.5

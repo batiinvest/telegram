@@ -15,6 +15,9 @@ import os
 import sys
 import time
 import logging
+from logger_config import get_logger
+log = get_logger(__name__)
+
 from datetime import date, datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
@@ -37,22 +40,10 @@ except ImportError:
     sys.exit(1)
 
 
-def _parse_date(val: str) -> Optional[str]:
-    """YYYYMMDD 문자열 → YYYY-MM-DD 변환. 빈값/오류면 None 반환"""
-    if not val or len(val) != 8 or not val.isdigit():
-        return None
-    return f"{val[:4]}-{val[4:6]}-{val[6:]}"
+from format_utils import parse_date as _parse_date   # 중복 제거 — format_utils 통합
 
 SB_URL         = os.getenv("SB_URL", "")
 SB_SERVICE_KEY = os.getenv("SB_SERVICE_KEY", "")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    force=True  # 기존 핸들러 덮어쓰기
-)
-log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
 
 
 def collect_market_one(code: str, name: str) -> Optional[dict]:
@@ -816,7 +807,6 @@ if __name__ == '__main__' and False:
     args, _ = parser.parse_known_args()
     if args.backfill:
         backfill_market(days=args.backfill)
-
 
 
 # ══════════════════════════════════════════════════════════

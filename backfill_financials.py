@@ -23,6 +23,9 @@ import os
 import sys
 import time
 import logging
+from logger_config import get_logger
+log = get_logger(__name__)
+
 import argparse
 from datetime import datetime
 from typing import Optional
@@ -55,11 +58,9 @@ from collect_financials import (
     auto_detect_quarter,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+s [%(levelname)s] %(message)s",
 )
-log = logging.getLogger(__name__)
+
 
 DART_API_KEY   = os.getenv("DART_API_KEY", "")
 SB_URL         = os.getenv("SB_URL", "")

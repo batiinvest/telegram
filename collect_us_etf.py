@@ -1,3 +1,6 @@
+
+from logger_config import get_logger
+log = get_logger(__name__)
 """
 collect_us_etf.py — 미국 산업별 ETF 수집 → us_market 테이블 저장
 
@@ -11,8 +14,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-log = logging.getLogger(__name__)
+s [%(levelname)s] %(message)s')
+
 
 try:
     import yfinance as yf

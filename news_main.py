@@ -116,10 +116,7 @@ _SPAM_RE = [re.compile(p, re.IGNORECASE) for p in SPAM_PATTERNS]
 # ══════════════════════════════════════════════════════
 #  신뢰 낮은 출처 키워드 (URL/언론사명에 포함 시 가중치 하락)
 # ══════════════════════════════════════════════════════
-LOW_TRUST_SOURCES = [
-    'blog.naver', 'cafe.naver', 'tistory', 'brunch',  # 블로그
-    'newspim', 'fntoday', 'edaily',  # 필요 시 추가/제거
-]
+from telegram_utils import LOW_TRUST_SOURCES   # 단일 정의 — telegram_utils.py
 
 # ══════════════════════════════════════════════════════
 #  실질 보도 판단 키워드

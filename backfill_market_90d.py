@@ -1,3 +1,6 @@
+
+from logger_config import get_logger
+log = get_logger(__name__)
 """
 backfill_market_90d.py
 모니터링 종목 과거 90일 시장 데이터(일별 등락률) 백필
@@ -11,7 +14,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
+s %(message)s')
 
 sys.path.insert(0, os.path.dirname(__file__))
 
