@@ -311,15 +311,19 @@ def parse_treasury_dispose(kv: dict) -> list:
 
 
 def parse_investment_decision(kv: dict) -> list:
-    """투자판단관련주요경영사항 (일반)"""
+    """투자판단관련주요경영사항 (일반 + 기술이전 포함)"""
     lines = []
     if v := _get(kv, '주요내용', '결정내용', '주요 내용', '내용'):
         lines.append(f'📋 내용: {_trunc(v)}')
-    if v := _get(kv, '거래상대방', '계약상대방', '상대방', '피투자회사'):
+    if v := _get(kv, '거래상대방', '계약상대방', '상대방', '피투자회사',
+                      '기술도입회사', '기술수여회사', '라이센시', 'Licensee'):
         lines.append(f'🏢 상대방: {v}')
-    if v := _get(kv, '금액', '거래금액', '투자금액', '취득금액'):
+    if v := _get(kv, '계약금액', '금액', '거래금액', '투자금액', '취득금액',
+                      '총계약금액', '기술이전대가', '계약규모'):
         lines.append(f'💰 금액: {v}')
-    if v := _get(kv, '결정사유', '사유', '목적'):
+    if v := _get(kv, '계약지역', '기술이전지역', '판권지역'):
+        lines.append(f'🌏 지역: {v}')
+    if v := _get(kv, '결정사유', '사유', '목적', '기술이전목적'):
         lines.append(f'📋 사유: {_trunc(v)}')
     return lines
 
@@ -370,6 +374,12 @@ def parse_clinical_trial_plan(kv: dict) -> list:
 # ══════════════════════════════════════════════
 
 _PARSER_MAP = [
+    # ── 투자판단관련주요경영사항: 세부 타입 먼저, 일반은 나중 ──────────────
+    # ※ '계약' 키워드보다 앞에 위치해야 기술이전 공시가 parse_contract로 잘못 매칭되지 않음
+    (['임상시험계획승인신청'],                       parse_clinical_trial_plan),
+    (['임상시험결과'],                              parse_clinical_trial),
+    (['투자판단관련주요경영사항'],                   parse_investment_decision),
+    # ── 공시 타입별 파서 ──────────────────────────────────────────────────
     (['계약', '수주'],                              parse_contract),
     (['유상증자'],                                  parse_rights_offering),
     (['무상증자'],                                  parse_bonus_issue),
@@ -384,9 +394,6 @@ _PARSER_MAP = [
     (['신규시설투자'],                              parse_facility_investment),
     (['주식등의대량보유'],                          parse_large_holding),
     (['자기주식처분결정'],                          parse_treasury_dispose),
-    (['임상시험계획승인신청'],                       parse_clinical_trial_plan),
-    (['임상시험결과'],                              parse_clinical_trial),
-    (['투자판단관련주요경영사항'],                   parse_investment_decision),  # 일반 (fallback)
 ]
 
 
