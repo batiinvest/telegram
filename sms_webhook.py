@@ -338,5 +338,4 @@ def start_thread(host: str = '0.0.0.0', port: int = PORT) -> threading.Thread:
 
 
 if __name__ == '__main__':
-    s %(levelname)s %(message)s')
     run_server()

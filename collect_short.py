@@ -390,8 +390,6 @@ def backfill(stock_codes: list[str], days: int = 252) -> int:
 
 if __name__ == "__main__":
     import argparse
-    s [%(levelname)s] %(message)s"
-    )
     parser = argparse.ArgumentParser(description="KRX 공매도 거래 비중 수집")
     parser.add_argument("--date", type=str, default=None,
                         help="조회일 YYYYMMDD (기본: 오늘 또는 직전 거래일)")

@@ -349,8 +349,6 @@ def run_monitored(force: bool = False) -> tuple[int, int]:
 
 
 if __name__ == "__main__":
-    s [%(levelname)s] %(message)s"
-    )
     parser = argparse.ArgumentParser(description="DART 기업정보 수집")
     parser.add_argument("--code",      nargs="+",      help="종목코드 (예: 005930 000660)")
     parser.add_argument("--monitored", action="store_true", help="모니터링 종목 전체")

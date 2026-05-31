@@ -577,7 +577,6 @@ def run_kind_ir_job(
 
 if __name__ == "__main__":
     import argparse
-    s %(levelname)s %(message)s")
     # config.py 가 basicConfig 를 WARNING 레벨로 먼저 호출하므로
     # no-op 이 되는 경우를 대비해 root 레벨을 명시적으로 재설정
     logging.getLogger().setLevel(logging.INFO)

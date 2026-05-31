@@ -16,8 +16,6 @@ from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
-s %(message)s')
-
 
 try:
     import yfinance as yf
