@@ -311,23 +311,63 @@ def parse_treasury_dispose(kv: dict) -> list:
 
 
 def parse_investment_decision(kv: dict) -> list:
-    """투자판단관련주요경영사항 (일반 + 기술이전 포함)"""
+    """투자판단관련주요경영사항 (일반 + 기술이전 포함)
+    주요내용 셀의 N) label: value 번호 항목을 구조화해서 추출.
+    """
+    import re
     lines = []
-    # 제목(세부 사항명)이 있으면 먼저 표시
+
+    # ── 제목 ──────────────────────────────────────────────────
     if v := _get(kv, '제목', '1. 제목'):
-        lines.append(f'📌 {_trunc(v, 60)}')
-    if v := _get(kv, '주요내용', '결정내용', '주요 내용', '내용', '2. 주요내용'):
-        lines.append(f'📋 {_trunc(v, 80)}')
-    if v := _get(kv, '거래상대방', '계약상대방', '상대방', '피투자회사',
-                      '기술도입회사', '기술수여회사', '라이센시', 'Licensee'):
-        lines.append(f'🏢 상대방: {v}')
-    if v := _get(kv, '계약금액', '금액', '거래금액', '투자금액', '취득금액',
-                      '총계약금액', '기술이전대가', '계약규모'):
-        lines.append(f'💰 금액: {v}')
-    if v := _get(kv, '계약지역', '기술이전지역', '판권지역'):
-        lines.append(f'🌏 지역: {v}')
-    if v := _get(kv, '이사회결의일', '결정일', '사실확인일'):
-        lines.append(f'📅 결정일: {v}')
+        lines.append(f'📌 {_trunc(v, 70)}')
+
+    # ── 주요내용 파싱 ──────────────────────────────────────────
+    raw = _get(kv, '주요내용', '2. 주요내용', '결정내용', '주요 내용', '내용')
+    if raw:
+        # 투자유의사항 면책 문구 제거 (숫자 항목 이전까지)
+        raw = re.sub(r'^[^\d]*(?=\d+\))', '', raw).strip()
+
+        # N) label: value 형식 항목 분리
+        parts = re.split(r'(?=\d+\)\s)', raw)
+        parsed: dict = {}
+        for part in parts:
+            m = re.match(r'\d+\)\s*([^:：\n]+)[：:]\s*(.+)', part.strip(), re.DOTALL)
+            if m:
+                label = re.sub(r'\s+', ' ', m.group(1)).strip()
+                value = re.sub(r'\s+', ' ', m.group(2)).strip()
+                parsed[label] = value
+
+        # 주요 필드 출력
+        _field_map = [
+            ('계약상대방',  '🏢 상대방',  60,  False),
+            ('계약금액',    '💰 금액',    80,  False),
+            ('계약지역',    '🌏 지역',    50,  False),
+            ('계약기간',    '📅 기간',    50,  False),
+            ('계약체결일',  '📋 체결일',  30,  True),
+        ]
+        for label, emoji, limit, skip_if_dup in _field_map:
+            v = next((v for k, v in parsed.items() if label in k), None)
+            if v:
+                lines.append(f'{emoji}: {_trunc(v, limit)}')
+
+        # 구조화 실패(번호 항목 없음) → 첫 80자 fallback
+        if not parsed:
+            lines.append(f'📋 {_trunc(raw, 80)}')
+
+    # ── 직접 KV 필드 fallback (구조화 파싱에서 못 잡은 경우) ──
+    if not any('상대방' in l for l in lines):
+        if v := _get(kv, '거래상대방', '계약상대방', '상대방', '피투자회사',
+                         '기술도입회사', '기술수여회사', '라이센시'):
+            lines.append(f'🏢 상대방: {v}')
+    if not any('금액' in l for l in lines):
+        if v := _get(kv, '계약금액', '금액', '거래금액', '투자금액', '취득금액', '총계약금액'):
+            lines.append(f'💰 금액: {_trunc(v, 60)}')
+
+    # ── 결정일 ────────────────────────────────────────────────
+    if not any('체결일' in l or '결정일' in l for l in lines):
+        if v := _get(kv, '이사회결의일', '결정일', '사실확인일'):
+            lines.append(f'📅 결정일: {v}')
+
     return lines
 
 
