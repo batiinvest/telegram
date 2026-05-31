@@ -247,15 +247,18 @@ class DartRoutingBot:
         return stock_api.get_company_chat_id(corp_name, stock_code)
 
     def _build_msg(self, corp_name, report_nm, rcept_no, stock_code, prefix="", detail=""):
-        emoji      = self.get_emoji(report_nm)
-        link       = f"http://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
+        import re
+        emoji       = self.get_emoji(report_nm)
+        link        = f"http://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
         target_code = COMPANY_CODES.get(corp_name, stock_code)
-        price_info = stock_api.get_stock_price(target_code)
-        stock_msg    = f"<b>{price_info}</b>\n" if price_info else ""
+        price_info  = stock_api.get_stock_price(target_code)
+        stock_msg   = f"<b>{price_info}</b>\n" if price_info else ""
         detail_block = f"\n\n{detail}" if detail else ""
+        # DART report_nm에 과도한 공백이 포함되는 경우 정규화
+        report_nm_clean = re.sub(r'\s+', ' ', report_nm).strip()
         return (
             f"{prefix}{emoji} <b>[{corp_name}]</b>\n"
-            f"{stock_msg}{report_nm}{detail_block}\n"
+            f"{stock_msg}{report_nm_clean}{detail_block}\n"
             f"🔗 <a href='{link}'>공시 원문</a> | "
             f"📈 <a href='https://finance.naver.com/item/main.nhn?code={target_code}'>네이버</a>"
         )
