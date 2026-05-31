@@ -313,8 +313,11 @@ def parse_treasury_dispose(kv: dict) -> list:
 def parse_investment_decision(kv: dict) -> list:
     """투자판단관련주요경영사항 (일반 + 기술이전 포함)"""
     lines = []
-    if v := _get(kv, '주요내용', '결정내용', '주요 내용', '내용'):
-        lines.append(f'📋 내용: {_trunc(v)}')
+    # 제목(세부 사항명)이 있으면 먼저 표시
+    if v := _get(kv, '제목', '1. 제목'):
+        lines.append(f'📌 {_trunc(v, 60)}')
+    if v := _get(kv, '주요내용', '결정내용', '주요 내용', '내용', '2. 주요내용'):
+        lines.append(f'📋 {_trunc(v, 80)}')
     if v := _get(kv, '거래상대방', '계약상대방', '상대방', '피투자회사',
                       '기술도입회사', '기술수여회사', '라이센시', 'Licensee'):
         lines.append(f'🏢 상대방: {v}')
@@ -323,8 +326,8 @@ def parse_investment_decision(kv: dict) -> list:
         lines.append(f'💰 금액: {v}')
     if v := _get(kv, '계약지역', '기술이전지역', '판권지역'):
         lines.append(f'🌏 지역: {v}')
-    if v := _get(kv, '결정사유', '사유', '목적', '기술이전목적'):
-        lines.append(f'📋 사유: {_trunc(v)}')
+    if v := _get(kv, '이사회결의일', '결정일', '사실확인일'):
+        lines.append(f'📅 결정일: {v}')
     return lines
 
 
