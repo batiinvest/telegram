@@ -703,6 +703,32 @@ def parse_trading_halt(kv: dict) -> list:
     return lines
 
 
+def parse_insider_report(kv: dict) -> list:
+    """임원ㆍ주요주주 소유상황보고서"""
+    lines = []
+
+    # 보고자 + 직책
+    reporter = _get(kv, '보고자', 'Name (Title)', 'Korean')
+    position = _get(kv, 'Position')
+    if reporter:
+        lines.append(f'👤 보고자: {reporter}' + (f' ({position})' if position else ''))
+
+    # 증감 주식수
+    if v := _get(kv, 'Increase or decrease'):
+        try:
+            n = int(v.replace(',', ''))
+            sign = '+' if n >= 0 else ''
+            lines.append(f'📊 증감: {sign}{n:,}주')
+        except (ValueError, AttributeError):
+            lines.append(f'📊 증감: {v}주')
+
+    # 발생일
+    if v := _get(kv, 'Date of occurrence of reporting obligation', 'Date of occurrence'):
+        lines.append(f'📅 발생일: {v}')
+
+    return lines
+
+
 def parse_amendment(kv: dict) -> list:
     """
     [기재정정] 공시 전용 파서 — 변경된 항목만 추출.
@@ -760,6 +786,7 @@ _PARSER_MAP = [
     (['단일판매', '공급계약체결', '수주'],   parse_contract),
     (['전환사채', '신주인수권부사채'],        parse_cb),
     (['투자판단관련주요경영사항'],           parse_mgmt_event),
+    (['임원ㆍ주요주주', '임원·주요주주'],     parse_insider_report),
     (['거래정지', '매매거래정지'],           parse_trading_halt),
     (['권리락'],                             parse_ex_rights),
     # 추후 추가: 무상증자, 전환사채, 합병, 잠정실적 등
