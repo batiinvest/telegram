@@ -456,7 +456,10 @@ def parse_rights_offering(kv: dict) -> list:
         allottees.append(f'{name} ({cnt}주)' if cnt else name)
         i += 1
     if allottees:
-        lines.append('🏢 배정대상: ' + ' / '.join(allottees))
+        if len(allottees) == 1:
+            lines.append(f'🏢 배정대상: {allottees[0]}')
+        else:
+            lines.append('🏢 배정대상:\n' + '\n'.join(f'  • {a}' for a in allottees))
 
     return lines
 
