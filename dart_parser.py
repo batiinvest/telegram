@@ -178,37 +178,67 @@ def _build_kv(html: str) -> dict:
     def _cell_text(cell) -> str:
         """셀 텍스트 추출 + 잔여 XML 엔티티 정리."""
         t = cell.get_text(' ', strip=True)
-        # BeautifulSoup이 처리 못한 잔여 엔티티 제거 (&cr; &wbr; 등)
         t = re.sub(r'&[a-zA-Z]{1,8};', ' ', t)
         return re.sub(r'\s+', ' ', t).strip()
 
-    for row in soup.find_all('tr'):
-        cells = [_cell_text(c) for c in row.find_all(['td', 'th'])]
-        cells = [c for c in cells if c]  # 빈 셀 제거
+    def _fmt_aunit(aunit_val: str) -> str:
+        """AUNITVALUE 포맷: YYYYMMDD→날짜, 순수숫자→천단위 구분."""
+        v = (aunit_val or '').strip()
+        if not v or v in ('-', '0', ''):
+            return ''
+        if re.match(r'^\d{8}$', v):          # 날짜
+            return f'{v[:4]}-{v[4:6]}-{v[6:]}'
+        if re.match(r'^-?\d{5,}$', v):       # 큰 숫자
+            try:
+                return f'{int(v):,}'
+            except ValueError:
+                pass
+        return v
 
-        n = len(cells)
-        if n == 2:
-            if cells[0] and cells[1]:
-                kv[cells[0]] = cells[1]
-        elif n == 3:
-            if cells[0] and cells[1]:
-                # 세 번째 셀이 단위(짧음)면 값에 붙이기, 아니면 별도 KV
-                if len(cells[2]) <= 6:
-                    kv[cells[0]] = (cells[1] + ' ' + cells[2]).strip()
-                else:
+    for row in soup.find_all('tr'):
+        tds = row.find_all(['td', 'th'])
+        tus = row.find_all('tu')   # DART XML 전용 값 태그
+
+        if tus:
+            # ── DART XML 방식: <TD ENG="..."> + <TU AUNITVALUE="..."> ──
+            for td in tds:
+                # ENG 속성 우선 (인코딩 무관한 영문 필드명)
+                eng   = (td.get('eng') or td.get('ENG') or '').strip()
+                label = eng if eng else _cell_text(td)
+                if not label:
+                    continue
+                # TU에서 값 추출: AUNITVALUE → 포맷, 없으면 텍스트 fallback
+                for tu in tus:
+                    av  = (tu.get('aunitvalue') or tu.get('AUNITVALUE') or '').strip()
+                    val = _fmt_aunit(av) if av else _cell_text(tu)
+                    if val and val not in ('-', '없음', 'N/A', '해당없음'):
+                        kv[label] = val
+                        break
+        else:
+            # ── 기존 방식: <TD> 전용 행 ──
+            cells = [_cell_text(c) for c in tds]
+            cells = [c for c in cells if c]
+            n = len(cells)
+            if n == 2:
+                if cells[0] and cells[1]:
                     kv[cells[0]] = cells[1]
-                    if cells[1] and cells[2]:
-                        kv[cells[1]] = cells[2]
-        elif n == 4:
-            if cells[0] and cells[1]:
-                kv[cells[0]] = cells[1]
-            if cells[2] and cells[3]:
-                kv[cells[2]] = cells[3]
-        elif n >= 5:
-            # 짝수 쌍으로 파싱
-            for i in range(0, n - 1, 2):
-                if cells[i] and cells[i + 1]:
-                    kv[cells[i]] = cells[i + 1]
+            elif n == 3:
+                if cells[0] and cells[1]:
+                    if len(cells[2]) <= 6:
+                        kv[cells[0]] = (cells[1] + ' ' + cells[2]).strip()
+                    else:
+                        kv[cells[0]] = cells[1]
+                        if cells[1] and cells[2]:
+                            kv[cells[1]] = cells[2]
+            elif n == 4:
+                if cells[0] and cells[1]:
+                    kv[cells[0]] = cells[1]
+                if cells[2] and cells[3]:
+                    kv[cells[2]] = cells[3]
+            elif n >= 5:
+                for i in range(0, n - 1, 2):
+                    if cells[i] and cells[i + 1]:
+                        kv[cells[i]] = cells[i + 1]
 
     return kv
 
