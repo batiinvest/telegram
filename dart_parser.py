@@ -566,14 +566,24 @@ def parse_combined_ci(kv: dict) -> list:
         lines.append('【유상증자】')
         lines.append(f'🔢 신주식수: {paid_count}주')
 
-    # 조달금액 전체 합산 (Facility + Operating + Debt 등)
+    # 조달금액 전체 합산 (중복 방지: 이미 집계한 값 skip)
+    _SUM_FUND_KEYS = [
+        'Facility investment',
+        'Operating capital (KRW)',
+        'Debt repayment (KRW)',
+        'Acquiring other companies (KRW)',
+        'Other purpose',
+    ]
     total_fund = 0
-    for fk in _FUND_KEYS + ['Debt repayment (KRW)', 'Other purpose (KRW)']:
+    seen_fund_vals: set = set()
+    for fk in _SUM_FUND_KEYS:
         if v := _get(kv, fk):
-            try:
-                total_fund += int(v.replace(',', ''))
-            except (ValueError, AttributeError):
-                pass
+            if v not in seen_fund_vals:
+                try:
+                    total_fund += int(v.replace(',', ''))
+                    seen_fund_vals.add(v)
+                except (ValueError, AttributeError):
+                    pass
     if total_fund:
         lines.append(f'💰 조달금액: {_fmt_amount(str(total_fund))}원')
 
