@@ -118,10 +118,18 @@ def _fetch_html(rcept_no: str) -> str | None:
             log.warning(f'[DART 파서] 본문 fetch 실패 (status {doc.status_code}): {doc_url}')
             return None
 
-        fixed   = _fix_dart_utf8(doc.content)
-        enc     = _detect_encoding(fixed, doc.headers)
+        raw = doc.content
+        # 인코딩 먼저 감지 (raw bytes 기준)
+        enc = _detect_encoding(raw, doc.headers)
+
+        # UTF-8 문서만 손상 패턴 복구 적용 (EUC-KR 문서에 적용하면 바이트 오염)
+        is_utf8 = enc.lower().replace('-', '').replace('_', '') in ('utf8',)
+        fixed = _fix_dart_utf8(raw) if is_utf8 else raw
+
+        # 최적 인코딩 선택: 한글 음절 수가 가장 많은 쪽 채택
+        candidates = [enc, 'cp949'] if enc not in ('cp949', 'euc-kr') else [enc, 'utf-8']
         best_text, best_kr = None, -1
-        for try_enc in [enc, 'euc-kr' if enc != 'euc-kr' else 'utf-8']:
+        for try_enc in candidates:
             try:
                 text     = fixed.decode(try_enc)
                 kr_count = sum(1 for c in text[:8000] if '가' <= c <= '힣')
@@ -130,6 +138,7 @@ def _fetch_html(rcept_no: str) -> str | None:
             except (UnicodeDecodeError, LookupError):
                 continue
         if best_text is not None:
+            log.debug(f'[DART 파서] 인코딩={enc}, 한글수={best_kr} ({rcept_no})')
             return best_text
         return fixed.decode('utf-8', errors='replace')
 
@@ -151,6 +160,20 @@ def _build_kv(html: str) -> dict:
     - 5셀+: 짝수 쌍으로 처리
     기재정정 공시의 경우 '정정전'/'정정후' 접두 키도 그대로 저장.
     """
+    import warnings
+    try:
+        from bs4 import XMLParsedAsHTMLWarning
+        warnings.filterwarnings('ignore', category=XMLParsedAsHTMLWarning)
+    except ImportError:
+        pass
+
+    # DART XML 엔티티 정규화 (&cr; = 줄바꿈, &nbsp; 등)
+    html = (html
+            .replace('&cr;',   ' ')
+            .replace('&CR;',   ' ')
+            .replace('&nbsp;', ' ')
+            .replace('\xa0',   ' '))
+
     soup = BeautifulSoup(html, 'html.parser')
     kv: dict = {}
 
