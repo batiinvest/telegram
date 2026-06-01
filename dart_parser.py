@@ -199,21 +199,38 @@ def _build_kv(html: str) -> dict:
         tds = row.find_all(['td', 'th'])
         tus = row.find_all('tu')   # DART XML 전용 값 태그
 
-        if tus:
-            # ── DART XML 방식: <TD ENG="..."> + <TU AUNITVALUE="..."> ──
+        tes = row.find_all('te')   # DART XML 숫자/텍스트 입력 태그
+
+        _SKIP = {'-', '없음', 'N/A', '해당없음', '해당 없음', '해당없음(√)'}
+
+        if tus or tes:
+            # ── DART XML 방식: <TD ENG="..."> + <TU AUNITVALUE="..."> / <TE ACODE="..."> ──
             for td in tds:
                 # ENG 속성 우선 (인코딩 무관한 영문 필드명)
                 eng   = (td.get('eng') or td.get('ENG') or '').strip()
                 label = eng if eng else _cell_text(td)
                 if not label:
                     continue
-                # TU에서 값 추출: AUNITVALUE → 포맷, 없으면 텍스트 fallback
+
+                # 1순위: TU (날짜·선택값, AUNITVALUE)
+                val = ''
                 for tu in tus:
                     av  = (tu.get('aunitvalue') or tu.get('AUNITVALUE') or '').strip()
                     val = _fmt_aunit(av) if av else _cell_text(tu)
-                    if val and val not in ('-', '없음', 'N/A', '해당없음'):
-                        kv[label] = val
+                    if val and val not in _SKIP:
                         break
+                    val = ''
+
+                # 2순위: TE (숫자·텍스트 입력값, 이미 포맷된 텍스트 그대로 사용)
+                if not val:
+                    for te in tes:
+                        val = _cell_text(te)
+                        if val and val not in _SKIP:
+                            break
+                        val = ''
+
+                if val:
+                    kv[label] = val
         else:
             # ── 기존 방식: <TD> 전용 행 ──
             cells = [_cell_text(c) for c in tds]
