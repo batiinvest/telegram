@@ -716,7 +716,7 @@ def parse_insider_report(kv: dict) -> list:
     # 증감 + 비율
     change_str = _get(kv, 'Increase or decrease')
     total_issued = _get(kv, 'Total number of shares issued')
-    current_str  = _get(kv, 'Total')  # 현재 총 보유수
+    current_str  = kv.get('Total')     # 현재 총 보유수 (정확한 키 매칭, substring 방지)
 
     if change_str:
         try:
