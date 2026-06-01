@@ -552,6 +552,55 @@ def parse_mgmt_event(kv: dict) -> list:
     return lines
 
 
+def parse_amendment(kv: dict) -> list:
+    """
+    [기재정정] 공시 전용 파서 — 변경된 항목만 추출.
+
+    DART 정정 공시 KV 구조:
+      정정항목: 정정전 정정후  ← 헤더
+      "N. 섹션 - 필드명": OLD  ← 변경된 필드
+      OLD: NEW                 ← 3셀 행에서 old→new 매핑으로 저장됨
+    """
+    lines = []
+
+    # ── 원공시 + 정정사유 ──────────────────────────────
+    orig_doc  = _get(kv, '1. 정정관련 공시서류')
+    orig_date = _get(kv, '2. 정정관련 공시서류제출일', '공시서류제출일')
+    if orig_doc:
+        lines.append(f'📄 {orig_doc}' + (f' ({orig_date})' if orig_date else ''))
+
+    if v := _get(kv, '3. 정정사유', '정정사유'):
+        lines.append(f'📋 사유: {_trunc(v, 80)}')
+
+    # ── 변경 항목 추출 ────────────────────────────────
+    # 정정항목 헤더 이후, "N. 섹션명 - 필드명: OLD" 패턴을 찾아
+    # kv[OLD] = NEW 로 저장된 정정후 값과 연결
+    items = list(kv.items())
+    header_idx = next((i for i, (k, _) in enumerate(items) if k == '정정항목'), None)
+
+    if header_idx is not None:
+        i = header_idx + 1
+        while i < len(items):
+            k, old_val = items[i]
+            # "N. 섹션명 - 필드명" 패턴: 정정 항목 행
+            m = re.match(r'^\d+\.\s+.+\s+-\s+(.+)$', k)
+            if not m:
+                break  # 정정 섹션 끝
+            field_name = m.group(1).strip()
+            new_val    = kv.get(old_val.strip(), '')
+            old_clean  = old_val.strip()
+            new_clean  = new_val.strip()
+            if old_clean and new_clean and old_clean != new_clean:
+                lines.append(f'🔧 {field_name}')
+                lines.append(f'   전: {_trunc(old_clean, 70)}')
+                lines.append(f'   후: {_trunc(new_clean, 70)}')
+            elif old_clean:
+                lines.append(f'🔧 {field_name}: {_trunc(old_clean, 70)}')
+            i += 2  # field→old 항목 + old→new 항목 2개씩 건너뜀
+
+    return lines
+
+
 # 공시 제목 키워드 → 카테고리 파서 매핑
 # ※ 순서 중요: 구체적인 타입을 먼저, 일반적인 타입을 나중에
 _PARSER_MAP = [
@@ -598,18 +647,21 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
 
         is_amendment = report_nm.startswith('[기재정정]')
 
+        # [기재정정]: 변경 항목만 보여주는 전용 파서 우선 사용
+        if is_amendment:
+            lines = parse_amendment(kv)
+            if lines:
+                lines.insert(0, '🔄 정정 내용')
+                return '\n'.join(lines)
+
         if parser:
             lines = parser(kv)
             if lines:
                 log.debug(f'[DART 파서] 카테고리 파서 사용 ({report_nm})')
-                if is_amendment:
-                    lines.insert(0, '🔄 정정 내용')
                 return '\n'.join(lines)
 
         # 범용 파서 fallback
         lines = parse_all_fields(kv)
-        if lines and is_amendment:
-            lines.insert(0, '🔄 정정 내용')
         if not lines:
             log.debug(f'[DART 파서] 파싱 결과 없음 ({report_nm})')
         return '\n'.join(lines)
