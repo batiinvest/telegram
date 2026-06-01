@@ -500,10 +500,53 @@ def parse_contract(kv: dict) -> list:
     return lines
 
 
+def _strip_disclaimer(text: str) -> str:
+    """※ 투자유의사항 면책 문구 제거 (주요내용 앞부분)"""
+    # '※ 투자유의사항' 또는 '※ 본 공시' 등으로 시작하는 면책 단락 제거
+    # 숫자 항목(1. / 가. 등)이나 실제 내용 전까지 제거
+    cleaned = re.sub(
+        r'^(?:※\s*투자유의사항|※\s*본\s*공시)[^※]*?(?=(?:\d+[.。]\s|\s*가[.。]\s|\s*나[.。]\s|$))',
+        '', text, flags=re.DOTALL
+    ).strip()
+    return cleaned if cleaned else text
+
+
+def parse_mgmt_event(kv: dict) -> list:
+    """투자판단관련주요경영사항 — 임상·기술이전·계약 등"""
+    lines = []
+
+    # 자회사 여부
+    subsidiary = _get(kv, '자회사인')
+    if subsidiary:
+        lines.append(f'🏢 자회사: {subsidiary}')
+
+    # 제목 (1. 제목)
+    if v := _get(kv, '1. 제목', '제목'):
+        lines.append(f'📌 {_trunc(v, 80)}')
+
+    # 주요내용 (면책 문구 제거 후 핵심만)
+    if v := _get(kv, '2. 주요내용', '주요내용', '결정내용'):
+        stripped = _strip_disclaimer(v)
+        if stripped:
+            lines.append(f'📋 {_trunc(stripped, 150)}')
+
+    # 결정일 / 사실확인일
+    if v := _get(kv, '이사회결의일', '사실확인일', '결정일'):
+        lines.append(f'📅 결정일: {v}')
+
+    # 관련공시 (이전 공시 참조)
+    if v := _get(kv, '관련공시'):
+        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+
+    return lines
+
+
 # 공시 제목 키워드 → 카테고리 파서 매핑
+# ※ 순서 중요: 구체적인 타입을 먼저, 일반적인 타입을 나중에
 _PARSER_MAP = [
     (['유상증자'],                          parse_rights_offering),
     (['단일판매', '공급계약체결', '수주'],   parse_contract),
+    (['투자판단관련주요경영사항'],           parse_mgmt_event),
     # 추후 추가: 무상증자, 전환사채, 합병, 잠정실적 등
 ]
 
