@@ -119,41 +119,26 @@ def _fetch_html(rcept_no: str) -> str | None:
             return None
 
         raw = doc.content
-
-        # ── 인코딩 결정 ──────────────────────────────────────────
-        # DART는 XML에 encoding="utf-8"을 선언하지만 실제로 MS949(CP949)로
-        # 인코딩된 문서를 보내는 경우가 있음. XML 선언만 믿으면 안 됨.
         enc = _detect_encoding(raw, doc.headers)
-        is_utf8 = enc.lower().replace('-', '').replace('_', '') in ('utf8',)
+        is_xml_utf8 = (enc.lower().replace('-', '').replace('_', '') == 'utf8'
+                       and raw[:6] in (b'<?xml ', b'<?XML '))
 
-        # utf-8 선언이면 실제로 디코딩 가능한지 검증
-        if is_utf8:
-            try:
-                raw.decode('utf-8')
-            except UnicodeDecodeError:
-                # 선언은 utf-8이지만 실제 바이트는 CP949(MS949)
-                enc     = 'cp949'
-                is_utf8 = False
-                log.debug(f'[DART 파서] utf-8 선언이지만 CP949 감지 → cp949 전환 ({rcept_no})')
+        if is_xml_utf8:
+            # DART XML 문서: "encoding=utf-8" 선언이지만 0xEC/0xED 리드 바이트가
+            # 0x3F(?)로 손상되어 있음 → _fix_dart_utf8 복구 후 errors='replace' 디코딩.
+            # CP949 시도는 오히려 한자가 섞인 잘못된 결과를 내므로 사용 안 함.
+            fixed = _fix_dart_utf8(raw)
+            log.debug(f'[DART 파서] XML/utf-8 모드 ({rcept_no})')
+            return fixed.decode('utf-8', errors='replace')
 
-        # _fix_dart_utf8은 실제 utf-8 문서에만 적용 (CP949 바이트를 오염시키지 않기 위해)
-        fixed = _fix_dart_utf8(raw) if is_utf8 else raw
-
-        # 최적 인코딩 선택: 한글 음절 수가 가장 많은 쪽 채택
-        candidates = ['utf-8', 'cp949'] if is_utf8 else ['cp949', 'euc-kr', 'utf-8']
-        best_text, best_kr = None, -1
+        # HTML 또는 non-utf8 문서: HTTP Content-Type 기준 인코딩 우선 시도
+        candidates = [enc, 'cp949', 'euc-kr']
         for try_enc in candidates:
             try:
-                text     = fixed.decode(try_enc)
-                kr_count = sum(1 for c in text[:8000] if '가' <= c <= '힣')
-                if kr_count > best_kr:
-                    best_kr, best_text = kr_count, text
+                return raw.decode(try_enc)
             except (UnicodeDecodeError, LookupError):
                 continue
-        if best_text is not None:
-            log.debug(f'[DART 파서] 최종 인코딩={enc}, 한글수={best_kr} ({rcept_no})')
-            return best_text
-        return fixed.decode('utf-8', errors='replace')
+        return raw.decode('utf-8', errors='replace')
 
     except Exception as e:
         log.warning(f'[DART 파서] HTML 요청 실패 ({rcept_no}): {e}')
