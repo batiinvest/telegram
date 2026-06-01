@@ -501,14 +501,23 @@ def parse_contract(kv: dict) -> list:
 
 
 def _strip_disclaimer(text: str) -> str:
-    """※ 투자유의사항 면책 문구 제거 (주요내용 앞부분)"""
-    # '※ 투자유의사항' 또는 '※ 본 공시' 등으로 시작하는 면책 단락 제거
-    # 숫자 항목(1. / 가. 등)이나 실제 내용 전까지 제거
-    cleaned = re.sub(
-        r'^(?:※\s*투자유의사항|※\s*본\s*공시)[^※]*?(?=(?:\d+[.。]\s|\s*가[.。]\s|\s*나[.。]\s|$))',
-        '', text, flags=re.DOTALL
-    ).strip()
-    return cleaned if cleaned else text
+    """※ 투자유의사항 면책 문구 제거 (주요내용 앞부분).
+
+    전략:
+    1. '상존합니다' 뒤에 실제 내용이 있으면 그 이후만 반환
+    2. 없으면 빈 문자열 반환 (제목으로 충분)
+    """
+    if not text.startswith('※'):
+        return text
+
+    # '상존합니다' 이후 실제 내용 추출
+    m = re.search(r'상존합니다[.。]?\s*', text)
+    if m:
+        rest = text[m.end():].strip()
+        return rest  # 빈 문자열이어도 OK (caller가 빈 경우 skip)
+
+    # '상존합니다' 없어도 ※로 시작하면 전체가 면책 → 빈 문자열
+    return ''
 
 
 def parse_mgmt_event(kv: dict) -> list:
@@ -524,10 +533,10 @@ def parse_mgmt_event(kv: dict) -> list:
     if v := _get(kv, '1. 제목', '제목'):
         lines.append(f'📌 {_trunc(v, 80)}')
 
-    # 주요내용 (면책 문구 제거 후 핵심만)
+    # 주요내용 (면책 문구 제거 후 핵심만, 내용 없으면 생략)
     if v := _get(kv, '2. 주요내용', '주요내용', '결정내용'):
-        stripped = _strip_disclaimer(v)
-        if stripped:
+        stripped = _strip_disclaimer(v).strip()
+        if stripped and len(stripped) > 5:   # 의미 있는 내용만
             lines.append(f'📋 {_trunc(stripped, 150)}')
 
     # 결정일 / 사실확인일
