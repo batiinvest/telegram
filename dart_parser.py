@@ -204,33 +204,49 @@ def _build_kv(html: str) -> dict:
         _SKIP = {'-', '없음', 'N/A', '해당없음', '해당 없음', '해당없음(√)'}
 
         if tus or tes:
-            # ── DART XML 방식: <TD ENG="..."> + <TU AUNITVALUE="..."> / <TE ACODE="..."> ──
-            for td in tds:
-                # ENG 속성 우선 (인코딩 무관한 영문 필드명)
-                eng   = (td.get('eng') or td.get('ENG') or '').strip()
-                label = eng if eng else _cell_text(td)
-                if not label:
-                    continue
+            if not tds:
+                # ── TE-only 행: TD 없는 데이터 행 (배정대상 테이블 등) ──
+                # ACODE="PART" 배정대상자, ACODE="ALL_CNT" 배정주식수 처리
+                row_acodes = {}
+                for te in tes:
+                    acode = (te.get('acode') or te.get('ACODE') or '').strip().upper()
+                    val   = _cell_text(te)
+                    if acode and val and val not in _SKIP:
+                        row_acodes[acode] = val
+                if 'PART' in row_acodes:
+                    i = 0
+                    while f'_allottee_{i}' in kv:
+                        i += 1
+                    kv[f'_allottee_{i}'] = row_acodes['PART']
+                    if 'ALL_CNT' in row_acodes:
+                        kv[f'_allot_cnt_{i}'] = row_acodes['ALL_CNT']
+            else:
+                # ── DART XML 방식: <TD ENG="..."> + <TU AUNITVALUE="..."> / <TE ACODE="..."> ──
+                for td in tds:
+                    eng   = (td.get('eng') or td.get('ENG') or '').strip()
+                    label = eng if eng else _cell_text(td)
+                    if not label:
+                        continue
 
-                # 1순위: TU (날짜·선택값, AUNITVALUE)
-                val = ''
-                for tu in tus:
-                    av  = (tu.get('aunitvalue') or tu.get('AUNITVALUE') or '').strip()
-                    val = _fmt_aunit(av) if av else _cell_text(tu)
-                    if val and val not in _SKIP:
-                        break
+                    # 1순위: TU (날짜·선택값, AUNITVALUE)
                     val = ''
-
-                # 2순위: TE (숫자·텍스트 입력값, 이미 포맷된 텍스트 그대로 사용)
-                if not val:
-                    for te in tes:
-                        val = _cell_text(te)
+                    for tu in tus:
+                        av  = (tu.get('aunitvalue') or tu.get('AUNITVALUE') or '').strip()
+                        val = _fmt_aunit(av) if av else _cell_text(tu)
                         if val and val not in _SKIP:
                             break
                         val = ''
 
-                if val:
-                    kv[label] = val
+                    # 2순위: TE (숫자·텍스트 입력값)
+                    if not val:
+                        for te in tes:
+                            val = _cell_text(te)
+                            if val and val not in _SKIP:
+                                break
+                            val = ''
+
+                    if val:
+                        kv[label] = val
         else:
             # ── 기존 방식: <TD> 전용 행 ──
             cells = [_cell_text(c) for c in tds]
@@ -430,6 +446,17 @@ def parse_rights_offering(kv: dict) -> list:
     # 이사회결의일
     if v := _get(kv, 'Board resolution date'):
         lines.append(f'📋 결의일: {v}')
+
+    # 제3자 배정대상자 (PART/ALL_CNT 행에서 수집)
+    allottees = []
+    i = 0
+    while f'_allottee_{i}' in kv:
+        name = kv[f'_allottee_{i}']
+        cnt  = kv.get(f'_allot_cnt_{i}', '')
+        allottees.append(f'{name} ({cnt}주)' if cnt else name)
+        i += 1
+    if allottees:
+        lines.append('🏢 배정대상: ' + ' / '.join(allottees))
 
     return lines
 
