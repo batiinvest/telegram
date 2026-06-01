@@ -110,12 +110,15 @@ def main():
             if not rows:
                 continue
             print(f'\n  [Table {ti}] {len(rows)}행')
-            for ri, row in enumerate(rows[:30]):
-                cells = [_re.sub(r'\s+', ' ', c.get_text(' ', strip=True))[:40]
-                         for c in row.find_all(['td', 'th'])]
-                cells = [c for c in cells if c]
-                if cells:
-                    print(f'    R{ri:02d} ({len(cells)}셀): {" | ".join(cells)}')
+            for ri, row in enumerate(rows[:40]):
+                all_cells = row.find_all(['td', 'th'])
+                if not all_cells:
+                    continue
+                cells = []
+                for c in all_cells:
+                    t = _re.sub(r'\s+', ' ', c.get_text(' ', strip=True))[:50]
+                    cells.append(t if t else '[빈셀]')
+                print(f'    R{ri:02d} ({len(cells)}셀): {" | ".join(cells)}')
         print()
 
     kv = _build_kv(html)
