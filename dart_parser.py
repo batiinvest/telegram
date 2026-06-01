@@ -552,6 +552,28 @@ def parse_mgmt_event(kv: dict) -> list:
     return lines
 
 
+def parse_ex_rights(kv: dict) -> list:
+    """권리락 — 기준가·실시일·사유 추출.
+    KV 구조: 6열 테이블이 (헤더1:헤더2, 코드:기준가, 날짜:사유) 쌍으로 저장됨."""
+    lines = []
+
+    # 기준가: 'A숫자' 형식 키(종목코드) → 기준가 값
+    for k, v in kv.items():
+        if re.match(r'^A\d+$', k) and v:
+            lines.append(f'💹 기준가: {v}원')
+            break
+
+    # 권리락 실시일 + 사유: 날짜 형식 키 → 사유 값
+    for k, v in kv.items():
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', k):
+            lines.append(f'📅 실시일: {k}')
+            if v:
+                lines.append(f'📋 사유: {v}')
+            break
+
+    return lines
+
+
 def parse_trading_halt(kv: dict) -> list:
     """주권매매거래정지"""
     lines = []
@@ -629,6 +651,7 @@ _PARSER_MAP = [
     (['단일판매', '공급계약체결', '수주'],   parse_contract),
     (['투자판단관련주요경영사항'],           parse_mgmt_event),
     (['거래정지', '매매거래정지'],           parse_trading_halt),
+    (['권리락'],                             parse_ex_rights),
     # 추후 추가: 무상증자, 전환사채, 합병, 잠정실적 등
 ]
 
