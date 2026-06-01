@@ -1,8 +1,14 @@
 """
-dart_parser.py — DART 공시 원문 구조화 파서 (방식 B)
+dart_parser.py — DART 공시 원문 구조화 파서
 
-공시 HTML에서 핵심 필드를 추출하여 텔레그램 메시지용 텍스트로 반환.
-파싱 실패 / 미지원 타입이면 빈 문자열 반환 (graceful fallback).
+공시 HTML에서 전체 필드를 추출하여 텔레그램 메시지용 텍스트로 반환.
+파싱 실패 / HTML 없으면 빈 문자열 반환 (graceful fallback).
+
+[구조]
+  1. HTML 가져오기 (_fetch_html)
+  2. KV 추출 (_build_kv) — 공시 HTML 테이블의 모든 행 파싱
+  3. 범용 파서 (parse_all_fields) — 전체 필드 정리해서 출력
+  4. 카테고리별 파서 (parse_*) — 추후 분류별로 양식 정의
 """
 
 import re
@@ -22,21 +28,80 @@ _DESKTOP_UA = (
 #  HTML 가져오기
 # ══════════════════════════════════════════════
 
+def _fix_dart_utf8(content: bytes) -> bytes:
+    """
+    DART 서버의 UTF-8 변환 버그 복구.
+    0xEC / 0xED 리드 바이트가 0x3F(?)로 손상된 3바이트 UTF-8 시퀀스를 복원.
+    """
+    buf = bytearray()
+    i   = 0
+    n   = len(content)
+    while i < n:
+        b = content[i]
+        if (b == 0x3F
+                and i + 2 < n
+                and 0x80 <= content[i+1] <= 0xBF
+                and 0x80 <= content[i+2] <= 0xBF):
+            recovered = False
+            for lead in (0xEC, 0xED):
+                cand = bytes([lead, content[i+1], content[i+2]])
+                try:
+                    ch = cand.decode('utf-8')
+                    if '가' <= ch <= '힣':
+                        buf.extend(cand)
+                        i += 3
+                        recovered = True
+                        break
+                except (UnicodeDecodeError, ValueError):
+                    pass
+            if not recovered:
+                buf.append(b)
+                i += 1
+        else:
+            buf.append(b)
+            i += 1
+    return bytes(buf)
+
+
+def _detect_encoding(content: bytes, headers: dict) -> str:
+    """
+    인코딩 감지 우선순위:
+    1. XML 선언
+    2. HTML meta charset
+    3. Content-Type 응답 헤더
+    4. 기본 euc-kr
+    """
+    if content[:6] in (b'<?xml ', b'<?XML '):
+        m = re.search(rb'encoding=["\']([^"\']+)["\']', content[:300])
+        if m:
+            return m.group(1).decode('ascii', errors='ignore').lower()
+
+    sample = content[:4096].lower()
+    if b'charset=utf-8' in sample or b'charset="utf-8"' in sample:
+        return 'utf-8'
+    if b'charset=euc-kr' in sample or b'charset="euc-kr"' in sample:
+        return 'euc-kr'
+
+    ct = headers.get('Content-Type', '')
+    if 'charset=' in ct.lower():
+        enc = ct.lower().split('charset=')[-1].strip().split(';')[0].strip().rstrip('"\'')
+        if enc:
+            return enc
+
+    return 'euc-kr'
+
+
 def _fetch_html(rcept_no: str) -> str | None:
-    """DART 공시 본문 HTML 가져오기.
-    ① dsaf001/main.do 에서 viewDoc(rcpNo, dcmNo, ...) 패턴으로 dcmNo 추출
-    ② report/viewer.do?rcpNo=...&dcmNo=... 로 실제 본문 HTML 반환 (EUC-KR 디코딩)"""
+    """DART 공시 본문 HTML 가져오기."""
     headers = {'User-Agent': _DESKTOP_UA}
     base    = 'http://dart.fss.or.kr'
     try:
-        # ① 목차 페이지에서 dcmNo 추출
         idx_url = f'{base}/dsaf001/main.do?rcpNo={rcept_no}'
         idx = _session.get(idx_url, headers=headers, timeout=8)
         if idx.status_code != 200:
             log.warning(f'[DART 파서] 목차 fetch 실패 (status {idx.status_code}): {idx_url}')
             return None
 
-        # viewDoc("rcpNo", "dcmNo", ...) 패턴 탐색
         m = re.search(r'viewDoc\("(\d+)",\s*"(\d+)"', idx.content.decode('utf-8', errors='replace'))
         if not m:
             log.debug(f'[DART 파서] viewDoc 패턴 없음 ({rcept_no})')
@@ -44,9 +109,7 @@ def _fetch_html(rcept_no: str) -> str | None:
 
         rcp_no_found = m.group(1)
         dcm_no       = m.group(2)
-        log.debug(f'[DART 파서] dcmNo={dcm_no} 추출 성공 ({rcept_no})')
 
-        # ② 본문 HTML 가져오기
         doc_url = (f'{base}/report/viewer.do'
                    f'?rcpNo={rcp_no_found}&dcmNo={dcm_no}'
                    f'&eleId=0&offset=0&length=0&dtd=HTML')
@@ -55,15 +118,20 @@ def _fetch_html(rcept_no: str) -> str | None:
             log.warning(f'[DART 파서] 본문 fetch 실패 (status {doc.status_code}): {doc_url}')
             return None
 
-        # DART 본문은 EUC-KR 인코딩
-        try:
-            return doc.content.decode('euc-kr')
-        except Exception:
+        fixed   = _fix_dart_utf8(doc.content)
+        enc     = _detect_encoding(fixed, doc.headers)
+        best_text, best_kr = None, -1
+        for try_enc in [enc, 'euc-kr' if enc != 'euc-kr' else 'utf-8']:
             try:
-                return doc.content.decode('utf-8')
-            except Exception:
-                doc.encoding = 'utf-8'
-                return doc.text
+                text     = fixed.decode(try_enc)
+                kr_count = sum(1 for c in text[:8000] if '가' <= c <= '힣')
+                if kr_count > best_kr:
+                    best_kr, best_text = kr_count, text
+            except (UnicodeDecodeError, LookupError):
+                continue
+        if best_text is not None:
+            return best_text
+        return fixed.decode('utf-8', errors='replace')
 
     except Exception as e:
         log.warning(f'[DART 파서] HTML 요청 실패 ({rcept_no}): {e}')
@@ -75,35 +143,58 @@ def _fetch_html(rcept_no: str) -> str | None:
 # ══════════════════════════════════════════════
 
 def _build_kv(html: str) -> dict:
-    """테이블 모든 행에서 key→value 매핑 추출."""
+    """
+    테이블 모든 행에서 key→value 매핑 추출.
+    - 2셀: (key, val)
+    - 3셀: (key, val, unit) — unit이 짧으면 val에 합침
+    - 4셀: (key1, val1, key2, val2)
+    - 5셀+: 짝수 쌍으로 처리
+    기재정정 공시의 경우 '정정전'/'정정후' 접두 키도 그대로 저장.
+    """
     soup = BeautifulSoup(html, 'html.parser')
     kv: dict = {}
+
     for row in soup.find_all('tr'):
         cells = [re.sub(r'\s+', ' ', c.get_text(' ', strip=True))
                  for c in row.find_all(['td', 'th'])]
-        # 2셀: (key, val)
-        if len(cells) == 2 and cells[0] and cells[1]:
-            kv[cells[0]] = cells[1]
-        # 4셀: (key1, val1, key2, val2)
-        elif len(cells) == 4:
+        cells = [c for c in cells if c.strip()]  # 빈 셀 제거
+
+        n = len(cells)
+        if n == 2:
+            if cells[0] and cells[1]:
+                kv[cells[0]] = cells[1]
+        elif n == 3:
+            if cells[0] and cells[1]:
+                # 세 번째 셀이 단위(짧음)면 값에 붙이기, 아니면 별도 KV
+                if len(cells[2]) <= 6:
+                    kv[cells[0]] = (cells[1] + ' ' + cells[2]).strip()
+                else:
+                    kv[cells[0]] = cells[1]
+                    if cells[1] and cells[2]:
+                        kv[cells[1]] = cells[2]
+        elif n == 4:
             if cells[0] and cells[1]:
                 kv[cells[0]] = cells[1]
             if cells[2] and cells[3]:
                 kv[cells[2]] = cells[3]
+        elif n >= 5:
+            # 짝수 쌍으로 파싱
+            for i in range(0, n - 1, 2):
+                if cells[i] and cells[i + 1]:
+                    kv[cells[i]] = cells[i + 1]
+
     return kv
 
 
 def _get(kv: dict, *keys: str) -> str | None:
     """키 후보들 중 첫 번째로 부분일치하는 값 반환.
-    기재정정 공시에서는 '정정후' 키를 '정정전' 키보다 우선 반환."""
+    기재정정 공시에서는 '정정후' 키를 우선 반환."""
     for key in keys:
-        # 1순위: '정정후' 포함 키 (기재정정 공시의 수정된 값)
         for k, v in kv.items():
             if key in k and '정정후' in k:
                 clean = re.sub(r'\s+', ' ', v).strip()
                 if clean and clean not in ('-', '—', '없음', 'N/A'):
                     return clean
-        # 2순위: 일반 키 ('정정전' 제외 — 기재정정이 아닌 경우엔 동일하게 동작)
         for k, v in kv.items():
             if key in k and '정정전' not in k:
                 clean = re.sub(r'\s+', ' ', v).strip()
@@ -112,348 +203,96 @@ def _get(kv: dict, *keys: str) -> str | None:
     return None
 
 
-def _trunc(text: str, limit: int = 55) -> str:
+def _trunc(text: str, limit: int = 80) -> str:
     return text[:limit] + '…' if len(text) > limit else text
 
 
 # ══════════════════════════════════════════════
-#  공시 타입별 파서
+#  범용 파서 — 전체 필드 추출
 # ══════════════════════════════════════════════
 
-def parse_contract(kv: dict) -> list:
-    """단일판매ㆍ공급계약체결 / 수주"""
-    lines = []
-    if v := _get(kv, '계약상대방', '거래상대방', '발주처', '매수인'):
-        lines.append(f'📋 계약상대: {v}')
-    if v := _get(kv, '계약금액', '공급금액', '수주금액', '거래금액'):
-        lines.append(f'💰 금액: {v}')
-    if v := _get(kv, '최근매출액대비', '매출액대비'):
-        lines.append(f'📊 매출비중: {v}')
-    if v := _get(kv, '계약기간', '공급기간', '납기일'):
-        lines.append(f'📅 기간: {v}')
-    return lines
-
-
-def parse_rights_offering(kv: dict) -> list:
-    """유상증자결정"""
-    lines = []
-    if v := _get(kv, '증자방식', '발행방법'):
-        lines.append(f'📋 방식: {v}')
-    if v := _get(kv, '신주식수', '발행주식수', '신주의수'):
-        lines.append(f'🔢 신주: {v}')
-    if v := _get(kv, '1주당 발행가액', '발행가액'):
-        lines.append(f'💵 발행가: {v}')
-    if v := _get(kv, '자금조달목적', '조달금액', '모집총액'):
-        lines.append(f'💰 조달: {v}')
-    if v := _get(kv, '납입일'):
-        lines.append(f'📅 납입일: {v}')
-    return lines
-
-
-def parse_bonus_issue(kv: dict) -> list:
-    """무상증자결정"""
-    lines = []
-    if v := _get(kv, '신주배정주식수', '신주식수', '신주의수'):
-        lines.append(f'🔢 신주: {v}')
-    if v := _get(kv, '1주당 신주배정', '1주당 배정주식수', '배정비율'):
-        lines.append(f'📋 배정비율: {v}')
-    if v := _get(kv, '신주배정기준일', '기준일'):
-        lines.append(f'📅 기준일: {v}')
-    if v := _get(kv, '신주의상장예정일', '상장예정일'):
-        lines.append(f'📅 상장예정: {v}')
-    return lines
-
-
-def parse_cb_bw(kv: dict) -> list:
-    """전환사채(CB) / 신주인수권부사채(BW)"""
-    lines = []
-    if v := _get(kv, '발행금액', '사채금액', '권면총액'):
-        lines.append(f'💰 발행금액: {v}')
-    if v := _get(kv, '전환가액', '행사가액'):
-        lines.append(f'💵 전환가액: {v}')
-    if v := _get(kv, '표면이자율', '이자율'):
-        lines.append(f'📊 이자율: {v}')
-    if v := _get(kv, '만기일'):
-        lines.append(f'📅 만기: {v}')
-    if v := _get(kv, '전환청구기간', '행사청구기간', '행사기간'):
-        lines.append(f'📅 청구기간: {v}')
-    return lines
-
-
-def parse_shareholder_change(kv: dict) -> list:
-    """최대주주변경"""
-    lines = []
-    if v := _get(kv, '변경전 최대주주', '변경전최대주주', '기존 최대주주'):
-        lines.append(f'👤 변경전: {v}')
-    if v := _get(kv, '변경후 최대주주', '변경후최대주주', '신규 최대주주'):
-        lines.append(f'👤 변경후: {v}')
-    if v := _get(kv, '변경사유', '변경이유'):
-        lines.append(f'📋 사유: {_trunc(v)}')
-    if v := _get(kv, '변경일'):
-        lines.append(f'📅 변경일: {v}')
-    return lines
-
-
-def parse_earnings(kv: dict) -> list:
-    """잠정실적"""
-    lines = []
-    if v := _get(kv, '매출액'):
-        lines.append(f'💰 매출액: {v}')
-    if v := _get(kv, '영업이익'):
-        lines.append(f'📊 영업이익: {v}')
-    if v := _get(kv, '당기순이익', '순이익'):
-        lines.append(f'📊 순이익: {v}')
-    return lines
-
-
-def parse_merger(kv: dict) -> list:
-    """합병결정"""
-    lines = []
-    if v := _get(kv, '합병방법', '합병방식'):
-        lines.append(f'📋 방식: {v}')
-    if v := _get(kv, '피합병회사', '합병대상회사', '소멸회사'):
-        lines.append(f'🏢 피합병: {v}')
-    if v := _get(kv, '합병비율'):
-        lines.append(f'📋 비율: {v}')
-    if v := _get(kv, '합병기일', '합병예정일'):
-        lines.append(f'📅 합병기일: {v}')
-    return lines
-
-
-def parse_mgmt_issue(kv: dict) -> list:
-    """관리종목지정"""
-    lines = []
-    if v := _get(kv, '지정사유', '지정내용', '조치내용'):
-        lines.append(f'⚠️ 사유: {_trunc(v)}')
-    if v := _get(kv, '지정일', '조치일'):
-        lines.append(f'📅 지정일: {v}')
-    return lines
-
-
-def parse_halt(kv: dict) -> list:
-    """매매거래정지"""
-    lines = []
-    if v := _get(kv, '거래정지사유', '정지사유', '조치내용', '내용'):
-        lines.append(f'⚠️ 사유: {_trunc(v)}')
-    if v := _get(kv, '정지일', '시행일', '조치일'):
-        lines.append(f'📅 정지일: {v}')
-    return lines
-
-
-def parse_dividend(kv: dict) -> list:
-    """현금ㆍ현물배당결정"""
-    lines = []
-    if v := _get(kv, '주당배당금', '1주당 배당금', '배당금액'):
-        lines.append(f'💰 주당배당금: {v}')
-    if v := _get(kv, '시가배당률', '배당수익률'):
-        lines.append(f'📊 시가배당률: {v}')
-    if v := _get(kv, '배당기준일', '주주확정일'):
-        lines.append(f'📅 배당기준일: {v}')
-    if v := _get(kv, '배당지급예정일', '지급예정일', '배당금지급일'):
-        lines.append(f'📅 지급예정일: {v}')
-    return lines
-
-
-def parse_acquisition(kv: dict) -> list:
-    """타법인주식및출자증권취득결정"""
-    lines = []
-    if v := _get(kv, '취득대상회사', '피투자회사', '취득법인'):
-        lines.append(f'🏢 취득대상: {v}')
-    if v := _get(kv, '취득금액', '취득예정금액'):
-        lines.append(f'💰 취득금액: {v}')
-    if v := _get(kv, '취득후지분율', '취득 후 지분율', '지분율'):
-        lines.append(f'📊 취득 후 지분: {v}')
-    if v := _get(kv, '취득목적', '취득사유', '목적'):
-        lines.append(f'📋 목적: {_trunc(v)}')
-    return lines
-
-
-def parse_facility_investment(kv: dict) -> list:
-    """신규시설투자등"""
-    lines = []
-    if v := _get(kv, '투자내용', '시설내용', '투자목적물'):
-        lines.append(f'🏭 투자내용: {_trunc(v)}')
-    if v := _get(kv, '투자금액', '총투자금액'):
-        lines.append(f'💰 투자금액: {v}')
-    if v := _get(kv, '투자기간', '사업기간', '준공예정'):
-        lines.append(f'📅 투자기간: {v}')
-    if v := _get(kv, '투자목적', '투자사유', '목적'):
-        lines.append(f'📋 목적: {_trunc(v)}')
-    return lines
-
-
-def parse_large_holding(kv: dict) -> list:
-    """주식등의대량보유상황보고서"""
-    lines = []
-    if v := _get(kv, '보고자', '대량보유자'):
-        lines.append(f'👤 보고자: {v}')
-    if v := _get(kv, '보유주식수', '보유수량'):
-        lines.append(f'🔢 보유주식수: {v}')
-    if v := _get(kv, '보유비율', '지분율'):
-        lines.append(f'📊 보유비율: {v}')
-    if v := _get(kv, '변동사유', '보유목적'):
-        lines.append(f'📋 사유: {_trunc(v)}')
-    return lines
-
-
-def parse_treasury_dispose(kv: dict) -> list:
-    """자기주식처분결정"""
-    lines = []
-    if v := _get(kv, '처분주식수', '처분예정주식수'):
-        lines.append(f'🔢 처분주식수: {v}')
-    if v := _get(kv, '처분금액', '처분예정금액', '1주당처분가액'):
-        lines.append(f'💰 처분가액: {v}')
-    if v := _get(kv, '처분기간', '처분예정기간'):
-        lines.append(f'📅 처분기간: {v}')
-    if v := _get(kv, '처분목적', '처분사유'):
-        lines.append(f'📋 목적: {_trunc(v)}')
-    return lines
-
-
-def parse_investment_decision(kv: dict) -> list:
-    """투자판단관련주요경영사항 (일반 + 기술이전 포함)
-    주요내용 셀의 N) label: value 번호 항목을 구조화해서 추출.
-    """
-    import re
-    lines = []
-
-    # ── 제목 ──────────────────────────────────────────────────
-    if v := _get(kv, '제목', '1. 제목'):
-        lines.append(f'📌 {_trunc(v, 70)}')
-
-    # ── 주요내용 파싱 ──────────────────────────────────────────
-    raw = _get(kv, '주요내용', '2. 주요내용', '결정내용', '주요 내용', '내용')
-    if raw:
-        # 투자유의사항 면책 문구 제거 (첫 번째 숫자 항목 이전까지)
-        raw = re.sub(r'^[^\d]*(?=\d+[.)]\s)', '', raw).strip()
-
-        # N) 또는 N. 형식 항목 분리
-        parts = re.split(r'(?=\d+[.)]\s)', raw)
-        parsed: dict = {}
-        for part in parts:
-            m = re.match(r'\d+[.)]\s*([^:：\n]+)[：:]\s*(.+)', part.strip(), re.DOTALL)
-            if m:
-                label = re.sub(r'\s+', ' ', m.group(1)).strip()
-                value = re.sub(r'\s+', ' ', m.group(2)).strip()
-                parsed[label] = value
-
-        # 주요 필드 출력 (공백 포함 키도 매칭)
-        def _pick(*keys):
-            for key in keys:
-                v = next((v for k, v in parsed.items() if key in k), None)
-                if v: return v
-            return None
-
-        if v := _pick('계약상대방'):
-            lines.append(f'🏢 상대방: {_trunc(v, 60)}')
-
-        # 계약금액: 직접 키 또는 선급금+마일스톤 합산 표현
-        if v := _pick('계약금액'):
-            lines.append(f'💰 금액: {_trunc(v, 80)}')
-        else:
-            parts_amt = []
-            if v := _pick('선급금', 'Upfront', 'upfront'):
-                parts_amt.append(f'선급금 {_trunc(v, 40)}')
-            if v := _pick('마일스톤', 'Milestone', 'milestone'):
-                parts_amt.append(f'마일스톤 {_trunc(v, 40)}')
-            if parts_amt:
-                lines.append(f'💰 금액: ' + ' / '.join(parts_amt))
-
-        if v := _pick('계약지역', '계약 지역', '기술이전지역', '판권지역'):
-            lines.append(f'🌏 지역: {_trunc(v, 50)}')
-        if v := _pick('계약기간', '계약 기간'):
-            lines.append(f'📅 기간: {_trunc(v, 50)}')
-        if v := _pick('계약체결일', '계약 체결일'):
-            lines.append(f'📋 체결일: {_trunc(v, 30)}')
-
-        # 구조화 실패(번호 항목 없음) → 첫 80자 fallback
-        if not parsed:
-            lines.append(f'📋 {_trunc(raw, 80)}')
-
-    # ── 직접 KV 필드 fallback (구조화 파싱에서 못 잡은 경우) ──
-    if not any('상대방' in l for l in lines):
-        if v := _get(kv, '거래상대방', '계약상대방', '상대방', '피투자회사',
-                         '기술도입회사', '기술수여회사', '라이센시'):
-            lines.append(f'🏢 상대방: {v}')
-    if not any('금액' in l for l in lines):
-        if v := _get(kv, '계약금액', '금액', '거래금액', '투자금액', '취득금액', '총계약금액'):
-            lines.append(f'💰 금액: {_trunc(v, 60)}')
-
-    # ── 결정일 ────────────────────────────────────────────────
-    if not any('체결일' in l or '결정일' in l for l in lines):
-        if v := _get(kv, '이사회결의일', '결정일', '사실확인일'):
-            lines.append(f'📅 결정일: {v}')
-
-    return lines
-
-
-def parse_clinical_trial(kv: dict) -> list:
-    """투자판단관련주요경영사항(임상시험결과)"""
-    lines = []
-    if v := _get(kv, '시험약명', '후보물질', '시험물질', '의약품명', '물질명'):
-        lines.append(f'🔬 후보물질: {v}')
-    if v := _get(kv, '임상단계', '시험단계', '개발단계'):
-        lines.append(f'📊 임상단계: {v}')
-    if v := _get(kv, '대상질환', '적응증', '목표질환', '질환'):
-        lines.append(f'💊 대상질환: {v}')
-    if v := _get(kv, '임상결과', '시험결과', '결과'):
-        lines.append(f'📋 결과: {_trunc(v)}')
-    # 결과 필드 없을 때 fallback
-    if not lines or len(lines) < 2:
-        if v := _get(kv, '주요내용', '주요 내용', '내용'):
-            lines.append(f'📋 내용: {_trunc(v)}')
-    return lines
-
-
-def parse_clinical_trial_plan(kv: dict) -> list:
-    """투자판단관련주요경영사항(임상시험계획승인신청등결정)
-    IND 신청 / 임상시험 계획 승인 관련 공시.
-    """
-    lines = []
-    if v := _get(kv, '시험약명', '후보물질', '시험물질', '의약품명', '물질명'):
-        lines.append(f'🔬 후보물질: {v}')
-    if v := _get(kv, '임상단계', '시험단계', '개발단계'):
-        lines.append(f'📊 임상단계: {v}')
-    if v := _get(kv, '대상질환', '적응증', '목표질환', '질환'):
-        lines.append(f'💊 대상질환: {v}')
-    if v := _get(kv, '신청기관', '승인기관', '규제기관', '제출기관'):
-        lines.append(f'🏛️ 신청기관: {v}')
-    if v := _get(kv, '신청일', '결정일', '승인일', '제출일'):
-        lines.append(f'📅 신청일: {v}')
-    # 주요내용 fallback
-    if not lines or len(lines) < 2:
-        if v := _get(kv, '주요내용', '주요 내용', '내용'):
-            lines.append(f'📋 내용: {_trunc(v)}')
-    return lines
-
-
-# ══════════════════════════════════════════════
-#  공시 타입 → 파서 매핑
-#  ※ 구체적인 타입을 먼저, 일반 타입을 나중에 등록
-# ══════════════════════════════════════════════
-
-_PARSER_MAP = [
-    # ── 투자판단관련주요경영사항: 세부 타입 먼저, 일반은 나중 ──────────────
-    # ※ '계약' 키워드보다 앞에 위치해야 기술이전 공시가 parse_contract로 잘못 매칭되지 않음
-    (['임상시험계획승인신청'],                       parse_clinical_trial_plan),
-    (['임상시험결과'],                              parse_clinical_trial),
-    (['투자판단관련주요경영사항'],                   parse_investment_decision),
-    # ── 공시 타입별 파서 ──────────────────────────────────────────────────
-    (['계약', '수주'],                              parse_contract),
-    (['유상증자'],                                  parse_rights_offering),
-    (['무상증자'],                                  parse_bonus_issue),
-    (['전환사채', '신주인수권부사채'],               parse_cb_bw),
-    (['최대주주변경'],                              parse_shareholder_change),
-    (['잠정실적', '매출액또는손익구조'],             parse_earnings),
-    (['합병'],                                      parse_merger),
-    (['관리종목'],                                  parse_mgmt_issue),
-    (['거래정지', '매매거래정지'],                   parse_halt),
-    (['현금', '현물배당'],                          parse_dividend),
-    (['타법인주식', '출자증권취득'],                 parse_acquisition),
-    (['신규시설투자'],                              parse_facility_investment),
-    (['주식등의대량보유'],                          parse_large_holding),
-    (['자기주식처분결정'],                          parse_treasury_dispose),
+# 출력 제외할 키 패턴 (서명·연락처 등 노이즈)
+_SKIP_KEY_PATTERNS = [
+    '날인', '서명', '인(印)', '확인자', '위임장',
+    '본점소재지', '법인등록번호', '사업자등록번호',
+    '전화번호', '팩스번호', '홈페이지', 'E-mail',
+    '작성책임자', '공시담당자', '담당부서', '대표이사',
+    '주민등록번호', '주소',
 ]
+
+# 출력 제외할 값
+_SKIP_VALUES = frozenset([
+    '-', '—', '없음', 'N/A', '해당없음', '해당 없음', '없 음',
+    'n/a', '해당사항없음', '해당사항 없음', '미정', '추후 결정', '추후결정',
+    '□', '■', '○', '●', '해당없음(√)', '√', '', ' ',
+])
+
+# 값 최대 길이 (Telegram 메시지 길이 고려)
+_MAX_VAL_LEN = 100
+
+# 텔레그램 메시지 전체 최대 필드 수
+_MAX_FIELDS = 20
+
+
+def parse_all_fields(kv: dict) -> list:
+    """
+    범용 파서: DART HTML 테이블에서 추출한 전체 KV를 정리해 반환.
+
+    - 노이즈 키/값 제거 (서명, 연락처, 빈값 등)
+    - 중복 값 제거
+    - 너무 긴 값 truncate
+    - 최대 _MAX_FIELDS 개 출력 (Telegram 길이 제한 고려)
+    """
+    lines = []
+    seen_vals: set = set()
+
+    for k, v in kv.items():
+        k = re.sub(r'\s+', ' ', k).strip()
+        v = re.sub(r'\s+', ' ', v).strip()
+
+        # 빈 값 / 의미없는 값 제외
+        if not v or v in _SKIP_VALUES:
+            continue
+        # 키가 너무 짧거나 없으면 제외
+        if not k or len(k) < 2:
+            continue
+        # 노이즈 키 제외
+        if any(p in k for p in _SKIP_KEY_PATTERNS):
+            continue
+        # 키와 값이 동일한 경우 (헤더가 KV로 잘못 추출된 경우)
+        if k == v:
+            continue
+        # 중복 값 제외 (짧은 값이 여러 키로 반복되는 경우)
+        v_norm = v.lower().strip()
+        if v_norm in seen_vals and len(v) < 15:
+            continue
+        seen_vals.add(v_norm)
+
+        # 너무 긴 값 truncate
+        if len(v) > _MAX_VAL_LEN:
+            v = v[:_MAX_VAL_LEN] + '…'
+
+        lines.append(f'{k}: {v}')
+
+        if len(lines) >= _MAX_FIELDS:
+            break
+
+    return lines
+
+
+# ══════════════════════════════════════════════
+#  카테고리별 파서 (추후 분류별로 양식 정의 예정)
+# ══════════════════════════════════════════════
+#
+#  현재는 parse_all_fields 가 기본으로 동작.
+#  아래 파서들은 향후 카테고리별 포맷 정의 시 활성화.
+#
+# _CATEGORY_PARSERS = {
+#     '유상증자':  parse_rights_offering,
+#     '무상증자':  parse_bonus_issue,
+#     '전환사채':  parse_cb_bw,
+#     ...
+# }
 
 
 # ══════════════════════════════════════════════
@@ -463,37 +302,31 @@ _PARSER_MAP = [
 def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
     """
     공시 원문을 파싱하여 핵심 필드 텍스트 반환.
-    파싱 실패 또는 미지원 타입이면 빈 문자열 반환 (graceful fallback).
-    ※ [기재정정] 공시: _get()이 '정정후' 키를 우선 반환하므로 자동 처리됨.
+    파싱 실패 또는 필드 없으면 빈 문자열 반환 (graceful fallback).
+
+    현재: 범용 파서(parse_all_fields)로 전체 필드 추출.
+    추후: 카테고리별 파서로 포맷 고도화 예정.
     """
-    # [기재정정] 등 접두어 제거 후 파서 선택 (예: "[기재정정]단일판매·공급계약체결" → 계약 파서)
-    clean_nm = re.sub(r'^\[[^\]]+\]', '', report_nm).strip()
-    is_amendment = report_nm.startswith('[기재정정]')
-
-    # 파서 선택
-    parser = None
-    for keywords, fn in _PARSER_MAP:
-        if any(k in clean_nm for k in keywords):
-            parser = fn
-            break
-    if parser is None:
-        return ''
-
-    # HTML 가져오기
     html = _fetch_html(rcept_no)
     if not html:
         log.debug(f'[DART 파서] HTML 없음 ({rcept_no})')
         return ''
 
-    # 파싱
     try:
         kv = _build_kv(html)
+        if not kv:
+            log.debug(f'[DART 파서] KV 없음 ({report_nm})')
+            return ''
+
+        is_amendment = report_nm.startswith('[기재정정]')
         if is_amendment:
-            log.debug(f'[DART 파서] 기재정정 kv 키 목록: {list(kv.keys())[:10]}')
-        lines = parser(kv)
+            log.debug(f'[DART 파서] 기재정정 kv 키: {list(kv.keys())[:10]}')
+
+        lines = parse_all_fields(kv)
         if not lines:
             log.debug(f'[DART 파서] 파싱 결과 없음 ({report_nm}) — kv 키: {list(kv.keys())[:5]}')
         return '\n'.join(lines)
+
     except Exception as e:
         log.warning(f'[DART 파서] 파싱 실패 ({report_nm}): {e}')
         return ''
