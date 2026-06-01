@@ -464,9 +464,46 @@ def parse_rights_offering(kv: dict) -> list:
     return lines
 
 
+def parse_contract(kv: dict) -> list:
+    """단일판매ㆍ공급계약체결 / 수주"""
+    lines = []
+
+    # 계약명
+    if v := _get(kv, '체결계약명', '계약명'):
+        lines.append(f'📋 계약명: {_trunc(v, 50)}')
+
+    # 계약상대 + 지역
+    party  = _get(kv, '계약상대', '거래상대방', '발주처', '매수인')
+    region = _get(kv, '판매ㆍ공급지역', '공급지역', '수주지역', '납품지역')
+    if party:
+        lines.append(f'🏢 상대방: {party}' + (f' ({region})' if region else ''))
+
+    # 계약금액 + 매출비중
+    amount = _get(kv, '계약금액(원)', '계약금액', '공급금액', '수주금액', '거래금액')
+    ratio  = _get(kv, '매출액대비(%)', '최근매출액대비', '매출액 대비')
+    if amount:
+        ratio_str = f' (매출대비 {ratio}%)' if ratio else ''
+        lines.append(f'💰 계약금액: {_fmt_amount(amount)}원{ratio_str}')
+
+    # 계약기간
+    start = _get(kv, '시작일')
+    end   = _get(kv, '종료일')
+    if start and end:
+        lines.append(f'📅 계약기간: {start} ~ {end}')
+    elif start:
+        lines.append(f'📅 시작일: {start}')
+
+    # 대금지급 조건
+    if v := _get(kv, '대금지급 조건', '지급조건', '대금지급'):
+        lines.append(f'💳 지급조건: {_trunc(v, 50)}')
+
+    return lines
+
+
 # 공시 제목 키워드 → 카테고리 파서 매핑
 _PARSER_MAP = [
-    (['유상증자'],    parse_rights_offering),
+    (['유상증자'],                          parse_rights_offering),
+    (['단일판매', '공급계약체결', '수주'],   parse_contract),
     # 추후 추가: 무상증자, 전환사채, 합병, 잠정실적 등
 ]
 
