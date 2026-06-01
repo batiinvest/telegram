@@ -552,6 +552,61 @@ def parse_mgmt_event(kv: dict) -> list:
     return lines
 
 
+def parse_combined_ci(kv: dict) -> list:
+    """유무상증자결정 — 유상증자 + 무상증자 합산 파서.
+    섹션 번호(ENG 키의 앞 숫자)로 유상/무상 구분:
+      유상증자: 12. Payment date, 16. Scheduled listing ...
+      무상증자: 5. Number per share (배정비율), 4. Record date (기준일), 8. Scheduled listing ...
+    """
+    lines = []
+
+    # ── 유상증자 ───────────────────────────────────────
+    paid_count = _get(kv, '1. Class and number of new shares')
+    if paid_count:
+        lines.append('【유상증자】')
+        lines.append(f'🔢 신주식수: {paid_count}주')
+
+    # 조달금액 전체 합산 (Facility + Operating + Debt 등)
+    total_fund = 0
+    for fk in _FUND_KEYS + ['Debt repayment (KRW)', 'Other purpose (KRW)']:
+        if v := _get(kv, fk):
+            try:
+                total_fund += int(v.replace(',', ''))
+            except (ValueError, AttributeError):
+                pass
+    if total_fund:
+        lines.append(f'💰 조달금액: {_fmt_amount(str(total_fund))}원')
+
+    if v := _get(kv, '5. Capital increase method'):
+        lines.append(f'📋 방식: {_CI_METHOD.get(v, v)}')
+
+    if v := _get(kv, '12. Payment date'):
+        lines.append(f'📅 납입일: {v}')
+
+    if v := _get(kv, '16. Scheduled listing date'):
+        lines.append(f'📅 상장예정: {v}')
+
+    # ── 무상증자 ───────────────────────────────────────
+    bonus_ratio   = _get(kv, '5. Number of new stocks allocated per share')
+    bonus_record  = _get(kv, '4. Record date for allotment')
+    bonus_listing = _get(kv, '8. Scheduled listing date of new shares')
+
+    if bonus_ratio:
+        lines.append('【무상증자】')
+        try:
+            ratio = float(bonus_ratio)
+            pct = int(ratio * 100)
+            lines.append(f'📊 1주당 {bonus_ratio}주 배정 (100주→{pct}주)')
+        except (ValueError, TypeError):
+            lines.append(f'📊 1주당 배정: {bonus_ratio}주')
+        if bonus_record:
+            lines.append(f'📅 기준일: {bonus_record}')
+        if bonus_listing:
+            lines.append(f'📅 상장예정: {bonus_listing}')
+
+    return lines
+
+
 def parse_ex_rights(kv: dict) -> list:
     """권리락 — 기준가·실시일·사유 추출.
     KV 구조: 6열 테이블이 (헤더1:헤더2, 코드:기준가, 날짜:사유) 쌍으로 저장됨."""
@@ -647,6 +702,7 @@ def parse_amendment(kv: dict) -> list:
 # 공시 제목 키워드 → 카테고리 파서 매핑
 # ※ 순서 중요: 구체적인 타입을 먼저, 일반적인 타입을 나중에
 _PARSER_MAP = [
+    (['유무상증자'],                         parse_combined_ci),
     (['유상증자'],                          parse_rights_offering),
     (['단일판매', '공급계약체결', '수주'],   parse_contract),
     (['투자판단관련주요경영사항'],           parse_mgmt_event),
