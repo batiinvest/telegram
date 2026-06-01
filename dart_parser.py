@@ -514,6 +514,8 @@ def _strip_disclaimer(text: str) -> str:
     m = re.search(r'상존합니다[.。]?\s*', text)
     if m:
         rest = text[m.end():].strip()
+        # 2차 면책문구 제거: '투자자는 수시공시... 바랍니다.' 패턴
+        rest = re.sub(r'^투자자는\s+수시공시.*?바랍니다[.。]?\s*', '', rest, flags=re.DOTALL).strip()
         return rest  # 빈 문자열이어도 OK (caller가 빈 경우 skip)
 
     # '상존합니다' 없어도 ※로 시작하면 전체가 면책 → 빈 문자열
