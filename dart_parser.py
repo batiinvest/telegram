@@ -355,18 +355,91 @@ def parse_all_fields(kv: dict) -> list:
 
 
 # ══════════════════════════════════════════════
-#  카테고리별 파서 (추후 분류별로 양식 정의 예정)
+#  카테고리별 파서
+#  ENG 키(ASCII, 인코딩 무관) + AUNITVALUE/TE 값으로 추출
 # ══════════════════════════════════════════════
-#
-#  현재는 parse_all_fields 가 기본으로 동작.
-#  아래 파서들은 향후 카테고리별 포맷 정의 시 활성화.
-#
-# _CATEGORY_PARSERS = {
-#     '유상증자':  parse_rights_offering,
-#     '무상증자':  parse_bonus_issue,
-#     '전환사채':  parse_cb_bw,
-#     ...
-# }
+
+def _fmt_amount(v: str) -> str:
+    """금액 포맷: '110,758,162,833' → '1,107억'"""
+    try:
+        n = int(v.replace(',', '').replace(' ', ''))
+        if n >= 1_000_000_000_000:
+            cho = n // 1_000_000_000_000
+            eok = (n % 1_000_000_000_000) // 100_000_000
+            return f'{cho}조 {eok:,}억' if eok else f'{cho}조'
+        if n >= 100_000_000:
+            eok = n // 100_000_000
+            rem = (n % 100_000_000) // 10_000_000
+            return f'{eok:,}.{rem}억' if rem else f'{eok:,}억'
+        if n >= 10_000:
+            return f'{n:,}'
+        return str(n)
+    except (ValueError, AttributeError):
+        return v
+
+
+_CI_METHOD = {
+    '1': '주주배정', '2': '주주우선공모', '3': '일반공모',
+    '4': '직원배정', '5': '일반공모+주주배정', '6': '제3자배정', '7': '기타',
+}
+
+# 자금용도별 ENG 키 목록 (유상증자 조달금액)
+_FUND_KEYS = [
+    'Facility investment', 'Operating capital (KRW)',
+    'Acquiring other companies', 'Debt repayment',
+    'Operating capital', 'Other',
+]
+
+
+def parse_rights_offering(kv: dict) -> list:
+    """유상증자결정 — ENG 키 기반 핵심 필드 추출"""
+    lines = []
+
+    # 신주식수
+    if v := _get(kv, '1. Class and number of new shares'):
+        lines.append(f'🔢 신주식수: {v}주')
+
+    # 발행가액 + 할인율
+    price    = _get(kv, '6. Issuing price of new shares', 'Issuing price')
+    discount = _get(kv, '7-2. Discount or premium ratio', 'Discount or premium ratio (%)')
+    if price:
+        disc_str = f' (할인율 {discount}%)' if discount else ''
+        lines.append(f'💵 발행가액: {price}원{disc_str}')
+
+    # 기준주가
+    if v := _get(kv, '7. Base stock price', 'Base stock price: Lower'):
+        lines.append(f'📊 기준주가: {v}원')
+
+    # 조달금액 (목적별)
+    for fk in _FUND_KEYS:
+        if v := _get(kv, fk):
+            lines.append(f'💰 조달금액: {_fmt_amount(v)}원')
+            break
+
+    # 납입일
+    if v := _get(kv, 'Payment date'):
+        lines.append(f'📅 납입일: {v}')
+
+    # 상장예정일
+    if v := _get(kv, 'Scheduled listing date'):
+        lines.append(f'📅 상장예정: {v}')
+
+    # 증자방식
+    if v := _get(kv, '5. Capital increase method'):
+        lines.append(f'📋 방식: {_CI_METHOD.get(v, v)}')
+
+    # 이사회결의일
+    if v := _get(kv, 'Board resolution date'):
+        lines.append(f'📋 결의일: {v}')
+
+    return lines
+
+
+# 공시 제목 키워드 → 카테고리 파서 매핑
+_PARSER_MAP = [
+    (['유상증자'],    parse_rights_offering),
+    # 추후 추가: 무상증자, 전환사채, 합병, 잠정실적 등
+]
 
 
 # ══════════════════════════════════════════════
@@ -392,13 +465,27 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
             log.debug(f'[DART 파서] KV 없음 ({report_nm})')
             return ''
 
-        is_amendment = report_nm.startswith('[기재정정]')
-        if is_amendment:
+        if report_nm.startswith('[기재정정]'):
             log.debug(f'[DART 파서] 기재정정 kv 키: {list(kv.keys())[:10]}')
 
+        # 카테고리별 파서 시도 ([기재정정] 등 접두어 제거)
+        clean_nm = re.sub(r'^\[[^\]]+\]', '', report_nm).strip()
+        parser = None
+        for keywords, fn in _PARSER_MAP:
+            if any(k in clean_nm for k in keywords):
+                parser = fn
+                break
+
+        if parser:
+            lines = parser(kv)
+            if lines:
+                log.debug(f'[DART 파서] 카테고리 파서 사용 ({report_nm})')
+                return '\n'.join(lines)
+
+        # 범용 파서 fallback
         lines = parse_all_fields(kv)
         if not lines:
-            log.debug(f'[DART 파서] 파싱 결과 없음 ({report_nm}) — kv 키: {list(kv.keys())[:5]}')
+            log.debug(f'[DART 파서] 파싱 결과 없음 ({report_nm})')
         return '\n'.join(lines)
 
     except Exception as e:
