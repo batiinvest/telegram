@@ -369,8 +369,7 @@ def _fmt_amount(v: str) -> str:
             return f'{cho}조 {eok:,}억' if eok else f'{cho}조'
         if n >= 100_000_000:
             eok = n // 100_000_000
-            rem = (n % 100_000_000) // 10_000_000
-            return f'{eok:,}.{rem}억' if rem else f'{eok:,}억'
+            return f'{eok:,}억'
         if n >= 10_000:
             return f'{n:,}'
         return str(n)
