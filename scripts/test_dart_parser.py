@@ -39,6 +39,8 @@ def main():
     parser.add_argument('rcept_no', help='공시 접수번호 (예: 20260601002040)')
     parser.add_argument('--raw',       action='store_true', help='KV 원본 전체 출력')
     parser.add_argument('--enc-debug', action='store_true', help='인코딩 진단 출력')
+    parser.add_argument('--save-html', action='store_true', help='HTML을 파일로 저장')
+    parser.add_argument('--tables',    action='store_true', help='테이블 행 구조 출력 (셀 수 + 내용)')
     parser.add_argument('--report-nm', default='', help='공시명 (선택)')
     args = parser.parse_args()
 
@@ -83,6 +85,38 @@ def main():
         return
 
     print(f'✅ HTML 길이: {len(html):,} chars')
+
+    if args.save_html:
+        fname = f'/tmp/dart_{args.rcept_no}.html'
+        with open(fname, 'w', encoding='utf-8', errors='replace') as f:
+            f.write(html)
+        print(f'✅ HTML 저장: {fname}\n')
+
+    if args.tables:
+        import warnings
+        try:
+            from bs4 import XMLParsedAsHTMLWarning
+            warnings.filterwarnings('ignore', category=XMLParsedAsHTMLWarning)
+        except ImportError:
+            pass
+        from bs4 import BeautifulSoup
+        import re as _re
+        _html = html.replace('&cr;', ' ').replace('&nbsp;', ' ')
+        soup = BeautifulSoup(_html, 'html.parser')
+
+        print('── 테이블 행 구조 ─────────────────────────')
+        for ti, table in enumerate(soup.find_all('table')):
+            rows = table.find_all('tr')
+            if not rows:
+                continue
+            print(f'\n  [Table {ti}] {len(rows)}행')
+            for ri, row in enumerate(rows[:30]):
+                cells = [_re.sub(r'\s+', ' ', c.get_text(' ', strip=True))[:40]
+                         for c in row.find_all(['td', 'th'])]
+                cells = [c for c in cells if c]
+                if cells:
+                    print(f'    R{ri:02d} ({len(cells)}셀): {" | ".join(cells)}')
+        print()
 
     kv = _build_kv(html)
     print(f'✅ KV 추출: {len(kv)}개 필드\n')
