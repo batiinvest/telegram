@@ -596,14 +596,20 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
                 parser = fn
                 break
 
+        is_amendment = report_nm.startswith('[기재정정]')
+
         if parser:
             lines = parser(kv)
             if lines:
                 log.debug(f'[DART 파서] 카테고리 파서 사용 ({report_nm})')
+                if is_amendment:
+                    lines.insert(0, '🔄 정정 내용')
                 return '\n'.join(lines)
 
         # 범용 파서 fallback
         lines = parse_all_fields(kv)
+        if lines and is_amendment:
+            lines.insert(0, '🔄 정정 내용')
         if not lines:
             log.debug(f'[DART 파서] 파싱 결과 없음 ({report_nm})')
         return '\n'.join(lines)
