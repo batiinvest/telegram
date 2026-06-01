@@ -729,7 +729,8 @@ def parse_insider_report(kv: dict) -> list:
                     t = int(total_issued.replace(',', ''))
                     if t > 0:
                         ratio = abs(n) / t * 100
-                        ratio_str = f' ({sign}{ratio:.2f}%)'
+                        ratio_sign = '+' if n >= 0 else '-'
+                        ratio_str = f' ({ratio_sign}{ratio:.2f}%)'
                 except (ValueError, AttributeError):
                     pass
             lines.append(f'📊 증감: {sign}{n:,}주{ratio_str}')
