@@ -552,6 +552,27 @@ def parse_mgmt_event(kv: dict) -> list:
     return lines
 
 
+def parse_trading_halt(kv: dict) -> list:
+    """주권매매거래정지"""
+    lines = []
+
+    # 정지사유
+    if v := _get(kv, '2.정지사유', '정지사유'):
+        lines.append(f'⏸ 정지사유: {v}')
+
+    # 정지일시: 날짜 형식 키(YYYY-MM-DD)에 시간 값이 붙어있음
+    for k, v in kv.items():
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', k) and v:
+            lines.append(f'🕐 정지일시: {k} {v}')
+            break
+
+    # 만료
+    if v := _get(kv, '나.만료일시', '만료일시', '재개일시'):
+        lines.append(f'🔓 만료: {v}')
+
+    return lines
+
+
 def parse_amendment(kv: dict) -> list:
     """
     [기재정정] 공시 전용 파서 — 변경된 항목만 추출.
@@ -607,6 +628,7 @@ _PARSER_MAP = [
     (['유상증자'],                          parse_rights_offering),
     (['단일판매', '공급계약체결', '수주'],   parse_contract),
     (['투자판단관련주요경영사항'],           parse_mgmt_event),
+    (['거래정지', '매매거래정지'],           parse_trading_halt),
     # 추후 추가: 무상증자, 전환사채, 합병, 잠정실적 등
 ]
 
