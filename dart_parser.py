@@ -119,15 +119,28 @@ def _fetch_html(rcept_no: str) -> str | None:
             return None
 
         raw = doc.content
-        # 인코딩 먼저 감지 (raw bytes 기준)
-        enc = _detect_encoding(raw, doc.headers)
 
-        # UTF-8 문서만 손상 패턴 복구 적용 (EUC-KR 문서에 적용하면 바이트 오염)
+        # ── 인코딩 결정 ──────────────────────────────────────────
+        # DART는 XML에 encoding="utf-8"을 선언하지만 실제로 MS949(CP949)로
+        # 인코딩된 문서를 보내는 경우가 있음. XML 선언만 믿으면 안 됨.
+        enc = _detect_encoding(raw, doc.headers)
         is_utf8 = enc.lower().replace('-', '').replace('_', '') in ('utf8',)
+
+        # utf-8 선언이면 실제로 디코딩 가능한지 검증
+        if is_utf8:
+            try:
+                raw.decode('utf-8')
+            except UnicodeDecodeError:
+                # 선언은 utf-8이지만 실제 바이트는 CP949(MS949)
+                enc     = 'cp949'
+                is_utf8 = False
+                log.debug(f'[DART 파서] utf-8 선언이지만 CP949 감지 → cp949 전환 ({rcept_no})')
+
+        # _fix_dart_utf8은 실제 utf-8 문서에만 적용 (CP949 바이트를 오염시키지 않기 위해)
         fixed = _fix_dart_utf8(raw) if is_utf8 else raw
 
         # 최적 인코딩 선택: 한글 음절 수가 가장 많은 쪽 채택
-        candidates = [enc, 'cp949'] if enc not in ('cp949', 'euc-kr') else [enc, 'utf-8']
+        candidates = ['utf-8', 'cp949'] if is_utf8 else ['cp949', 'euc-kr', 'utf-8']
         best_text, best_kr = None, -1
         for try_enc in candidates:
             try:
@@ -138,7 +151,7 @@ def _fetch_html(rcept_no: str) -> str | None:
             except (UnicodeDecodeError, LookupError):
                 continue
         if best_text is not None:
-            log.debug(f'[DART 파서] 인코딩={enc}, 한글수={best_kr} ({rcept_no})')
+            log.debug(f'[DART 파서] 최종 인코딩={enc}, 한글수={best_kr} ({rcept_no})')
             return best_text
         return fixed.decode('utf-8', errors='replace')
 
@@ -177,10 +190,16 @@ def _build_kv(html: str) -> dict:
     soup = BeautifulSoup(html, 'html.parser')
     kv: dict = {}
 
+    def _cell_text(cell) -> str:
+        """셀 텍스트 추출 + 잔여 XML 엔티티 정리."""
+        t = cell.get_text(' ', strip=True)
+        # BeautifulSoup이 처리 못한 잔여 엔티티 제거 (&cr; &wbr; 등)
+        t = re.sub(r'&[a-zA-Z]{1,8};', ' ', t)
+        return re.sub(r'\s+', ' ', t).strip()
+
     for row in soup.find_all('tr'):
-        cells = [re.sub(r'\s+', ' ', c.get_text(' ', strip=True))
-                 for c in row.find_all(['td', 'th'])]
-        cells = [c for c in cells if c.strip()]  # 빈 셀 제거
+        cells = [_cell_text(c) for c in row.find_all(['td', 'th'])]
+        cells = [c for c in cells if c]  # 빈 셀 제거
 
         n = len(cells)
         if n == 2:
