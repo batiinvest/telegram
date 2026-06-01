@@ -324,31 +324,47 @@ def parse_investment_decision(kv: dict) -> list:
     # ── 주요내용 파싱 ──────────────────────────────────────────
     raw = _get(kv, '주요내용', '2. 주요내용', '결정내용', '주요 내용', '내용')
     if raw:
-        # 투자유의사항 면책 문구 제거 (숫자 항목 이전까지)
-        raw = re.sub(r'^[^\d]*(?=\d+\))', '', raw).strip()
+        # 투자유의사항 면책 문구 제거 (첫 번째 숫자 항목 이전까지)
+        raw = re.sub(r'^[^\d]*(?=\d+[.)]\s)', '', raw).strip()
 
-        # N) label: value 형식 항목 분리
-        parts = re.split(r'(?=\d+\)\s)', raw)
+        # N) 또는 N. 형식 항목 분리
+        parts = re.split(r'(?=\d+[.)]\s)', raw)
         parsed: dict = {}
         for part in parts:
-            m = re.match(r'\d+\)\s*([^:：\n]+)[：:]\s*(.+)', part.strip(), re.DOTALL)
+            m = re.match(r'\d+[.)]\s*([^:：\n]+)[：:]\s*(.+)', part.strip(), re.DOTALL)
             if m:
                 label = re.sub(r'\s+', ' ', m.group(1)).strip()
                 value = re.sub(r'\s+', ' ', m.group(2)).strip()
                 parsed[label] = value
 
-        # 주요 필드 출력
-        _field_map = [
-            ('계약상대방',  '🏢 상대방',  60,  False),
-            ('계약금액',    '💰 금액',    80,  False),
-            ('계약지역',    '🌏 지역',    50,  False),
-            ('계약기간',    '📅 기간',    50,  False),
-            ('계약체결일',  '📋 체결일',  30,  True),
-        ]
-        for label, emoji, limit, skip_if_dup in _field_map:
-            v = next((v for k, v in parsed.items() if label in k), None)
-            if v:
-                lines.append(f'{emoji}: {_trunc(v, limit)}')
+        # 주요 필드 출력 (공백 포함 키도 매칭)
+        def _pick(*keys):
+            for key in keys:
+                v = next((v for k, v in parsed.items() if key in k), None)
+                if v: return v
+            return None
+
+        if v := _pick('계약상대방'):
+            lines.append(f'🏢 상대방: {_trunc(v, 60)}')
+
+        # 계약금액: 직접 키 또는 선급금+마일스톤 합산 표현
+        if v := _pick('계약금액'):
+            lines.append(f'💰 금액: {_trunc(v, 80)}')
+        else:
+            parts_amt = []
+            if v := _pick('선급금', 'Upfront', 'upfront'):
+                parts_amt.append(f'선급금 {_trunc(v, 40)}')
+            if v := _pick('마일스톤', 'Milestone', 'milestone'):
+                parts_amt.append(f'마일스톤 {_trunc(v, 40)}')
+            if parts_amt:
+                lines.append(f'💰 금액: ' + ' / '.join(parts_amt))
+
+        if v := _pick('계약지역', '계약 지역', '기술이전지역', '판권지역'):
+            lines.append(f'🌏 지역: {_trunc(v, 50)}')
+        if v := _pick('계약기간', '계약 기간'):
+            lines.append(f'📅 기간: {_trunc(v, 50)}')
+        if v := _pick('계약체결일', '계약 체결일'):
+            lines.append(f'📋 체결일: {_trunc(v, 30)}')
 
         # 구조화 실패(번호 항목 없음) → 첫 80자 fallback
         if not parsed:
