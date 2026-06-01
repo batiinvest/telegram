@@ -617,6 +617,49 @@ def parse_combined_ci(kv: dict) -> list:
     return lines
 
 
+_BOND_METHOD = {'1': '공모', '2': '사모', '3': '주주배정', '4': '기타'}
+
+
+def parse_cb(kv: dict) -> list:
+    """전환사채(CB) / 신주인수권부사채(BW) 파서"""
+    lines = []
+
+    # 발행금액
+    if v := _get(kv, '2. Total face', 'Total face (or electronically registered) value'):
+        lines.append(f'💰 발행금액: {_fmt_amount(v)}원')
+
+    # 전환가액
+    if v := _get(kv, 'Conversion price (KRW/share)', 'Exercise price'):
+        lines.append(f'💵 전환가액: {v}원/주')
+
+    # 이자율 / 만기수익률
+    coupon = _get(kv, 'Coupon rate', '4. Interest rate of bonds')
+    ytm    = _get(kv, 'Yield to maturity')
+    if coupon:
+        ytm_str = f' / YTM {ytm}%' if ytm and ytm != coupon else ''
+        lines.append(f'📊 이자율: {coupon}%{ytm_str}')
+
+    # 만기
+    if v := _get(kv, '5. Bond maturity date', 'Maturity date'):
+        lines.append(f'📅 만기: {v}')
+
+    # 전환청구기간
+    start = _get(kv, 'Start date')
+    end   = _get(kv, 'End date')
+    if start and end:
+        lines.append(f'📅 전환청구: {start} ~ {end}')
+
+    # 발행방식
+    if v := _get(kv, '8. Method of bond issuance'):
+        lines.append(f'📋 발행방식: {_BOND_METHOD.get(v, v)}')
+
+    # 납입일
+    if v := _get(kv, '12. Payment date', 'Payment date'):
+        lines.append(f'📅 납입일: {v}')
+
+    return lines
+
+
 def parse_ex_rights(kv: dict) -> list:
     """권리락 — 기준가·실시일·사유 추출.
     KV 구조: 6열 테이블이 (헤더1:헤더2, 코드:기준가, 날짜:사유) 쌍으로 저장됨."""
@@ -715,6 +758,7 @@ _PARSER_MAP = [
     (['유무상증자'],                         parse_combined_ci),
     (['유상증자'],                          parse_rights_offering),
     (['단일판매', '공급계약체결', '수주'],   parse_contract),
+    (['전환사채', '신주인수권부사채'],        parse_cb),
     (['투자판단관련주요경영사항'],           parse_mgmt_event),
     (['거래정지', '매매거래정지'],           parse_trading_halt),
     (['권리락'],                             parse_ex_rights),
