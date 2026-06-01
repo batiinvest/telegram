@@ -713,14 +713,46 @@ def parse_insider_report(kv: dict) -> list:
     if reporter:
         lines.append(f'👤 보고자: {reporter}' + (f' ({position})' if position else ''))
 
-    # 증감 주식수
-    if v := _get(kv, 'Increase or decrease'):
+    # 증감 + 비율
+    change_str = _get(kv, 'Increase or decrease')
+    total_issued = _get(kv, 'Total number of shares issued')
+    current_str  = _get(kv, 'Total')  # 현재 총 보유수
+
+    if change_str:
         try:
-            n = int(v.replace(',', ''))
+            n = int(change_str.replace(',', ''))
             sign = '+' if n >= 0 else ''
-            lines.append(f'📊 증감: {sign}{n:,}주')
+            # 발행주식 대비 비율
+            ratio_str = ''
+            if total_issued:
+                try:
+                    t = int(total_issued.replace(',', ''))
+                    if t > 0:
+                        ratio = abs(n) / t * 100
+                        ratio_str = f' ({sign}{ratio:.2f}%)'
+                except (ValueError, AttributeError):
+                    pass
+            lines.append(f'📊 증감: {sign}{n:,}주{ratio_str}')
         except (ValueError, AttributeError):
-            lines.append(f'📊 증감: {v}주')
+            lines.append(f'📊 증감: {change_str}주')
+
+    # 현재 보유 수량 (증감과 다를 때만 — 기존 보유자인 경우)
+    if current_str and change_str:
+        try:
+            curr = int(current_str.replace(',', ''))
+            chng = abs(int(change_str.replace(',', '')))
+            if curr != chng:
+                ratio_str = ''
+                if total_issued:
+                    try:
+                        t = int(total_issued.replace(',', ''))
+                        if t > 0:
+                            ratio_str = f' ({curr/t*100:.2f}%)'
+                    except (ValueError, AttributeError):
+                        pass
+                lines.append(f'📦 현재보유: {curr:,}주{ratio_str}')
+        except (ValueError, AttributeError):
+            pass
 
     # 발생일
     if v := _get(kv, 'Date of occurrence of reporting obligation', 'Date of occurrence'):
