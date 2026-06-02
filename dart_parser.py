@@ -909,6 +909,56 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_trust_termination(kv: dict) -> list:
+    """자기주식 신탁계약 해지결과보고서"""
+    lines = []
+
+    # 수탁사
+    trust_co = _get(kv, '회사명 :', '회사?') or ''
+    for k, v in kv.items():
+        if '회사' in k and '자' not in k and v and 'NH' in v or ('증권' in v and len(v) < 50):
+            trust_co = re.sub(r'\(.*\)', '', v).strip()
+            break
+    if trust_co:
+        lines.append(f'🏦 수탁사: {_trunc(trust_co, 30)}')
+
+    # 해지일: '자기주식 취득을 위한...' 키 → 해지일 값
+    term_date = ''
+    for k, v in kv.items():
+        if '취득을 위' in k and re.match(r'\d{4}-\d{2}-\d{2}', v or ''):
+            term_date = v
+            break
+    if term_date:
+        lines.append(f'📅 해지일: {term_date}')
+
+    # 취득 결과: 가장 큰 숫자(금액) → 취득금액, 수량
+    amounts = []
+    for k, v in kv.items():
+        if re.match(r'^[\d,]+$', k):
+            try:
+                n = int(k.replace(',', ''))
+                if n > 1_000_000:  # 100만 이상 = 금액
+                    amounts.append(n)
+            except ValueError:
+                pass
+    if amounts:
+        total = max(amounts)
+        lines.append(f'💰 취득금액: {_fmt_amount(str(total))}원')
+
+    # 취득수량: 쉼표 포함 포맷된 숫자(e.g. 332,905)를 우선 탐색
+    for k, v in kv.items():
+        if v and re.match(r'^\d{1,3}(,\d{3})+$', v):  # 쉼표 포함 천단위 형식
+            try:
+                n = int(v.replace(',', ''))
+                if 1_000 < n < 10_000_000:
+                    lines.append(f'🔢 취득수량: {n:,}주')
+                    break
+            except ValueError:
+                pass
+
+    return lines
+
+
 def parse_treasury_acquisition(kv: dict) -> list:
     """자기주식 취득 신탁계약 체결 / 직접취득 결정"""
     lines = []
@@ -1748,6 +1798,7 @@ _PARSER_MAP = [
     (['기업가치제고'],                         parse_value_enhancement),
     (['잠정실적', '잠정영업실적', '영업(잠정)실적'], parse_preliminary_earnings),
     (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
+    (['신탁계약해지결과'],                       parse_trust_termination),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
