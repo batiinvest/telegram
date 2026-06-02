@@ -909,6 +909,41 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_outside_director(kv: dict) -> list:
+    """사외이사 선임·해임·중도퇴임 신고"""
+    lines = []
+
+    # 선임/재선임/해임 인원
+    appoint  = _get(kv, 'Appointment/reappointment (persons)', 'Appointment')
+    dismiss  = _get(kv, 'Dismissal/resignation (persons)', 'Dismissal')
+    total_chg = _get(kv, '2. Number of outside directors changed')
+
+    parts = []
+    if appoint and appoint not in ('0', '-'):
+        parts.append(f'선임 {appoint}명')
+    if dismiss and dismiss not in ('0', '-'):
+        parts.append(f'해임/퇴임 {dismiss}명')
+    if not parts and total_chg:
+        parts.append(f'변경 {total_chg}명')
+
+    if parts:
+        lines.append(f'👔 사외이사 {" / ".join(parts)}')
+
+    # 변경일
+    if v := _get(kv, '1. Date of change outside director', '1. Date of change in outside director'):
+        lines.append(f'📅 변경일: {v}')
+
+    # 변경 후 사외이사 수/비율
+    after_total = _get(kv, '4. Status after change of outside director')
+    outside_cnt = _get(kv, 'Total number of outside directors (persons)')
+    ratio       = _get(kv, 'Outside director ratio (%)')
+    if outside_cnt and ratio:
+        total_str = f'/{after_total}명' if after_total else ''
+        lines.append(f'📊 사외이사: {outside_cnt}명{total_str} ({ratio}%)')
+
+    return lines
+
+
 def parse_hq_relocation(kv: dict) -> list:
     """본점소재지변경"""
     lines = []
@@ -1455,6 +1490,7 @@ _PARSER_MAP = [
     (['주주총회결과'],                        parse_agm_result),
     (['대표이사변경', '임원변경'],            parse_executive_change),
     (['본점소재지변경'],                      parse_hq_relocation),
+    (['사외이사의선임', '사외이사선임'],       parse_outside_director),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
