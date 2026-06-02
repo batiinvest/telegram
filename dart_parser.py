@@ -917,17 +917,24 @@ def parse_value_enhancement(kv: dict) -> list:
     if v := _get(kv, '1. 계획서 명칭', '계획서 명칭'):
         lines.append(f'📋 {_trunc(v, 50)}')
 
-    # 주요내용 — 섹션 헤더(<...>) + 불릿(-.) 파싱
+    # 주요내용 — 섹션별 전체 표시
     body = _get(kv, '2. 주요 내용', '주요 내용') or ''
     if body:
-        # 섹션 헤더 추출: <기업개요>, <현황진단>, <목표> 등
-        sections = re.findall(r'<([^>]+)>', body)
-        # 불릿 추출: '-. 내용' 패턴
-        bullets = re.findall(r'-\.\s*([^\-<]{5,60})', body)
-        if sections:
-            lines.append(f'  {" · ".join(sections[:4])}')
-        for b in bullets[:3]:
-            lines.append(f'  • {_trunc(b.strip(), 55)}')
+        # '<섹션명> -. bullet1 -. bullet2 ...' 구조 파싱
+        # 섹션 단위로 분리
+        parts = re.split(r'<([^>]+)>', body)
+        # parts = ['prefix', '섹션1', '불릿들...', '섹션2', '불릿들...', ...]
+        i = 1
+        while i < len(parts) - 1:
+            section_name = parts[i].strip()
+            content = parts[i + 1]
+            bullets = [b.strip() for b in re.findall(r'(?<!\w)-\.\s*(.+?)(?=\s+-\.|<|$)', content) if b.strip()]
+            if section_name or bullets:
+                if section_name:
+                    lines.append(f'【{section_name}】')
+                for b in bullets:
+                    lines.append(f'  • {_trunc(b, 60)}')
+            i += 2
 
     # 고배당기업 여부
     if v := _get(kv, '3. 조세특례제한법', '고배당기업'):
