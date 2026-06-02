@@ -775,10 +775,28 @@ def parse_ex_rights(kv: dict) -> list:
 
 
 def parse_trading_halt(kv: dict) -> list:
-    """주권매매거래정지"""
+    """주권매매거래정지 / 기간변경"""
     lines = []
 
-    # 정지사유
+    # ── 기간변경 형식 (주권매매거래정지기간변경) ─────────────────
+    reason = _get(kv, '2.변경사유', '변경사유')
+    before = _get(kv, '가.변경전', '변경전')
+    after  = _get(kv, '나.변경후', '변경후')
+
+    if reason or before or after:
+        if reason:
+            lines.append(f'🚨 {reason}')
+        if v := _get(kv, '1.대상종목', '대상종목'):
+            lines.append(f'📋 대상: {v}')
+        if before:
+            lines.append(f'  변경전: {_trunc(before, 80)}')
+        if after:
+            lines.append(f'  변경후: {_trunc(after, 80)}')
+        if v := _get(kv, '4.근거규정', '근거규정'):
+            lines.append(f'📋 근거: {_trunc(v, 60)}')
+        return lines
+
+    # ── 일반 거래정지 형식 ────────────────────────────────────────
     if v := _get(kv, '2.정지사유', '정지사유'):
         lines.append(f'⏸ 정지사유: {v}')
 
@@ -788,7 +806,6 @@ def parse_trading_halt(kv: dict) -> list:
             lines.append(f'🕐 정지일시: {k} {v}')
             break
 
-    # 만료
     if v := _get(kv, '나.만료일시', '만료일시', '재개일시'):
         lines.append(f'🔓 만료: {v}')
 
