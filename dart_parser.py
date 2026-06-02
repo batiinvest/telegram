@@ -909,6 +909,63 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_value_enhancement(kv: dict) -> list:
+    """기업가치제고계획 (자율공시)"""
+    lines = []
+
+    # 계획서 명칭
+    if v := _get(kv, '1. 계획서 명칭', '계획서 명칭'):
+        lines.append(f'📋 {_trunc(v, 50)}')
+
+    # 주요내용 — 섹션 헤더(<...>) + 불릿(-.) 파싱
+    body = _get(kv, '2. 주요 내용', '주요 내용') or ''
+    if body:
+        # 섹션 헤더 추출: <기업개요>, <현황진단>, <목표> 등
+        sections = re.findall(r'<([^>]+)>', body)
+        # 불릿 추출: '-. 내용' 패턴
+        bullets = re.findall(r'-\.\s*([^\-<]{5,60})', body)
+        if sections:
+            lines.append(f'  {" · ".join(sections[:4])}')
+        for b in bullets[:3]:
+            lines.append(f'  • {_trunc(b.strip(), 55)}')
+
+    # 고배당기업 여부
+    if v := _get(kv, '3. 조세특례제한법', '고배당기업'):
+        if '해당' in v:
+            lines.append('📌 고배당기업 해당')
+
+    # 배당성향 + 배당금액 + 증가율
+    ratio    = _get(kv, '직전 사업연도', '배당성향(%)')
+    div_amt  = _get(kv, '직전 사업연도 (2025) 이익배당금액(원)', '이익배당금액(원)')
+    growth   = _get(kv, '전전 사업연도 대비 직전 사업연도 이익배당금액 증가율(%)', '증가율(%)')
+
+    # 배당성향 키가 연도 포함이라 _get substring 매칭 이용
+    for k, v in kv.items():
+        if '배당성향' in k and v and re.match(r'[\d.]+', v):
+            ratio = v
+            break
+
+    if ratio or div_amt:
+        parts = []
+        if ratio:
+            parts.append(f'배당성향 {ratio}%')
+        if div_amt:
+            parts.append(f'배당금 {_fmt_amount(div_amt)}원')
+        if growth:
+            parts.append(f'YoY +{growth}%')
+        lines.append(f'💰 {" / ".join(parts)}')
+
+    # 결정일
+    if v := _get(kv, '4. 결정일자', '결정일자'):
+        lines.append(f'📅 결정일: {v}')
+
+    # 관련공시
+    if v := _get(kv, '※ 관련공시', '관련공시'):
+        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+
+    return lines
+
+
 def parse_outside_director(kv: dict) -> list:
     """사외이사 선임·해임·중도퇴임 신고"""
     lines = []
@@ -1551,6 +1608,7 @@ _PARSER_MAP = [
     (['대표이사변경', '임원변경'],            parse_executive_change),
     (['본점소재지변경'],                      parse_hq_relocation),
     (['사외이사의선임', '사외이사선임'],       parse_outside_director),
+    (['기업가치제고'],                         parse_value_enhancement),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
