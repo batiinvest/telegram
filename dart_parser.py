@@ -909,6 +909,102 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_agm_notice(kv: dict) -> list:
+    """주주총회소집결의 / 소집공고"""
+    lines = []
+
+    date = _get(kv, '날짜', 'Date')
+    time = _get(kv, '시간', 'Time')
+    if date:
+        lines.append(f'📅 일시: {date}' + (f' {time}' if time else ''))
+
+    if v := _get(kv, '2. 장소', '장소', 'Place'):
+        lines.append(f'📍 장소: {_trunc(v, 50)}')
+
+    if v := _get(kv, '-주주총회 구분', '주주총회 구분'):
+        lines.append(f'📋 구분: {v}')
+
+    if v := _get(kv, '3. 의결권행사기준일', '의결권행사기준일'):
+        lines.append(f'📋 의결권기준일: {v}')
+
+    if v := _get(kv, '관련공시', '※관련공시'):
+        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+
+    return lines
+
+
+def parse_stock_option(kv: dict) -> list:
+    """주식매수선택권부여"""
+    lines = []
+
+    if v := _get(kv, '1. Number of recipients', 'Number of recipients'):
+        lines.append(f'👤 부여인원: {v}명')
+
+    shares = _get(kv, '2. Number of shares granted', 'Number of shares granted')
+    if shares:
+        lines.append(f'🔢 부여주식수: {shares}주')
+
+    # 행사가액: Common stock 키에 저장됨
+    if v := _get(kv, 'Common stock'):
+        lines.append(f'💵 행사가액: {v}원')
+
+    # 행사기간
+    start = _get(kv, 'Start date')
+    end   = _get(kv, 'End date')
+    if start:
+        period = f'{start} ~ {end}' if end and end != start else start
+        lines.append(f'📅 행사기간: {period}')
+
+    return lines
+
+
+def parse_treasury_disposal(kv: dict) -> list:
+    """자기주식처분결정"""
+    lines = []
+
+    shares = _get(kv, '1. Shares to be disposed of', 'Shares to be disposed')
+    price  = _get(kv, '2. Price of shares to be disposed of', 'Price of shares')
+    amount = _get(kv, '3. Estimated disposal amount', 'Estimated disposal amount')
+
+    if shares:
+        lines.append(f'🔢 처분주식수: {shares}주')
+    if price:
+        lines.append(f'💵 처분가액: {price}원')
+    if amount:
+        lines.append(f'💰 처분예정금액: {_fmt_amount(amount)}원')
+
+    # 처분기간
+    start = _get(kv, '4. Scheduled disposal period', 'Start date')
+    end   = _get(kv, 'End date')
+    if start:
+        period = f'{start} ~ {end}' if end and end != start else start
+        lines.append(f'📅 처분기간: {period}')
+
+    return lines
+
+
+def parse_derivative_loss(kv: dict) -> list:
+    """파생상품거래손실발생"""
+    lines = []
+
+    if v := _get(kv, '1. 파생상품 거래계약의 종류 및 내용', '거래계약의 종류'):
+        lines.append(f'📋 거래종류: {_trunc(v, 50)}')
+
+    loss   = _get(kv, '손실누계잔액(원)(기신고분 제외)', '손실누계잔액')
+    ratio  = _get(kv, '자기자본대비(%)')
+    if loss:
+        ratio_str = f' (자기자본 대비 {ratio}%)' if ratio else ''
+        lines.append(f'💸 손실누계: {_fmt_amount(loss)}원{ratio_str}')
+
+    if v := _get(kv, '3. 손실발생 주요원인', '손실발생 주요원인'):
+        lines.append(f'📋 원인: {_trunc(v, 70)}')
+
+    if v := _get(kv, '4. 손실발생일자', '손실발생일자'):
+        lines.append(f'📅 발생일: {v}')
+
+    return lines
+
+
 def parse_record_date(kv: dict) -> list:
     """주주명부폐쇄기간 또는 기준일 설정"""
     lines = []
@@ -1158,6 +1254,10 @@ _PARSER_MAP = [
     (['주주명부폐쇄', '기준일설정'],           parse_record_date),
     (['전환청구권', '신주인수권', '교환청구권행사'], parse_rights_exercise),
     (['채무보증'],                            parse_debt_guarantee),
+    (['주주총회소집결의', '주주총회소집공고'], parse_agm_notice),
+    (['주식매수선택권'],                       parse_stock_option),
+    (['자기주식처분'],                         parse_treasury_disposal),
+    (['파생상품거래손실'],                     parse_derivative_loss),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
