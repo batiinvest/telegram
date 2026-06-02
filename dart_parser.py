@@ -909,6 +909,47 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_treasury_acquisition(kv: dict) -> list:
+    """자기주식 취득 신탁계약 체결 / 직접취득 결정"""
+    lines = []
+
+    # 취득금액
+    if v := _get(kv, '1. Contract amount (KRW)', 'Contract amount'):
+        lines.append(f'💰 취득금액: {_fmt_amount(v)}원')
+
+    # 취득예정 주식수 + 단가
+    shares = _get(kv, '9. Number of shares to be acquired', 'Number of shares to be acquired')
+    price  = _get(kv, '10. Price of shares to be acquired', 'Price of shares to be acquired')
+    if shares:
+        price_str = f' (주당 {price}원)' if price else ''
+        lines.append(f'🔢 취득예정: {shares}주{price_str}')
+
+    # 계약기간
+    start = _get(kv, 'Start date', '2. Contract period')
+    end   = _get(kv, 'End date')
+    if start and end and start != end:
+        lines.append(f'📅 계약기간: {start} ~ {end}')
+    elif start:
+        lines.append(f'📅 계약일: {start}')
+
+    # 목적 (인코딩 깨진 경우 생략)
+    if v := _get(kv, '3. Purpose of contract', 'Purpose'):
+        if '?' not in v and '�' not in v:
+            lines.append(f'📋 목적: {_trunc(v, 40)}')
+
+    # 수탁사
+    if v := _get(kv, '4. Counterparty (Trust company)', 'Counterparty'):
+        # 영문 괄호 이후 제거
+        v = re.sub(r'\s*\(.*\)\s*$', '', v).strip()
+        lines.append(f'🏦 수탁사: {v}')
+
+    # 결의일
+    if v := _get(kv, '7. Board resolution date', 'Board resolution date'):
+        lines.append(f'📋 결의일: {v}')
+
+    return lines
+
+
 def parse_preliminary_earnings(kv: dict) -> list:
     """연결/별도 잠정실적 공정공시"""
     lines = []
@@ -1706,6 +1747,7 @@ _PARSER_MAP = [
     (['사외이사의선임', '사외이사선임'],       parse_outside_director),
     (['기업가치제고'],                         parse_value_enhancement),
     (['잠정실적', '잠정영업실적', '영업(잠정)실적'], parse_preliminary_earnings),
+    (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
