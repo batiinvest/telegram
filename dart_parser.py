@@ -909,6 +909,90 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_preliminary_earnings(kv: dict) -> list:
+    """연결/별도 잠정실적 공정공시"""
+    lines = []
+
+    # 보고 기간 추출: 당기실적 키의 값이 시작일
+    period_start = _get(kv, '당기실적')
+    period_end   = kv.get('~', '')   # '~' → 종료일
+    # 분기 레이블: ('26.1Q) 등 패턴 키 탐색
+    quarter_label = ''
+    for k in kv:
+        if re.match(r"^\('[0-9]{2}\.[0-9]", k):
+            quarter_label = k.strip("'()")
+            break
+
+    # 연결/별도 구분
+    is_consol = '연결' in _get(kv, '1. 연결실적내용', '연결') or True
+    report_type = '연결' if '연결' in str(list(kv.keys())[:10]) else '별도'
+
+    header = f'📊 {report_type} 잠정실적'
+    if quarter_label:
+        header += f" ('{quarter_label})"
+    lines.append(header)
+
+    # 실적 지표 추출: items 순서 기반
+    # 구조: (지표명, '당해실적'), (당기값, 전기값), (QoQ증감율, '-'), (전년동기값, YoY증감율)
+    items = list(kv.items())
+    _METRICS = {'매출액', '영업이익', '당기순이익', '지배기업 소유주지분 순이익',
+                '법인세비용차감전계속사업이익'}
+    _IS_NUM = re.compile(r'^-?[\d,]+(\.\d+)?$')
+    _IS_PCT = re.compile(r'^-?[\d.]+$')
+
+    def _fmt_amt(v: str) -> str:
+        try:
+            n = int(v.replace(',', ''))
+            return _fmt_amount(str(abs(n) * 1_000_000))  # 단위: 백만원
+        except (ValueError, AttributeError):
+            return v
+
+    def _pct_str(v: str) -> str:
+        if not v or v in ('-', ''):
+            return ''
+        if '흑자' in v or '적자' in v:
+            return v
+        if _IS_PCT.match(v):
+            f = float(v)
+            sign = '+' if f > 0 else ''
+            return f'{sign}{v}%'
+        return ''
+
+    for idx, (k, v) in enumerate(items):
+        if k not in _METRICS:
+            continue
+        # 다음 4개 items에서 값 추출
+        if idx + 3 >= len(items):
+            continue
+        _, curr_val = items[idx + 1] if idx + 1 < len(items) else (None, None)
+        prev_val, _ = items[idx + 1] if False else (None, None)
+
+        # (당기값, 전기값) 쌍
+        k1, curr = items[idx + 1]
+        k2, qoq  = items[idx + 2]   # QoQ 증감율이 key
+        k3, yoy  = items[idx + 3]   # 전년동기값이 key (YoY 증감율이 value)
+
+        if not _IS_NUM.match(k1):
+            continue
+
+        amt_str = _fmt_amt(k1)
+        qoq_str = _pct_str(k2)
+        yoy_str = _pct_str(yoy) if _IS_NUM.match(k3) else ''
+
+        parts = [amt_str]
+        if qoq_str:
+            parts.append(f'QoQ {qoq_str}')
+        if yoy_str:
+            parts.append(f'YoY {yoy_str}')
+
+        label = '매출' if k == '매출액' else ('영업이익' if k == '영업이익' else
+                 '순이익' if k == '당기순이익' else
+                 '지배순이익' if '지배기업' in k else '세전이익')
+        lines.append(f'  {label}: {" / ".join(parts)}')
+
+    return lines
+
+
 def parse_value_enhancement(kv: dict) -> list:
     """기업가치제고계획 (자율공시)"""
     lines = []
@@ -1616,6 +1700,7 @@ _PARSER_MAP = [
     (['본점소재지변경'],                      parse_hq_relocation),
     (['사외이사의선임', '사외이사선임'],       parse_outside_director),
     (['기업가치제고'],                         parse_value_enhancement),
+    (['잠정실적', '잠정영업실적', '영업(잠정)실적'], parse_preliminary_earnings),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
