@@ -909,6 +909,42 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_ir_event(kv: dict) -> list:
+    """기업설명회(IR) 개최"""
+    lines = []
+
+    # 일시: YYYY-MM-DD 형식 키 → 종료일 값으로 저장된 구조 처리
+    start_d = end_d = start_t = end_t = ''
+    for k, v in kv.items():
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', k):
+            start_d = k
+            end_d   = v if re.match(r'^\d{4}-\d{2}-\d{2}$', v) else ''
+            break
+    for k, v in kv.items():
+        if re.match(r'^\d{2}:\d{2}$', k):
+            start_t = k
+            end_t   = v if re.match(r'^\d{2}:\d{2}$', v) else ''
+            break
+    if start_d:
+        date_str = f'{start_d} ~ {end_d}' if end_d and end_d != start_d else start_d
+        time_str = f' ({start_t}~{end_t})' if start_t and end_t else ''
+        lines.append(f'📅 일시: {date_str}{time_str}')
+
+    if v := _get(kv, '2. 장소', '장소'):
+        lines.append(f'📍 장소: {_trunc(v, 40)}')
+
+    if v := _get(kv, '3. 대상자', '대상자'):
+        lines.append(f'👥 대상: {v}')
+
+    if v := _get(kv, '4. 실시목적', '실시목적'):
+        lines.append(f'📋 목적: {_trunc(v, 50)}')
+
+    if v := _get(kv, '6. 주요내용', '주요내용'):
+        lines.append(f'📋 내용: {_trunc(v, 50)}')
+
+    return lines
+
+
 def parse_equity_acquisition(kv: dict) -> list:
     """타법인주식 및 출자증권 취득결정"""
     lines = []
@@ -1077,21 +1113,15 @@ def parse_rights_exercise(kv: dict) -> list:
     if v := _get(kv, '1. 구분', '구분'):
         lines.append(f'📋 구분: {_trunc(v, 60)}')
 
-    # 행사주식수 + 발행주식 대비
-    shares = _get(kv, '2. 행사주식수 누계', '행사주식수')
-    ratio  = _get(kv, '발행주식총수 대비(%)')
+    # 행사주식수 + 발행주식 대비 (두 가지 키 구조 대응)
+    shares = _get(kv, '2. 행사주식수 누계', '1. 교환청구권 행사주식수 누계', '행사주식수')
+    ratio  = _get(kv, '발행주식총수 대비(%)', '-발행주식총수 대비 (%)', '발행주식총수 대비 (%)')
     if shares:
         ratio_str = f' (발행주식 대비 {ratio}%)' if ratio else ''
         lines.append(f'🔢 행사주식수: {shares}주{ratio_str}')
 
-    # 기타 참고사항 (면책 제거 후 핵심만)
-    if v := _get(kv, '4. 기타 투자판단에 참고할 사항', '기타 투자판단'):
-        note = re.sub(r'^-\s*', '', v).strip()
-        if note:
-            lines.append(f'  {_trunc(note, 80)}')
-
     # 관련공시
-    if v := _get(kv, '※ 관련공시', '관련공시'):
+    if v := _get(kv, '※관련공시', '※ 관련공시', '관련공시'):
         lines.append(f'🔗 관련: {_trunc(v, 50)}')
 
     return lines
@@ -1307,6 +1337,7 @@ _PARSER_MAP = [
     (['자기주식처분'],                         parse_treasury_disposal),
     (['파생상품거래손실'],                     parse_derivative_loss),
     (['타법인주식', '출자증권취득'],           parse_equity_acquisition),
+    (['기업설명회', 'IR개최'],               parse_ir_event),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
