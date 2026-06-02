@@ -51,7 +51,9 @@ try:
     log.info('Supabase 연결 완료')
 except Exception as e:
     log.error(f'Supabase 연결 실패: {e}')
-    sys.exit(1)
+    # sys.exit(1) 제거 — run_all.py 스레드로 호출될 때 전체 프로세스 종료 방지
+    # 대신 RuntimeError를 raise해 호출자가 처리하도록
+    raise RuntimeError(f'leading_stocks_generator: Supabase 연결 실패 — {e}') from e
 
 # ── 상수 ─────────────────────────────────────────────────────────────────────
 LOOKBACK_DAYS   = 25     # 최근 25 거래일 조회

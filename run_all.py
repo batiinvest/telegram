@@ -1237,6 +1237,7 @@ def job_sunday_company_diagnosis():
 # ==========================================
 def run_scheduler():
     logging.info("🚀 [스케줄러] 시작 (schedule 라이브러리 적용)")
+    schedule.clear()  # 재시작 시 중복 job 방지 — 없으면 이미 지난 시각 job이 즉시 실행됨
 
     schedule.every().day.at("09:00").do(job_pro_channel_check)  # 프로 채널 구독 만료 체크
     schedule.every().day.at("09:05").do(job_kind_ir)             # KIND IR자료 오전 수집
