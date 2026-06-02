@@ -909,6 +909,54 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_equity_acquisition(kv: dict) -> list:
+    """타법인주식 및 출자증권 취득결정"""
+    lines = []
+
+    # 종속회사 경유 여부
+    sub = _get(kv, '종속회사인')
+    if sub:
+        lines.append(f'🏢 종속회사: {sub}')
+
+    # 발행회사 (취득 대상)
+    for k, v in kv.items():
+        if k not in ('종속회사인',) and v in ('대표이사', '대표자') and k not in ('-', ''):
+            lines.append(f'🏭 발행회사: {k}')
+            break
+
+    # 취득주식수 + 취득금액
+    shares = _get(kv, '취득주식수(주)')
+    amount = _get(kv, '취득금액(원)')
+    ratio  = _get(kv, '지배회사의 연결자산총액대비(%)', '연결자산총액대비(%)')
+    if shares:
+        lines.append(f'🔢 취득주식수: {shares}주')
+    if amount:
+        ratio_str = f' (연결자산 대비 {ratio}%)' if ratio else ''
+        lines.append(f'💰 취득금액: {_fmt_amount(amount)}원{ratio_str}')
+
+    # 취득 후 지분비율
+    if v := _get(kv, '지분비율(%)'):
+        lines.append(f'📊 취득 후 지분: {v}%')
+
+    # 취득방법
+    if v := _get(kv, '4. 취득방법', '취득방법'):
+        lines.append(f'📋 취득방법: {_trunc(v, 60)}')
+
+    # 취득목적
+    if v := _get(kv, '5. 취득목적', '취득목적'):
+        lines.append(f'📋 목적: {_trunc(v, 60)}')
+
+    # 취득예정일자
+    if v := _get(kv, '6. 취득예정일자', '취득예정일자'):
+        lines.append(f'📅 취득예정: {v}')
+
+    # 관련공시
+    if v := _get(kv, '※ 관련공시', '관련공시'):
+        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+
+    return lines
+
+
 def parse_agm_notice(kv: dict) -> list:
     """주주총회소집결의 / 소집공고"""
     lines = []
@@ -1258,6 +1306,7 @@ _PARSER_MAP = [
     (['주식매수선택권'],                       parse_stock_option),
     (['자기주식처분'],                         parse_treasury_disposal),
     (['파생상품거래손실'],                     parse_derivative_loss),
+    (['타법인주식', '출자증권취득'],           parse_equity_acquisition),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
