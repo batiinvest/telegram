@@ -909,6 +909,35 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_trust_termination_decision(kv: dict) -> list:
+    """자기주식 신탁계약 해지결정"""
+    lines = []
+
+    if v := _get(kv, '1. Contract amount (KRW)', 'Contract amount'):
+        lines.append(f'💰 계약금액: {_fmt_amount(v)}원')
+
+    start = _get(kv, '2. Contract period before termination')
+    end   = _get(kv, 'End date')
+    if start and end:
+        lines.append(f'📅 계약기간: {start} ~ {end}')
+
+    if v := _get(kv, '3. Purpose of termination', 'Purpose of termination'):
+        # 대체문자를 제거하고 읽을 수 있는 내용만 표시
+        cleaned = re.sub(r'[?�]+', '', v).strip()
+        cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+        if cleaned and len(cleaned) > 4:
+            lines.append(f'📋 해지사유: {_trunc(cleaned, 50)}')
+
+    if v := _get(kv, '4. Termination institution', 'Termination institution'):
+        v = re.sub(r'\s*\(.*\)\s*$', '', v).strip()
+        lines.append(f'🏦 해지기관: {v}')
+
+    if v := _get(kv, '5. Scheduled termination date', 'Scheduled termination date'):
+        lines.append(f'📅 해지예정일: {v}')
+
+    return lines
+
+
 def parse_trust_termination(kv: dict) -> list:
     """자기주식 신탁계약 해지결과보고서"""
     lines = []
@@ -1797,8 +1826,9 @@ _PARSER_MAP = [
     (['사외이사의선임', '사외이사선임'],       parse_outside_director),
     (['기업가치제고'],                         parse_value_enhancement),
     (['잠정실적', '잠정영업실적', '영업(잠정)실적'], parse_preliminary_earnings),
-    (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
+    (['신탁계약해지결정'],                       parse_trust_termination_decision),
     (['신탁계약해지결과'],                       parse_trust_termination),
+    (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
