@@ -863,6 +863,52 @@ def parse_trading_halt(kv: dict) -> list:
     return lines
 
 
+def parse_debt_guarantee(kv: dict) -> list:
+    """타인에 대한 채무보증결정"""
+    lines = []
+
+    # 채무자 + 관계
+    debtor   = _get(kv, '1. 채무자', '채무자')
+    relation = _get(kv, '-회사와의 관계', '회사와의 관계')
+    if debtor:
+        rel_str = f' ({relation})' if relation else ''
+        lines.append(f'🏢 채무자: {debtor}{rel_str}')
+
+    # 채권자
+    if v := _get(kv, '2. 채권자', '채권자'):
+        lines.append(f'🏦 채권자: {v}')
+
+    # 차입금액
+    if v := _get(kv, '3. 채무(차입)금액(원)', '채무(차입)금액'):
+        lines.append(f'💳 차입금액: {_fmt_amount(v)}원')
+
+    # 보증금액 + 자기자본 대비
+    guarantee = _get(kv, '채무보증금액(원)', '보증금액')
+    ratio     = _get(kv, '자기자본대비(%)')
+    if guarantee:
+        ratio_str = f' (자기자본 대비 {ratio}%)' if ratio else ''
+        lines.append(f'💰 보증금액: {_fmt_amount(guarantee)}원{ratio_str}')
+
+    # 보증기간
+    start = _get(kv, '시작일')
+    end   = _get(kv, '종료일')
+    if start and end:
+        lines.append(f'📅 보증기간: {start} ~ {end}')
+
+    # 이사회결의일
+    if v := _get(kv, '6. 이사회결의일(결정일)', '이사회결의일'):
+        lines.append(f'📋 결의일: {v}')
+
+    # 기타 참고사항 (첫 문장만)
+    if v := _get(kv, '7. 기타 투자판단에 참고할 사항', '기타 투자판단'):
+        note = re.sub(r'^\([\d]+\)\s*', '', v).strip()
+        first = re.split(r'[.。]\s*\(', note)[0].strip()
+        if first:
+            lines.append(f'  {_trunc(first, 70)}')
+
+    return lines
+
+
 def parse_record_date(kv: dict) -> list:
     """주주명부폐쇄기간 또는 기준일 설정"""
     lines = []
@@ -1111,7 +1157,13 @@ _PARSER_MAP = [
     (['최대주주변경'],                        parse_major_shareholder_change),
     (['주주명부폐쇄', '기준일설정'],           parse_record_date),
     (['전환청구권', '신주인수권', '교환청구권행사'], parse_rights_exercise),
+    (['채무보증'],                            parse_debt_guarantee),
 ]
+
+# 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
+_SKIP_DETAIL_TYPES = frozenset([
+    '대규모기업집단현황', '기업지배구조보고서',
+])
 
 
 # ══════════════════════════════════════════════
@@ -1142,6 +1194,11 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
 
         # 카테고리별 파서 시도 ([기재정정] 등 접두어 제거)
         clean_nm = re.sub(r'^\[[^\]]+\]', '', report_nm).strip()
+
+        # 상세 불필요 공시 — 빈 문자열 즉시 반환
+        if any(skip in clean_nm for skip in _SKIP_DETAIL_TYPES):
+            return ''
+
         parser = None
         for keywords, fn in _PARSER_MAP:
             if any(k in clean_nm for k in keywords):
