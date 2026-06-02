@@ -863,6 +863,50 @@ def parse_trading_halt(kv: dict) -> list:
     return lines
 
 
+def parse_record_date(kv: dict) -> list:
+    """주주명부폐쇄기간 또는 기준일 설정"""
+    lines = []
+
+    if v := _get(kv, '1. 기준일', '기준일'):
+        lines.append(f'📅 기준일: {v}')
+
+    if v := _get(kv, '3. 설정사유', '설정사유'):
+        lines.append(f'📋 사유: {_trunc(v, 60)}')
+
+    if v := _get(kv, '4. 이사회결의일', '이사회결의일'):
+        lines.append(f'📋 결의일: {v}')
+
+    return lines
+
+
+def parse_rights_exercise(kv: dict) -> list:
+    """전환청구권·신주인수권·교환청구권 행사"""
+    lines = []
+
+    # 구분 (전환/신주인수/교환)
+    if v := _get(kv, '1. 구분', '구분'):
+        lines.append(f'📋 구분: {_trunc(v, 60)}')
+
+    # 행사주식수 + 발행주식 대비
+    shares = _get(kv, '2. 행사주식수 누계', '행사주식수')
+    ratio  = _get(kv, '발행주식총수 대비(%)')
+    if shares:
+        ratio_str = f' (발행주식 대비 {ratio}%)' if ratio else ''
+        lines.append(f'🔢 행사주식수: {shares}주{ratio_str}')
+
+    # 기타 참고사항 (면책 제거 후 핵심만)
+    if v := _get(kv, '4. 기타 투자판단에 참고할 사항', '기타 투자판단'):
+        note = re.sub(r'^-\s*', '', v).strip()
+        if note:
+            lines.append(f'  {_trunc(note, 80)}')
+
+    # 관련공시
+    if v := _get(kv, '※ 관련공시', '관련공시'):
+        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+
+    return lines
+
+
 def parse_major_shareholder_change(kv: dict) -> list:
     """최대주주변경"""
     lines = []
@@ -1065,6 +1109,8 @@ _PARSER_MAP = [
     (['거래정지', '매매거래정지'],           parse_trading_halt),
     (['권리락'],                             parse_ex_rights),
     (['최대주주변경'],                        parse_major_shareholder_change),
+    (['주주명부폐쇄', '기준일설정'],           parse_record_date),
+    (['전환청구권', '신주인수권', '교환청구권행사'], parse_rights_exercise),
 ]
 
 
