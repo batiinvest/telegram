@@ -915,17 +915,22 @@ def parse_preliminary_earnings(kv: dict) -> list:
 
     # 보고 기간 추출: 당기실적 키의 값이 시작일
     period_start = _get(kv, '당기실적')
-    period_end   = kv.get('~', '')   # '~' → 종료일
-    # 분기 레이블: ('26.1Q) 등 패턴 키 탐색
+    # 분기 레이블: 두 가지 패턴 지원
+    #   ('26.1Q)  →  26.1Q
+    #   (2026년 1분기)  →  26.1Q 변환
     quarter_label = ''
     for k in kv:
-        if re.match(r"^\('[0-9]{2}\.[0-9]", k):
-            quarter_label = k.strip("'()")
+        m = re.match(r"^\('?([0-9]{2})\.([0-9])Q?\)", k)
+        if m:
+            quarter_label = f"{m.group(1)}.{m.group(2)}Q"
+            break
+        m2 = re.match(r'^\(([0-9]{4})년\s*([0-9])분기\)', k)
+        if m2:
+            quarter_label = f"{m2.group(1)[2:]}.{m2.group(2)}Q"
             break
 
-    # 연결/별도 구분
-    is_consol = '연결' in _get(kv, '1. 연결실적내용', '연결') or True
-    report_type = '연결' if '연결' in str(list(kv.keys())[:10]) else '별도'
+    # 연결/별도 구분 (공시 제목 또는 1번 항목 키로 판단)
+    report_type = '연결' if any('연결' in k for k in list(kv.keys())[:15]) else '별도'
 
     header = f'📊 {report_type} 잠정실적'
     if quarter_label:
