@@ -654,9 +654,7 @@ def parse_mgmt_event(kv: dict) -> list:
     # 시험결과 (임상시험결과 공시)
     result_val = _get(kv, '2) 결과값', '결과값')
     if result_val:
-        # 첫 문장 또는 100자로 트런케이트
-        first = re.split(r'[.。]\s+', result_val)[0].strip()
-        lines.append(f'🔬 결과: {_trunc(first, 100)}')
+        lines.append(f'🔬 결과: {_trunc(result_val, 150)}')
 
     # 변경신청 사유 (변경승인 공시)
     if v := _get(kv, '3. 변경신청 사유', '변경신청 사유', '변경사유'):
