@@ -796,11 +796,41 @@ def parse_ex_rights(kv: dict) -> list:
     return lines
 
 
+def _parse_etc_field(text: str) -> list[str]:
+    """'5.기타' 필드의 '-항목 : 값' 목록을 줄별로 분리."""
+    lines = []
+    for part in re.split(r'\s*-(?=\S)', text.strip()):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.match(r'^(.+?)\s*:\s*(.+)$', part)
+        if m:
+            lines.append(f'  • {m.group(1).strip()}: {m.group(2).strip()}')
+        else:
+            lines.append(f'  • {_trunc(part, 70)}')
+    return lines
+
+
 def parse_trading_halt(kv: dict) -> list:
-    """주권매매거래정지 / 기간변경"""
+    """주권매매거래정지 / 기간변경 / 해제"""
     lines = []
 
-    # ── 기간변경 형식 (주권매매거래정지기간변경) ─────────────────
+    # ── 거래정지 해제 형식 ───────────────────────────────────────
+    release = _get(kv, '2.해제사유', '해제사유')
+    if release:
+        lines.append(f'🔓 {release}')
+        if v := _get(kv, '1.대상종목', '대상종목'):
+            lines.append(f'📋 대상: {v}')
+        halt_dt = _get(kv, '3.해제일시', '해제일시') or ''
+        if halt_dt:
+            lines.append(f'📅 해제일시: {halt_dt.rstrip(" -").strip()}')
+        if v := _get(kv, '5.기타', '기타'):
+            lines.extend(_parse_etc_field(v))
+        if v := _get(kv, '4.근거규정', '근거규정'):
+            lines.append(f'📋 근거: {_trunc(v, 60)}')
+        return lines
+
+    # ── 기간변경 형식 ────────────────────────────────────────────
     reason = _get(kv, '2.변경사유', '변경사유')
     before = _get(kv, '가.변경전', '변경전')
     after  = _get(kv, '나.변경후', '변경후')
@@ -818,11 +848,10 @@ def parse_trading_halt(kv: dict) -> list:
             lines.append(f'📋 근거: {_trunc(v, 60)}')
         return lines
 
-    # ── 일반 거래정지 형식 ────────────────────────────────────────
+    # ── 일반 거래정지 형식 ───────────────────────────────────────
     if v := _get(kv, '2.정지사유', '정지사유'):
         lines.append(f'⏸ 정지사유: {v}')
 
-    # 정지일시: 날짜 형식 키(YYYY-MM-DD)에 시간 값이 붙어있음
     for k, v in kv.items():
         if re.match(r'^\d{4}-\d{2}-\d{2}$', k) and v:
             lines.append(f'🕐 정지일시: {k} {v}')
