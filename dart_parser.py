@@ -622,23 +622,45 @@ def parse_mgmt_event(kv: dict) -> list:
     if v := _get(kv, '1. 제목', '제목'):
         lines.append(f'📌 {_trunc(v, 80)}')
 
-    # 주요내용 — 면책 문구 제거 후 번호 목록 파싱
-    if v := _get(kv, '2. 주요내용', '주요내용', '결정내용'):
-        stripped = _strip_disclaimer(v).strip()
-        if stripped and len(stripped) > 5:
-            bullets = _parse_numbered_body(stripped)
-            if bullets:
-                lines.extend(bullets)
-            else:
-                # 번호 목록 없는 일반 텍스트
-                lines.append(f'  {_trunc(stripped, 120)}')
+    # 주요내용 파싱 — 두 가지 구조 처리
+    body_raw = _get(kv, '2. 주요내용', '주요내용', '결정내용') or ''
+    stripped = _strip_disclaimer(body_raw).strip()
+
+    # [구조 A] 번호 항목이 KV 개별 행으로 분리된 경우
+    # '2. 주요내용' 값이 짧거나 '1) ...' 레이블만 있는 경우
+    numbered_kv = {
+        k: v for k, v in kv.items()
+        if re.match(r'^\d{1,2}\)\s+\S', k)
+    }
+    if numbered_kv and len(stripped) < 30:
+        count = 0
+        for k, v in numbered_kv.items():
+            v = re.sub(r'\s+', ' ', v).strip()
+            if not v or len(v) > 60:
+                continue
+            label = re.sub(r'^\d+\)\s*', '', k).strip()
+            lines.append(f'  • {label}: {v}')
+            count += 1
+            if count >= 6:
+                break
+    elif stripped and len(stripped) > 5:
+        # [구조 B] 하나의 긴 문자열 안에 번호 목록 포함
+        bullets = _parse_numbered_body(stripped)
+        if bullets:
+            lines.extend(bullets)
+        else:
+            lines.append(f'  {_trunc(stripped, 120)}')
+
+    # 변경신청 사유 (변경승인 공시)
+    if v := _get(kv, '3. 변경신청 사유', '변경신청 사유', '변경사유'):
+        lines.append(f'📋 변경사유: {_trunc(v, 70)}')
 
     # 결정일 / 사실확인일
-    if v := _get(kv, '이사회결의일', '사실확인일', '결정일'):
+    if v := _get(kv, '4. 사실발생', '이사회결의일', '사실확인일', '결정일'):
         lines.append(f'📅 결정일: {v}')
 
     # 관련공시
-    if v := _get(kv, '관련공시'):
+    if v := _get(kv, '관련공시', '※ 관련 공시'):
         lines.append(f'🔗 관련: {_trunc(v, 50)}')
 
     return lines
