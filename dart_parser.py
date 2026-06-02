@@ -1027,6 +1027,27 @@ def parse_executive_change(kv: dict) -> list:
         if after:
             lines.append(f'  변경후: {after}')
 
+    # 변경후 이사 상세 정보
+    # KV 패턴: after_name(key) → 소속회사(val), 이후 직위(key) → 입사일(val)
+    _SKIP_KEYS = {'상장여부', '직위', '퇴사연월일', '최대주주와의 관계', '성명', '-',
+                  '상장(코스닥)', '상장(유가)', '지분비율(%)', '불참(명)', '최대주주와의 관계'}
+    if after:
+        items = list(kv.items())
+        for idx, (k, v) in enumerate(items):
+            if k == after and v and v not in ('-', ''):
+                company = v
+                lines.append(f'  📌 소속: {company}')
+                # 최근 직위 1개 추출 (직위→입사일 패턴)
+                for jk, jv in items[idx + 1:idx + 8]:
+                    if jk in _SKIP_KEYS or not jv or jv in ('-',):
+                        continue
+                    if re.match(r'^\d{4}-\d{2}-\d{2}$', jk):
+                        break  # 퇴사일 도달
+                    if re.match(r'^\d{4}-\d{2}-\d{2}$', jv):
+                        lines.append(f'  💼 직위: {jk} ({jv[:7]}~)')
+                        break
+                break
+
     if v := _get(kv, '2. 변경사유', '변경사유'):
         lines.append(f'📋 사유: {_trunc(v, 60)}')
 
@@ -1193,16 +1214,32 @@ def parse_stock_option(kv: dict) -> list:
     """주식매수선택권부여"""
     lines = []
 
+    # 부여대상자 직위 추출: '(직 위) 상무보' 형식의 garbled 값에서 파싱
+    for k, v in kv.items():
+        m = re.search(r'\)\s*(\S{2,5})$', v or '')
+        if m and k and re.search(r'랄\s*자|대\s*상\s*자|부\s*여', k):
+            lines.append(f'👤 부여대상: {m.group(1)}')
+            break
+
     if v := _get(kv, '1. Number of recipients', 'Number of recipients'):
-        lines.append(f'👤 부여인원: {v}명')
+        lines.append(f'👥 부여인원: {v}명')
 
     shares = _get(kv, '2. Number of shares granted', 'Number of shares granted')
     if shares:
         lines.append(f'🔢 부여주식수: {shares}주')
 
-    # 행사가액: Common stock 키에 저장됨
-    if v := _get(kv, 'Common stock'):
-        lines.append(f'💵 행사가액: {v}원')
+    # 행사가액: 'Exercise price (KRW)' 우선, 없으면 'Exercise price'
+    price = _get(kv, 'Exercise price (KRW)', 'Exercise price')
+    if price:
+        lines.append(f'💵 행사가액: {price}원')
+
+    # 누적 부여주식수
+    if v := _get(kv, '8. Total grant after current grant'):
+        lines.append(f'📦 누적부여: {v}주')
+
+    # 결의기관
+    if v := _get(kv, '5. Grant resolution body'):
+        lines.append(f'📋 결의: {v}')
 
     # 행사기간
     start = _get(kv, 'Start date')
