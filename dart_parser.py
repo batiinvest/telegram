@@ -913,7 +913,6 @@ def parse_outside_director(kv: dict) -> list:
     """사외이사 선임·해임·중도퇴임 신고"""
     lines = []
 
-    # 선임/재선임/해임 인원
     appoint  = _get(kv, 'Appointment/reappointment (persons)', 'Appointment')
     dismiss  = _get(kv, 'Dismissal/resignation (persons)', 'Dismissal')
     total_chg = _get(kv, '2. Number of outside directors changed')
@@ -929,17 +928,30 @@ def parse_outside_director(kv: dict) -> list:
     if parts:
         lines.append(f'👔 사외이사 {" / ".join(parts)}')
 
+    # 변경 전 현황
+    before_total   = _get(kv, '3. Status before change of outside directors')
+    after_total    = _get(kv, '4. Status after change of outside director')
+    after_outside  = _get(kv, 'Total number of outside directors (persons)')
+    after_reg      = _get(kv, 'Total number of registered directors (persons)')
+    ratio          = _get(kv, 'Outside director ratio (%)')
+
+    # 변경 전 사외이사 수 역산 (선임 - 해임 기준)
+    try:
+        ap = int(appoint or 0)
+        di = int(dismiss or 0)
+        ao = int(after_outside or 0)
+        before_outside = ao - ap + di
+        if before_total:
+            lines.append(f'  변경전: 등기이사 {before_total}명 (사외이사 {before_outside}명)')
+        if after_reg and after_outside and ratio:
+            lines.append(f'  변경후: 등기이사 {after_reg}명 (사외이사 {after_outside}명, {ratio}%)')
+    except (ValueError, TypeError):
+        if after_outside and ratio:
+            lines.append(f'📊 사외이사: {after_outside}명/{after_reg}명 ({ratio}%)')
+
     # 변경일
     if v := _get(kv, '1. Date of change outside director', '1. Date of change in outside director'):
         lines.append(f'📅 변경일: {v}')
-
-    # 변경 후 사외이사 수/비율
-    after_total = _get(kv, '4. Status after change of outside director')
-    outside_cnt = _get(kv, 'Total number of outside directors (persons)')
-    ratio       = _get(kv, 'Outside director ratio (%)')
-    if outside_cnt and ratio:
-        total_str = f'/{after_total}명' if after_total else ''
-        lines.append(f'📊 사외이사: {outside_cnt}명{total_str} ({ratio}%)')
 
     return lines
 
