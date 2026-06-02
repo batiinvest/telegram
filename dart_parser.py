@@ -565,43 +565,58 @@ def _strip_disclaimer(text: str) -> str:
     if not text.startswith('※'):
         return text
 
-    # '상존합니다' 이후 실제 내용 추출
-    m = re.search(r'상존합니다[.。]?\s*', text)
-    if m:
-        rest = text[m.end():].strip()
-        # 2차 면책문구 제거: '투자자는 수시공시... 바랍니다.' 패턴
-        rest = re.sub(r'^투자자는\s+수시공시.*?바랍니다[.。]?\s*', '', rest, flags=re.DOTALL).strip()
-        return rest  # 빈 문자열이어도 OK (caller가 빈 경우 skip)
+    # 면책 종결 패턴들: 이후 내용 추출
+    _ENDS = [
+        r'상존합니다[.。]?\s*',
+        r'해지될 수 있습니다[.。]?\s*',
+        r'바랍니다[.。]?\s*',
+        r'유의하시기 바랍니다[.。]?\s*',
+    ]
+    for pat in _ENDS:
+        m = re.search(pat, text)
+        if m:
+            rest = text[m.end():].strip()
+            # 2차 면책문구 제거: '투자자는 수시공시... 바랍니다.' 패턴
+            rest = re.sub(r'^투자자는\s+수시공시.*?바랍니다[.。]?\s*', '', rest, flags=re.DOTALL).strip()
+            if rest:
+                return rest
 
-    # '상존합니다' 없어도 ※로 시작하면 전체가 면책 → 빈 문자열
+    # 면책 종결 없어도 번호 목록(1. / 1) 패턴) 시작점이 있으면 거기부터 반환
+    m2 = re.search(r'(?<!\d)(?:1[.)] |\(1\) )', text)
+    if m2 and m2.start() > 0:
+        return text[m2.start():].strip()
+
+    # ※로 시작하지만 실제 내용 찾을 수 없음
     return ''
 
 
-def _parse_numbered_body(text: str, max_items: int = 5) -> list[str]:
+def _parse_numbered_body(text: str, max_items: int = 7) -> list[str]:
     """
-    '1) 항목명 - 내용 2) 항목명 - 내용 ...' 형태 번호 목록을 줄별 bullet로 변환.
-    너무 긴 항목(제목·목적·방법 등)은 생략하고 짧은 핵심 항목만 표시.
+    '1) 항목명 - 내용' 또는 '1. 항목명: 내용' 형태 번호 목록을 줄별 bullet로 변환.
     """
-    # 번호 목록 분리: '1)' '2)' ... 패턴
-    parts = re.split(r'\s*(?<!\w)(\d{1,2})\)\s+', text)
+    # 번호 목록 분리: '1)' 또는 '1. ' 패턴 모두 지원
+    parts = re.split(r'\s*(?<!\w)(\d{1,2})[.)]\s+', text)
     # parts = ['prefix', '1', 'content1 ', '2', 'content2 ', ...]
     items = []
     i = 1
     while i < len(parts) - 1:
         content = parts[i + 1].strip()
-        # 'key - value' 또는 'key: value' 분리
-        m = re.match(r'^(.{1,20}?)\s*[-:]\s*(.+)', content, re.DOTALL)
+        # 'key: value' 또는 'key - value' 분리
+        m = re.match(r'^(.{1,25}?)\s*[:－-]\s*(.+)', content, re.DOTALL)
         if m:
             key = m.group(1).strip()
             val = re.sub(r'\s+', ' ', m.group(2)).strip()
-            # 너무 긴 항목(제목·임상시험명·목적 등) 생략
-            if len(val) > 80:
+            # 핵심값 앞부분 추출 (dash 이후 부연설명 제거하고 80자)
+            val_short = _trunc(val.split(' - ')[0].strip() if ' - ' in val else val, 80)
+            # 너무 짧은 값(헤더성)은 생략
+            if len(val_short) < 3 or val_short in ('없음', '-', '해당없음'):
                 i += 2
                 continue
-            items.append(f'  • {key}: {val}')
+            items.append(f'  • {key}: {val_short}')
         else:
             short = re.sub(r'\s+', ' ', content).strip()
-            if short and len(short) <= 80:
+            # 단순 섹션 헤더(짧고 콜론/값 없는 것)는 생략
+            if 10 <= len(short) <= 80:
                 items.append(f'  • {short}')
         i += 2
         if len(items) >= max_items:
