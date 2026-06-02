@@ -909,6 +909,44 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_hq_relocation(kv: dict) -> list:
+    """본점소재지변경"""
+    lines = []
+
+    # items 순서 기반으로 변경전/후 주소 추출
+    items = list(kv.items())
+
+    _ADDR_PAT = re.compile(r'^[가-힣]+(특별시|광역시|특별자치시|특별자치도|시|도)\s')
+
+    def _addr_after(section_key: str) -> str:
+        """section_key 이후 첫 번째 실제 주소(광역시도 시작) 반환."""
+        found = False
+        for k, v in items:
+            if section_key in k:
+                found = True
+                continue
+            if found and v and _ADDR_PAT.match(v):
+                return v
+        return ''
+
+    before = _addr_after('가. 변경전')
+    after  = _addr_after('나. 변경후')
+
+    lines.append('📍 본점 이전')
+    if before:
+        lines.append(f'  변경전: {_trunc(before, 50)}')
+    if after:
+        lines.append(f'  변경후: {_trunc(after, 50)}')
+
+    if v := _get(kv, '2. 변경사유', '변경사유'):
+        lines.append(f'📋 사유: {_trunc(v, 60)}')
+
+    if v := _get(kv, '3. 이전(예정)일', '이전(예정)일', '이전일'):
+        lines.append(f'📅 이전일: {v}')
+
+    return lines
+
+
 def parse_executive_change(kv: dict) -> list:
     """대표이사 / 임원 변경"""
     lines = []
@@ -1416,6 +1454,7 @@ _PARSER_MAP = [
     (['기업설명회', 'IR개최'],               parse_ir_event),
     (['주주총회결과'],                        parse_agm_result),
     (['대표이사변경', '임원변경'],            parse_executive_change),
+    (['본점소재지변경'],                      parse_hq_relocation),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
