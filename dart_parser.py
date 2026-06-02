@@ -908,10 +908,9 @@ def parse_amendment(kv: dict) -> list:
     """
     [기재정정] 공시 전용 파서 — 변경된 항목만 추출.
 
-    DART 정정 공시 KV 구조:
-      정정항목: 정정전 정정후  ← 헤더
-      "N. 섹션 - 필드명": OLD  ← 변경된 필드
-      OLD: NEW                 ← 3셀 행에서 old→new 매핑으로 저장됨
+    DART 정정 공시 KV 구조 (두 가지):
+      패턴 A: "N. 섹션명 - 필드명": OLD  +  OLD: NEW
+      패턴 B: "N. 섹션명": 부모헤더  +  "- 필드명: OLD": "- 필드명: NEW"
     """
     lines = []
 
@@ -925,30 +924,46 @@ def parse_amendment(kv: dict) -> list:
         lines.append(f'📋 사유: {_trunc(v, 80)}')
 
     # ── 변경 항목 추출 ────────────────────────────────
-    # 정정항목 헤더 이후, "N. 섹션명 - 필드명: OLD" 패턴을 찾아
-    # kv[OLD] = NEW 로 저장된 정정후 값과 연결
     items = list(kv.items())
     header_idx = next((i for i, (k, _) in enumerate(items) if k == '정정항목'), None)
+    if header_idx is None:
+        return lines
 
-    if header_idx is not None:
-        i = header_idx + 1
-        while i < len(items):
-            k, old_val = items[i]
-            # "N. 섹션명 - 필드명" 패턴: 정정 항목 행
-            m = re.match(r'^\d+\.\s+.+\s+-\s+(.+)$', k)
-            if not m:
-                break  # 정정 섹션 끝
+    i = header_idx + 1
+    while i < len(items):
+        k, val = items[i]
+
+        # 패턴 A: "N. 섹션명 - 필드명" + OLD값, 다음 행에 OLD→NEW
+        m = re.match(r'^\d+\.\s+.+\s+-\s+(.+)$', k)
+        if m:
             field_name = m.group(1).strip()
-            new_val    = kv.get(old_val.strip(), '')
-            old_clean  = old_val.strip()
-            new_clean  = new_val.strip()
+            new_val    = kv.get(val.strip(), '')
+            old_clean, new_clean = val.strip(), new_val.strip()
             if old_clean and new_clean and old_clean != new_clean:
-                lines.append(f'🔧 {field_name}')
-                lines.append(f'   전: {_trunc(old_clean, 70)}')
-                lines.append(f'   후: {_trunc(new_clean, 70)}')
+                lines.append(f'🔧 {field_name}: {_trunc(old_clean, 40)} → {_trunc(new_clean, 40)}')
             elif old_clean:
                 lines.append(f'🔧 {field_name}: {_trunc(old_clean, 70)}')
-            i += 2  # field→old 항목 + old→new 항목 2개씩 건너뜀
+            i += 2
+            continue
+
+        # 패턴 B: "N. 섹션명" 부모 헤더 → 하위에 "- 필드: old" → "- 필드: new" 행들
+        if re.match(r'^\d+\.\s+\S', k):
+            j = i + 1
+            while j < len(items):
+                ck, cv = items[j]
+                if not ck.startswith('-'):
+                    break
+                mo = re.match(r'^-\s*(.+?):\s*(.+)$', ck)
+                mn = re.match(r'^-\s*(.+?):\s*(.+)$', cv)
+                if mo and mn:
+                    old_v, new_v = mo.group(2).strip(), mn.group(2).strip()
+                    if old_v != new_v:
+                        lines.append(f'🔧 {mo.group(1).strip()}: {_trunc(old_v, 40)} → {_trunc(new_v, 40)}')
+                j += 1
+            i = j
+            continue
+
+        break  # 정정 섹션 끝
 
     return lines
 
