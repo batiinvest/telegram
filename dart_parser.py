@@ -909,6 +909,40 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_executive_change(kv: dict) -> list:
+    """대표이사 / 임원 변경"""
+    lines = []
+
+    # 변경전: '1. 변경내용' 값에서 이름 추출 ('변경전 대표이사 홍길동' 형태)
+    before_raw = _get(kv, '1. 변경내용', '변경내용') or ''
+    before = re.sub(r'^변경전\s*(대표이사|임원|이사|감사)?\s*', '', before_raw).strip()
+
+    # 변경후: '변경후 대표이사' 키 → 값, 또는 다른 패턴
+    after = ''
+    for k, v in kv.items():
+        if '변경후' in k and v and v not in ('-', ''):
+            after = v
+            break
+
+    if before or after:
+        lines.append('🔄 대표이사 변경')
+        if before:
+            lines.append(f'  변경전: {before}')
+        if after:
+            lines.append(f'  변경후: {after}')
+
+    if v := _get(kv, '2. 변경사유', '변경사유'):
+        lines.append(f'📋 사유: {_trunc(v, 60)}')
+
+    if v := _get(kv, '3. 변경일', '변경일'):
+        lines.append(f'📅 변경일: {v}')
+
+    if v := _get(kv, '※ 관련공시', '관련공시'):
+        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+
+    return lines
+
+
 def parse_agm_result(kv: dict) -> list:
     """주주총회결과 (정기/임시)"""
     lines = []
@@ -1381,6 +1415,7 @@ _PARSER_MAP = [
     (['타법인주식', '출자증권취득'],           parse_equity_acquisition),
     (['기업설명회', 'IR개최'],               parse_ir_event),
     (['주주총회결과'],                        parse_agm_result),
+    (['대표이사변경', '임원변경'],            parse_executive_change),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
