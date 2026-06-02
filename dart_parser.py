@@ -909,6 +909,48 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def parse_agm_result(kv: dict) -> list:
+    """주주총회결과 (정기/임시)"""
+    lines = []
+
+    if v := _get(kv, '5. 주주총회일자', '4. 주주총회일자', '주주총회일자'):
+        lines.append(f'📅 총회일: {v}')
+
+    # 임원선임 현황
+    if v := _get(kv, '가. 임원선임 현황', '임원선임 현황'):
+        if v and v not in ('-', '해당없음'):
+            lines.append(f'👔 임원선임: {v}')
+
+    # 의안별 결과: 'N호의안' 키 이후 agenda→가결/부결, 그 다음에 참석%→찬성% 순
+    items = list(kv.items())
+    agendas = []
+    for idx, (k, _) in enumerate(items):
+        if not re.match(r'^\d+-?\d*호의안$', k):
+            continue
+        if idx + 1 >= len(items):
+            break
+        name, result = items[idx + 1]
+        if result not in ('가결', '부결'):
+            continue
+        # 찬성률: 다음 KV의 value (행사주식 대비 찬성%)
+        approval = ''
+        if idx + 2 < len(items):
+            _, ap = items[idx + 2]
+            if re.match(r'^\d+\.?\d*$', ap):
+                approval = f' ({ap}%)'
+        icon = '✅' if result == '가결' else '❌'
+        # 의안명 정리: 날짜범위·'의 건' 등 제거
+        short = re.sub(r'\([^)]*\d{4}[^)]*\)', '', name)  # (2025.01.01~...) 제거
+        short = re.sub(r'\s*의\s?건$', '', short).strip()
+        agendas.append(f'  {icon} {_trunc(short, 25)}{approval}')
+
+    if agendas:
+        lines.append('📋 의안:')
+        lines.extend(agendas[:7])
+
+    return lines
+
+
 def parse_ir_event(kv: dict) -> list:
     """기업설명회(IR) 개최"""
     lines = []
@@ -1338,6 +1380,7 @@ _PARSER_MAP = [
     (['파생상품거래손실'],                     parse_derivative_loss),
     (['타법인주식', '출자증권취득'],           parse_equity_acquisition),
     (['기업설명회', 'IR개최'],               parse_ir_event),
+    (['주주총회결과'],                        parse_agm_result),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
