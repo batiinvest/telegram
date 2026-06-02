@@ -863,6 +863,62 @@ def parse_trading_halt(kv: dict) -> list:
     return lines
 
 
+def parse_major_shareholder_change(kv: dict) -> list:
+    """최대주주변경"""
+    lines = []
+
+    # 변경전/후 최대주주 — 값이 '변경전 최대주주' / '변경후 최대주주'인 KV 탐색
+    items = list(kv.items())
+    before_name = before_shares = before_ratio = ''
+    after_name  = after_shares  = after_ratio  = ''
+
+    for idx, (k, v) in enumerate(items):
+        if '변경전 최대주주' in v and k not in ('-', '', '성명(법인명,조합명,기타단체명)'):
+            before_name = k
+            if idx + 1 < len(items):
+                nk, nv = items[idx + 1]
+                if re.match(r'^[\d,]+$', nk) and re.match(r'^[\d.]+$', nv):
+                    before_shares, before_ratio = nk, nv
+        elif '변경후 최대주주' in v and k not in ('-', '', '변경후'):
+            after_name = k
+            if idx + 1 < len(items):
+                nk, nv = items[idx + 1]
+                if re.match(r'^[\d,]+$', nk) and re.match(r'^[\d.]+$', nv):
+                    after_shares, after_ratio = nk, nv
+
+    if before_name or after_name:
+        lines.append('🔄 최대주주 변경')
+        if before_name:
+            detail = f' ({before_shares}주 / {before_ratio}%)' if before_shares else ''
+            lines.append(f'  변경전: {before_name}{detail}')
+        if after_name:
+            detail = f' ({after_shares}주 / {after_ratio}%)' if after_shares else ''
+            lines.append(f'  변경후: {after_name}{detail}')
+
+    # 변경사유
+    if v := _get(kv, '2. 변경사유', '변경사유'):
+        lines.append(f'📋 사유: {_trunc(v, 60)}')
+
+    # 인수자금
+    fund = _get(kv, '자기자금(원)')
+    if fund and fund != '-':
+        lines.append(f'💰 인수자금: {_fmt_amount(fund)}원 (자기자금)')
+
+    # 인수목적
+    if v := _get(kv, '3. 지분인수목적', '지분인수목적'):
+        lines.append(f'📋 목적: {_trunc(v, 50)}')
+
+    # 변경일자
+    if v := _get(kv, '4. 변경일자', '변경일자'):
+        lines.append(f'📅 변경일자: {v}')
+
+    # 관련공시
+    if v := _get(kv, '관련공시', '※ 관련공시'):
+        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+
+    return lines
+
+
 def parse_insider_report(kv: dict) -> list:
     """임원ㆍ주요주주 소유상황보고서"""
     lines = []
@@ -1008,7 +1064,7 @@ _PARSER_MAP = [
     (['임원ㆍ주요주주', '임원·주요주주'],     parse_insider_report),
     (['거래정지', '매매거래정지'],           parse_trading_halt),
     (['권리락'],                             parse_ex_rights),
-    # 추후 추가: 무상증자, 전환사채, 합병, 잠정실적 등
+    (['최대주주변경'],                        parse_major_shareholder_change),
 ]
 
 
