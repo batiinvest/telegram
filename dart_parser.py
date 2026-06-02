@@ -945,33 +945,44 @@ def parse_outside_director(kv: dict) -> list:
 
 
 def parse_hq_relocation(kv: dict) -> list:
-    """본점소재지변경"""
+    """본점소재지변경
+    _build_kv는 '주소' 키 중복 시 마지막 값만 보존하므로
+    kv['_html']에서 BeautifulSoup으로 변경전/후 주소를 직접 파싱.
+    """
     lines = []
+    before = after = ''
 
-    # items 순서 기반으로 변경전/후 주소 추출
-    items = list(kv.items())
-
-    _ADDR_PAT = re.compile(r'^[가-힣]+(특별시|광역시|특별자치시|특별자치도|시|도)\s')
-
-    def _addr_after(section_key: str) -> str:
-        """section_key 이후 첫 번째 실제 주소(광역시도 시작) 반환."""
-        found = False
-        for k, v in items:
-            if section_key in k:
-                found = True
+    html = kv.get('_html', '')
+    if html:
+        import warnings
+        try:
+            from bs4 import XMLParsedAsHTMLWarning
+            warnings.filterwarnings('ignore', category=XMLParsedAsHTMLWarning)
+        except ImportError:
+            pass
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, 'html.parser')
+        section = ''
+        for row in soup.find_all('tr'):
+            cells = [re.sub(r'\s+', ' ', c.get_text(' ', strip=True)) for c in row.find_all(['td', 'th'])]
+            cells = [c for c in cells if c]
+            if not cells:
                 continue
-            if found and v and _ADDR_PAT.match(v):
-                return v
-        return ''
-
-    before = _addr_after('가. 변경전')
-    after  = _addr_after('나. 변경후')
+            if '가. 변경전' in cells[0]:
+                section = 'before'
+            elif '나. 변경후' in cells[0]:
+                section = 'after'
+            elif cells[0] == '주소' and len(cells) >= 2:
+                if section == 'before' and not before:
+                    before = cells[1]
+                elif section == 'after' and not after:
+                    after = cells[1]
 
     lines.append('📍 본점 이전')
     if before:
-        lines.append(f'  변경전: {_trunc(before, 50)}')
+        lines.append(f'  변경전: {_trunc(before, 55)}')
     if after:
-        lines.append(f'  변경후: {_trunc(after, 50)}')
+        lines.append(f'  변경후: {_trunc(after, 55)}')
 
     if v := _get(kv, '2. 변경사유', '변경사유'):
         lines.append(f'📋 사유: {_trunc(v, 60)}')
@@ -1521,6 +1532,7 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
         if not kv:
             log.debug(f'[DART 파서] KV 없음 ({report_nm})')
             return ''
+        kv['_html'] = html  # 일부 파서에서 원문 직접 파싱 용도
 
         if report_nm.startswith('[기재정정]'):
             log.debug(f'[DART 파서] 기재정정 kv 키: {list(kv.keys())[:10]}')
