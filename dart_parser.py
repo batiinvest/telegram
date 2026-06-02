@@ -31,8 +31,71 @@ _DESKTOP_UA = (
 def _fix_dart_utf8(content: bytes) -> bytes:
     """
     DART 서버의 UTF-8 변환 버그 복구.
-    0xEC / 0xED 리드 바이트가 0x3F(?)로 손상된 3바이트 UTF-8 시퀀스를 복원.
+    0xEB~0xED 리드 바이트가 0x3F(?)로 손상된 3바이트 UTF-8 시퀀스를 복원.
+
+    DART 손상 패턴:
+    - 3F+cont1+cont2: 리드 바이트만 3F로 치환된 경우 (복구 가능)
+    - 3F+3F: EUC-KR 2바이트를 각 바이트별로 3F로 치환 (복구 불가)
+
+    cont1 범위별 유효 리드 바이트:
+    - 0x80–0x9E: EB/EC/ED 모두 한글 가능
+    - 0x9F:      EB/EC (ED→U+D7C0+ 한글 범위 초과)
+    - 0xA0–0xAF: EB/EC (EA→U+A800 이하, ED→U+D800+ 모두 한글 아님)
+    - 0xB0–0xBF: EA/EB/EC (ED→U+D800+ 초과)
+
+    우선순위 결정: 자주 등장하는 글자 집합으로 리드 바이트 추정.
     """
+    # 임원/기업 문서에 자주 등장하는 ED 범위 한글 (U+D000–D7A3)
+    _ED_PREF = frozenset(
+        '현회해화호한히협허형행항혜힘특트터탈택탄태통투티팀'
+        '포표편폐평필피하학할핵험혁헌헤헬확환활효후훈휴흔희'
+        '턱턴털텀텅텐텔템토톤톨톱퇴툭툴툼튀튜틱틸틈틀'
+    )
+    # 자주 등장하는 EB 범위 한글 (U+B000–BFFF)
+    _EB_PREF = frozenset(
+        '나남내너네노농누능니다달담당대더데도독동두드디'
+        '라락란랄람랍랑래랙랜랭량러럭런렁렇렉렌렐렙롯롱루룹릭릴리'
+        '마막만말맘맙망매맥맨맹머먹먼멀멈멥명모목몬몰몸몹못몽무묵문물뭄므미'
+        '바박반발밤밥방배백밴밸버벅번벌범법별병보복본볼봄봇봉부북분불뷰브비빅빈빌빔빗빙'
+    )
+
+    def _best_lead(cont1: int, cont2: int) -> int | None:
+        """cont1/cont2로 최적 리드 바이트 결정."""
+        # 후보 리드 바이트 결정
+        if cont1 >= 0xB0:
+            candidates = (0xEA, 0xEB, 0xEC)
+        elif cont1 >= 0x9F:
+            candidates = (0xEB, 0xEC)
+        else:  # 0x80–0x9E
+            candidates = (0xEB, 0xEC, 0xED)
+
+        valids = []
+        for lead in candidates:
+            try:
+                ch = bytes([lead, cont1, cont2]).decode('utf-8')
+                if '가' <= ch <= '힣':
+                    valids.append((lead, ch))
+            except (UnicodeDecodeError, ValueError):
+                pass
+
+        if not valids:
+            return None
+        if len(valids) == 1:
+            return valids[0][0]
+
+        # 복수 후보: 선호 집합 → EC 기본 순으로 우선순위
+        for lead, ch in valids:
+            if lead == 0xED and ch in _ED_PREF:
+                return 0xED
+        for lead, ch in valids:
+            if lead == 0xEB and ch in _EB_PREF:
+                return 0xEB
+        # 기본: EC (가장 넓은 한글 커버, DART 원래 버그 대상)
+        for lead, _ in valids:
+            if lead == 0xEC:
+                return 0xEC
+        return valids[0][0]
+
     buf = bytearray()
     i   = 0
     n   = len(content)
@@ -42,19 +105,11 @@ def _fix_dart_utf8(content: bytes) -> bytes:
                 and i + 2 < n
                 and 0x80 <= content[i+1] <= 0xBF
                 and 0x80 <= content[i+2] <= 0xBF):
-            recovered = False
-            for lead in (0xEC, 0xED):
-                cand = bytes([lead, content[i+1], content[i+2]])
-                try:
-                    ch = cand.decode('utf-8')
-                    if '가' <= ch <= '힣':
-                        buf.extend(cand)
-                        i += 3
-                        recovered = True
-                        break
-                except (UnicodeDecodeError, ValueError):
-                    pass
-            if not recovered:
+            lead = _best_lead(content[i+1], content[i+2])
+            if lead is not None:
+                buf.extend(bytes([lead, content[i+1], content[i+2]]))
+                i += 3
+            else:
                 buf.append(b)
                 i += 1
         else:
@@ -522,6 +577,38 @@ def _strip_disclaimer(text: str) -> str:
     return ''
 
 
+def _parse_numbered_body(text: str, max_items: int = 5) -> list[str]:
+    """
+    '1) 항목명 - 내용 2) 항목명 - 내용 ...' 형태 번호 목록을 줄별 bullet로 변환.
+    너무 긴 항목(제목·목적·방법 등)은 생략하고 짧은 핵심 항목만 표시.
+    """
+    # 번호 목록 분리: '1)' '2)' ... 패턴
+    parts = re.split(r'\s*(?<!\w)(\d{1,2})\)\s+', text)
+    # parts = ['prefix', '1', 'content1 ', '2', 'content2 ', ...]
+    items = []
+    i = 1
+    while i < len(parts) - 1:
+        content = parts[i + 1].strip()
+        # 'key - value' 또는 'key: value' 분리
+        m = re.match(r'^(.{1,20}?)\s*[-:]\s*(.+)', content, re.DOTALL)
+        if m:
+            key = m.group(1).strip()
+            val = re.sub(r'\s+', ' ', m.group(2)).strip()
+            # 너무 긴 항목(제목·임상시험명·목적 등) 생략
+            if len(val) > 80:
+                i += 2
+                continue
+            items.append(f'  • {key}: {val}')
+        else:
+            short = re.sub(r'\s+', ' ', content).strip()
+            if short and len(short) <= 80:
+                items.append(f'  • {short}')
+        i += 2
+        if len(items) >= max_items:
+            break
+    return items
+
+
 def parse_mgmt_event(kv: dict) -> list:
     """투자판단관련주요경영사항 — 임상·기술이전·계약 등"""
     lines = []
@@ -531,21 +618,26 @@ def parse_mgmt_event(kv: dict) -> list:
     if subsidiary:
         lines.append(f'🏢 자회사: {subsidiary}')
 
-    # 제목 (1. 제목)
+    # 제목
     if v := _get(kv, '1. 제목', '제목'):
         lines.append(f'📌 {_trunc(v, 80)}')
 
-    # 주요내용 (면책 문구 제거 후 핵심만, 내용 없으면 생략)
+    # 주요내용 — 면책 문구 제거 후 번호 목록 파싱
     if v := _get(kv, '2. 주요내용', '주요내용', '결정내용'):
         stripped = _strip_disclaimer(v).strip()
-        if stripped and len(stripped) > 5:   # 의미 있는 내용만
-            lines.append(f'📋 {_trunc(stripped, 150)}')
+        if stripped and len(stripped) > 5:
+            bullets = _parse_numbered_body(stripped)
+            if bullets:
+                lines.extend(bullets)
+            else:
+                # 번호 목록 없는 일반 텍스트
+                lines.append(f'  {_trunc(stripped, 120)}')
 
     # 결정일 / 사실확인일
     if v := _get(kv, '이사회결의일', '사실확인일', '결정일'):
         lines.append(f'📅 결정일: {v}')
 
-    # 관련공시 (이전 공시 참조)
+    # 관련공시
     if v := _get(kv, '관련공시'):
         lines.append(f'🔗 관련: {_trunc(v, 50)}')
 
@@ -737,21 +829,32 @@ def parse_insider_report(kv: dict) -> list:
         except (ValueError, AttributeError):
             lines.append(f'📊 증감: {change_str}주')
 
-    # 현재 보유 수량 (증감과 다를 때만 — 기존 보유자인 경우)
+    # 보고 전→후 보유 수량 변화
     if current_str and change_str:
         try:
-            curr = int(current_str.replace(',', ''))
-            chng = abs(int(change_str.replace(',', '')))
-            if curr != chng:
-                ratio_str = ''
-                if total_issued:
-                    try:
-                        t = int(total_issued.replace(',', ''))
-                        if t > 0:
-                            ratio_str = f' ({curr/t*100:.2f}%)'
-                    except (ValueError, AttributeError):
-                        pass
-                lines.append(f'📦 현재보유: {curr:,}주{ratio_str}')
+            curr  = int(current_str.replace(',', ''))
+            chng  = int(change_str.replace(',', ''))
+            chng_abs = abs(chng)
+            prev  = curr - chng   # 보고 전 = 현재 - 증감
+
+            def _ratio(n: int) -> str:
+                if not total_issued:
+                    return ''
+                try:
+                    t = int(total_issued.replace(',', ''))
+                    return f' ({n/t*100:.2f}%)' if t > 0 else ''
+                except (ValueError, AttributeError):
+                    return ''
+
+            # 신규 취득(보고 전 0)이 아닌 경우만 전→후 표시
+            if curr != chng_abs or chng < 0:
+                arrow = '🔻' if chng < 0 else '🔺'
+                lines.append(
+                    f'📦 보유변화: {prev:,}주{_ratio(prev)} {arrow} {curr:,}주{_ratio(curr)}'
+                )
+            else:
+                # 신규 취득
+                lines.append(f'📦 현재보유: {curr:,}주{_ratio(curr)}')
         except (ValueError, AttributeError):
             pass
 
