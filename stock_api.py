@@ -71,9 +71,10 @@ BATCH_WORKERS = 10
 # ==========================================
 # 🛠️ [Util] 헬퍼 함수
 # ==========================================
-def format_volume(val):
-    if val >= 10000: return f"{val/10000:.1f}만"
-    return f"{val}"
+def format_volume(val) -> str:
+    """거래량 포맷 — format_utils.fmt_volume() 위임 (인터페이스 유지)"""
+    from format_utils import fmt_volume
+    return fmt_volume(val)
 
 def format_money(val_100m: int, short: bool = False) -> str:
     """억 단위 변환 — format_utils.fmt_money() 위임 (인터페이스 유지)"""
