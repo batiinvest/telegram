@@ -25,11 +25,8 @@ from typing import Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-try:
-    from supabase import create_client
-except ImportError:
-    print("pip install supabase 필요")
-    sys.exit(1)
+from db_client import get_supabase_client
+from db_utils import fetch_all_pages as _fetch_all_pages
 
 # 기존 managers, stock_api 활용
 try:
@@ -42,6 +39,7 @@ except ImportError:
 
 from format_utils import parse_date as _parse_date   # 중복 제거 — format_utils 통합
 
+# SB_URL / SB_SERVICE_KEY: db_client.get_supabase_client()에서 검증
 SB_URL         = os.getenv("SB_URL", "")
 SB_SERVICE_KEY = os.getenv("SB_SERVICE_KEY", "")
 
@@ -177,9 +175,7 @@ def calculate_returns(sb, target_codes: list = None, target_date: str = None):
     chunk = 10  # 종목 수 줄여서 1000건 limit 회피
     for i in range(0, len(codes), chunk):
         batch = codes[i:i+chunk]
-        # 페이지네이션으로 전체 조회
-        from db_utils import fetch_all_pages
-        all_rows = fetch_all_pages(
+        all_rows = _fetch_all_pages(
             sb.table("market_data")
               .select("stock_code,base_date,price")
               .in_("stock_code", batch)
@@ -226,30 +222,14 @@ def calculate_returns(sb, target_codes: list = None, target_date: str = None):
 
 def run(all_listed: bool = False, max_workers: int = 5):
     """메인 수집 함수"""
-    if not SB_URL or not SB_SERVICE_KEY:
-        log.error("SB_URL, SB_SERVICE_KEY 환경변수 필요")
-        sys.exit(1)
-
-    sb = create_client(SB_URL, SB_SERVICE_KEY)
+    sb = get_supabase_client()  # 환경변수 미설정 시 RuntimeError 발생 (db_client에서 처리)
 
     log.info("=== 시장 데이터 수집 시작 ===")
 
-    # 수집 대상 (페이지네이션으로 전체 로드)
     def load_companies(filter_col, filter_val):
-        all_data = []
-        page = 0
-        while True:
-            res = sb.table("companies").select("name, code") \
-                .eq(filter_col, filter_val) \
-                .range(page * 1000, (page + 1) * 1000 - 1) \
-                .execute()
-            if not res.data:
-                break
-            all_data.extend(res.data)
-            if len(res.data) < 1000:
-                break
-            page += 1
-        return all_data
+        return _fetch_all_pages(
+            sb.table("companies").select("name, code").eq(filter_col, filter_val)
+        )
 
     if all_listed:
         log.info("전체 상장사 모드 — companies 테이블 전체 (active=True)")

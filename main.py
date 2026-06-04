@@ -13,6 +13,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from managers import market_timer, HistoryManager, get_session
+from db_utils import fetch_all_pages as _fetch_all_pages
 
 import stock_api
 from ai_analyst import analyze_disclosure_gemini
@@ -185,18 +186,11 @@ class DartRoutingBot:
                          .order('base_date', desc=True).limit(1).execute()
             max_date = (date_res.data or [{}])[0].get('base_date')
             if max_date:
-                # ✅ 페이지네이션: Supabase 기본 limit(1000)으로 잘리지 않도록
-                all_rows, from_ = [], 0
-                while True:
-                    mkt_res = sb.table('market_data') \
-                                .select('stock_code,market_cap') \
-                                .eq('base_date', max_date) \
-                                .range(from_, from_ + 999).execute()
-                    rows = mkt_res.data or []
-                    all_rows.extend(rows)
-                    if len(rows) < 1000:
-                        break
-                    from_ += 1000
+                all_rows = _fetch_all_pages(
+                    sb.table('market_data')
+                      .select('stock_code,market_cap')
+                      .eq('base_date', max_date)
+                )
 
                 self._cap_cache = {
                     m['stock_code']: m['market_cap']

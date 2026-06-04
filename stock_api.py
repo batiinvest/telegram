@@ -27,20 +27,7 @@ from managers import (
     safe_int,     # managers 통합 버전 사용
 )
 
-# ✅ 파일 잠금 (Race Condition 방지)
-try:
-    from filelock import FileLock
-except ImportError:
-    from contextlib import contextmanager
-    @contextmanager
-    def FileLock(file_name, timeout=None): yield
-
-# ✅ 구글 시트 라이브러리 체크
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-except ImportError:
-    logging.warning("⚠️ gspread 또는 google-auth가 설치되지 않았습니다.")
+# filelock, gspread: managers.py에서 처리 — stock_api는 위임만 하므로 여기서 불필요
 
 try:
     from config import (
@@ -58,7 +45,7 @@ except ImportError:
     COMPANY_CODES = {}
     INDUSTRY_HIERARCHY = {}
     INDUSTRY_CHAT_IDS = {}
-    COMPANY_CHAT_IDSS = {}
+    COMPANY_CHAT_IDS = {}
     CHAT_IDS_BY_CODE = {}
     THEME_MAP = {}
     DEFAULT_CHAT_ID = None
@@ -175,7 +162,7 @@ def _fetch_naver_financials(code: str) -> Optional[Dict]:
         url = f"https://finance.naver.com/item/main.nhn?code={clean_code}"
         headers = {'User-Agent': 'Mozilla/5.0'}
         
-        res = requests.get(url, headers=headers, timeout=5)
+        res = _session.get(url, headers=headers, timeout=5)
         soup = BeautifulSoup(res.text, 'html.parser')
         
         target_table = soup.select_one('div.section.cop_analysis table')
@@ -504,9 +491,68 @@ def get_stock_detail(code: str, name: str = None) -> Optional[str]:
         logging.error(f"Stock Detail Error: {e}")
         return None
 
+# ── 기술적 분석 헬퍼 (get_stock_chart 전용) ─────────────────────────────────
+
+def _calc_ma(prices: list, n: int) -> int:
+    """단순 이동평균. 데이터 부족 시 0 반환."""
+    return sum(prices[:n]) // n if len(prices) >= n else 0
+
+
+def _calc_rsi(prices: list, period: int = 14) -> tuple[float, str, str]:
+    """RSI(14) 계산. 반환: (rsi_val, rsi_state, sentiment)"""
+    if len(prices) <= period:
+        return 0.0, "데이터 부족", "중립"
+    delta = [prices[i] - prices[i + 1] for i in range(len(prices) - 1)][::-1]
+    ups   = [x if x > 0 else 0 for x in delta]
+    downs = [abs(x) if x < 0 else 0 for x in delta]
+    au = sum(ups[:period]) / period
+    ad = sum(downs[:period]) / period
+    rs = au / ad if ad != 0 else 0
+    rsi_val = 100 - (100 / (1 + rs)) if rs != 0 else 50.0
+    if rsi_val >= 70:
+        return rsi_val, "🔥 과열 구간", "차익실현 욕구↑"
+    if rsi_val <= 30:
+        return rsi_val, "🥶 침체 구간", "매도 우위 (과매도)"
+    if rsi_val >= 50:
+        return rsi_val, "✨ 매수 우위", "매수세 유입"
+    return rsi_val, "☁️ 매도 우위", "관망세 우세"
+
+
+def _calc_bollinger(prices: list, curr_price: int) -> tuple[str, str, bool]:
+    """볼린저밴드(20, 2σ) 계산. 반환: (bb_desc, disparity, is_squeeze)"""
+    if len(prices) < 20:
+        return "산출 불가", "확인 불가", False
+    avg_20  = sum(prices[:20]) / 20
+    std_dev = math.sqrt(sum((x - avg_20) ** 2 for x in prices[:20]) / 20)
+    upper, lower = avg_20 + 2 * std_dev, avg_20 - 2 * std_dev
+    bw = ((upper - lower) / avg_20) * 100 if avg_20 > 0 else 0
+
+    if curr_price > upper:
+        bb_desc, is_squeeze = "🔥 상단 밴드 돌파", False
+    elif curr_price < lower:
+        bb_desc, is_squeeze = "💧 하단 밴드 이탈", False
+    elif bw < 5:
+        bb_desc, is_squeeze = "🎻 스퀴즈 (폭발 임박)", True
+    else:
+        bb_desc, is_squeeze = "밴드 내 등락", False
+
+    diff_range = upper - lower
+    if diff_range > 0:
+        if (curr_price - lower) < diff_range * 0.1:
+            disparity = "단기 과낙폭 상태"
+        elif (upper - curr_price) < diff_range * 0.1:
+            disparity = "단기 고점 부담"
+        else:
+            disparity = "적정 범위"
+    else:
+        disparity = "확인 불가"
+
+    return bb_desc, disparity, is_squeeze
+
+
 def get_stock_chart(code: str, name: str = None) -> Optional[str]:
     try:
-        end_dt = datetime.now().strftime("%Y%m%d")
+        end_dt   = datetime.now().strftime("%Y%m%d")
         start_dt = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
 
         data = _call_kis_api(
@@ -518,99 +564,61 @@ def get_stock_chart(code: str, name: str = None) -> Optional[str]:
             }
         )
 
-        if not data: return None
+        if not data:
+            return None
         output = data.get('output2', [])
-        
+
         if not output or len(output) < 2:
             return f"📉 <b>[{name or code}] 차트 데이터 부족</b>\n신규 상장 등으로 기술적 분석을 위한 데이터가 부족합니다."
 
         prices = [int(x['stck_clpr']) for x in output]
-        vols = [int(x['acml_vol']) for x in output]
-        
-        curr_price, prev_price = prices[0], prices[1]
-        change_val = curr_price - prev_price
-        
-        curr_vol = vols[0]
-        prev_vol = vols[1] if len(vols) > 1 and vols[1] > 0 else 1
-        vol_ratio = (curr_vol / prev_vol) * 100
-        
+        vols   = [int(x['acml_vol'])  for x in output]
+
+        curr_price = prices[0]
+        change_val = curr_price - prices[1]
+        curr_vol   = vols[0]
+        prev_vol   = vols[1] if len(vols) > 1 and vols[1] > 0 else 1
+        vol_ratio  = (curr_vol / prev_vol) * 100
+
         vol_desc = "거래 급감"
-        if vol_ratio > 200: vol_desc = "거래 폭발 🔥"
+        if   vol_ratio > 200: vol_desc = "거래 폭발 🔥"
         elif vol_ratio > 120: vol_desc = "거래 증가"
-        elif vol_ratio > 80: vol_desc = "평소 수준"
-        elif vol_ratio < 50: vol_desc = "거래 감소"
-        
-        def ma(n): return sum(prices[:n]) // n if len(prices) >= n else 0
-        ma5, ma20, ma60 = ma(5), ma(20), ma(60)
+        elif vol_ratio > 80:  vol_desc = "평소 수준"
+        elif vol_ratio < 50:  vol_desc = "거래 감소"
+
+        ma5, ma20, ma60 = _calc_ma(prices, 5), _calc_ma(prices, 20), _calc_ma(prices, 60)
 
         trend_main = "판단 불가 (데이터 부족)"
-        pos_desc = "위치 확인 불가"
-
         if ma60 > 0:
-            if ma5 > ma20 > ma60: trend_main = "🚀 정배열 (상승세)"
-            elif ma5 < ma20 < ma60: trend_main = "📉 역배열 (하락세)"
-            elif ma20 > ma60 and curr_price > ma20: trend_main = "📈 눌림목/반등 시도"
-            else: trend_main = "➡️ 혼조세 (박스권)"
+            if ma5 > ma20 > ma60:                      trend_main = "🚀 정배열 (상승세)"
+            elif ma5 < ma20 < ma60:                    trend_main = "📉 역배열 (하락세)"
+            elif ma20 > ma60 and curr_price > ma20:    trend_main = "📈 눌림목/반등 시도"
+            else:                                      trend_main = "➡️ 혼조세 (박스권)"
         elif ma20 > 0:
-            if curr_price > ma20: trend_main = "📈 단기 상승세"
-            else: trend_main = "📉 단기 약세"
-        
+            trend_main = "📈 단기 상승세" if curr_price > ma20 else "📉 단기 약세"
+
+        pos_desc = "위치 확인 불가"
         if ma20 > 0:
-            if curr_price > ma20: pos_desc = f"20일선({ma20:,}) 상회 ✨"
+            if   curr_price > ma20: pos_desc = f"20일선({ma20:,}) 상회 ✨"
             elif curr_price < ma20: pos_desc = f"20일선({ma20:,}) 저항 ☁️"
-            else: pos_desc = "20일선 공방 중"
+            else:                   pos_desc = "20일선 공방 중"
 
-        rsi_val, rsi_state, sentiment = 0, "데이터 부족", "중립"
-        if len(prices) > 15:
-            delta = [prices[i] - prices[i+1] for i in range(len(prices)-1)][::-1]
-            ups = [x if x > 0 else 0 for x in delta]
-            downs = [abs(x) if x < 0 else 0 for x in delta]
-            
-            period = 14 if len(prices) >= 15 else len(prices) - 1
-            if period > 0:
-                au = sum(ups[:period]) / period
-                ad = sum(downs[:period]) / period
-                rs = au / ad if ad != 0 else 0
-                rsi_val = 100 - (100 / (1 + rs)) if rs != 0 else 50
-                
-                if rsi_val >= 70: rsi_state, sentiment = "🔥 과열 구간", "차익실현 욕구↑"
-                elif rsi_val <= 30: rsi_state, sentiment = "🥶 침체 구간", "매도 우위 (과매도)"
-                elif rsi_val >= 50: rsi_state, sentiment = "✨ 매수 우위", "매수세 유입"
-                else: rsi_state, sentiment = "☁️ 매도 우위", "관망세 우세"
-
-        bb_desc, disparity, is_squeeze = "산출 불가", "확인 불가", False
-        if len(prices) >= 20:
-            avg_20 = sum(prices[:20]) / 20
-            variance = sum([(x - avg_20)**2 for x in prices[:20]]) / 20
-            std_dev = math.sqrt(variance)
-            upper, lower = avg_20 + (2 * std_dev), avg_20 - (2 * std_dev)
-            bw = ((upper - lower) / avg_20) * 100 if avg_20 > 0 else 0
-            
-            if curr_price > upper: bb_desc = "🔥 상단 밴드 돌파"
-            elif curr_price < lower: bb_desc = "💧 하단 밴드 이탈"
-            elif bw < 5: bb_desc, is_squeeze = "🎻 스퀴즈 (폭발 임박)", True
-            else: bb_desc = "밴드 내 등락"
-            
-            diff_range = upper - lower
-            if diff_range > 0:
-                if (curr_price - lower) < diff_range * 0.1: disparity = "단기 과낙폭 상태"
-                elif (upper - curr_price) < diff_range * 0.1: disparity = "단기 고점 부담"
-                else: disparity = "적정 범위"
+        rsi_val, rsi_state, sentiment = _calc_rsi(prices)
+        bb_desc, disparity, is_squeeze = _calc_bollinger(prices, curr_price)
 
         summary = "데이터 수집 중 (신규/거래부족)"
         if ma20 > 0:
             summary = "방향성 탐색 구간"
-            if "정배열" in trend_main and rsi_val > 50: summary = "견조한 상승 추세"
-            elif "역배열" in trend_main and rsi_val < 30: summary = "과매도 구간 반등 기대"
-            elif vol_ratio > 200 and curr_price > ma20: summary = "거래량 동반 상승세"
-            elif rsi_val >= 70: summary = "단기 과열 주의"
-            elif is_squeeze: summary = "변동성 축소, 방향성 결정 임박"
+            if   "정배열" in trend_main and rsi_val > 50:   summary = "견조한 상승 추세"
+            elif "역배열" in trend_main and rsi_val < 30:   summary = "과매도 구간 반등 기대"
+            elif vol_ratio > 200 and curr_price > ma20:     summary = "거래량 동반 상승세"
+            elif rsi_val >= 70:                             summary = "단기 과열 주의"
+            elif is_squeeze:                                summary = "변동성 축소, 방향성 결정 임박"
 
         arrow = "🔺" if change_val > 0 else "🔹" if change_val < 0 else ""
-        header = f"📈 <b>[{name or code}] 기술적 심층 진단</b>"
         return (
-            f"{header}\n"
-            f"════════════\n" 
+            f"📈 <b>[{name or code}] 기술적 심층 진단</b>\n"
+            f"════════════\n"
             f"💰 {curr_price:,}원 ({arrow}{change_val:,})\n"
             f"📊 <b>거래강도:</b> 전일대비 {vol_ratio:.0f}% ({vol_desc})\n\n"
             f"1️⃣ <b>추세 (Trend)</b>\n"
