@@ -897,8 +897,6 @@ def job_collect_market():
         ok, fail = run_market()
         logging.info(f"📈 [시장수집] 완료: 성공 {ok}개, 실패 {fail}개")
         _log_notice("system", f"[시장수집] 완료 ({ok}개)")
-        # 관리종목/투자유의/시장경보 체크
-        _check_market_warnings()
     except Exception as e:
         logging.error(f"❌ [시장수집] 오류: {e}")
 
@@ -941,24 +939,39 @@ def _check_market_warnings():
 
         target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
 
-        WARN_LABEL = {'00': '정상', '01': '⚠️ 주의', '02': '🚨 경고', '03': '🆘 위험'}
-        lines = []
-        for a in new_alerts:
-            warn = WARN_LABEL.get(a.get('market_warn_code', '00'), '')
-            caution = '🔴 투자유의' if a.get('is_caution') else ''
-            chg = f"{'+' if (a.get('price_change_rate') or 0) >= 0 else ''}{a.get('price_change_rate', 0):.2f}%"
-            lines.append(
-                f"• <b>{a['corp_name']}</b> {warn}{' ' + caution if caution else ''} "
-                f"({a.get('price', 0):,}원 {chg})"
-            )
+        def _chg_str(a):
+            r = a.get('price_change_rate') or 0
+            return f"{'+' if r >= 0 else ''}{r:.2f}%"
+
+        # 그룹별 분류
+        GROUPS = [
+            ('03', '🆘 투자위험 종목 지정',   lambda a: a.get('market_warn_code') == '03'),
+            ('02', '🚨 투자경고 종목 지정',   lambda a: a.get('market_warn_code') == '02'),
+            ('01', '⚠️ 투자주의 종목 지정',   lambda a: a.get('market_warn_code') == '01'),
+            ('ca', '🔵 투자유의 종목 지정',   lambda a: a.get('is_caution') and (a.get('market_warn_code') or '00') == '00'),
+        ]
+
+        sections = []
+        for _, label, fn in GROUPS:
+            group = [a for a in new_alerts if fn(a)]
+            if not group:
+                continue
+            lines = [
+                f"• <b>{a['corp_name']}</b> ({a.get('price', 0):,}원 {_chg_str(a)})"
+                for a in group
+            ]
+            sections.append(f"<b>{label} ({len(group)})</b>\n" + "\n".join(lines))
+
+        if not sections:
+            return
 
         msg = (
-            f"⚠️ <b>[시장경보 신규 진입] {today}</b>\n"
-            f"{'─' * 20}\n"
-            + "\n".join(lines)
+            f"📢 <b>[거래소 신규 지정 종목] {today}</b>\n"
+            f"{'─' * 20}\n\n"
+            + "\n\n".join(sections)
         )
         stock_api.send_telegram(target, msg)
-        logging.info(f"⚠️ [시장경보] 신규 진입 {len(new_alerts)}개 알림 발송")
+        logging.info(f"📢 [시장경보] 신규 지정 {len(new_alerts)}개 알림 발송")
 
     except Exception as e:
         logging.debug(f"시장경보 체크 오류: {e}")
@@ -990,6 +1003,9 @@ def job_collect_market_closing():
 
     # 시장 수집 완료 후 관심가/목표가 도달 알림 (장 마감 기준)
     job_watchlist_alert()
+
+    # 거래소 신규 지정 종목 알림 (장 마감 후 1회)
+    _check_market_warnings()
 
 
 def job_sector_summary():
