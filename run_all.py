@@ -860,7 +860,7 @@ def job_collect_foreign_institution():
 
 
 def job_collect_new_high():
-    """장 마감 후 신고가 종목 수집"""
+    """장 마감 후 신고가 종목 수집 + 알림 발송"""
     if datetime.datetime.now().weekday() >= 5:
         return
     logging.info("=== 신고가 종목 수집 시작 ===")
@@ -868,8 +868,62 @@ def job_collect_new_high():
         import collect_market
         rows = collect_market.collect_new_high()
         logging.info(f"=== 신고가 수집 완료: {len(rows)}개 ===")
+        _alert_new_high(rows)
     except Exception as e:
         logging.error(f"❌ 신고가 수집 실패: {e}")
+
+
+def _alert_new_high(rows: list):
+    """
+    52주 신고가 갱신 알림 발송.
+    ① 모니터링 종목 → 해당 종목 채팅방 개별 발송
+    ② 모니터링 종목 중 신고가 갱신 전체 → 메인 채팅방 묶음 발송
+    """
+    if not rows:
+        return
+
+    today = datetime.date.today().isoformat()
+
+    # 모니터링 종목 코드 → 채팅방 ID 매핑 (CHAT_IDS_BY_CODE: {code: chat_id})
+    monitored = {}  # code → chat_id
+    for code, chat_id in CHAT_IDS_BY_CODE.items():
+        monitored[str(code).strip()] = chat_id
+
+    main_lines = []  # 메인방 묶음용
+
+    for r in rows:
+        code     = str(r.get('code', '')).strip()
+        name     = r.get('name', code)
+        price    = r.get('price', 0) or 0
+        chg_pct  = r.get('chg_pct', 0) or 0
+        d52_high = r.get('d52_high', 0) or 0
+        d52_low  = r.get('d52_low',  0) or 0
+
+        chg_str  = f"{'+' if chg_pct >= 0 else ''}{chg_pct:.2f}%"
+        chg_icon = '🔺' if chg_pct >= 0 else '🔻'
+
+        # ① 종목 채팅방 개별 알림
+        if code in monitored:
+            msg = (
+                f"🏆 <b>[{name}] 52주 신고가 갱신!</b>\n"
+                f"{'─' * 20}\n"
+                f"💰 현재가: {price:,}원 ({chg_icon}{chg_str})\n"
+                f"📈 52주 고가: {d52_high:,}원\n"
+                f"📉 52주 저가: {d52_low:,}원"
+            )
+            stock_api.send_telegram(monitored[code], msg)
+
+        # ② 메인방 묶음용 라인 누적
+        main_lines.append(f"• <b>{name}</b>  {price:,}원 ({chg_icon}{chg_str})")
+
+    # ② 메인 채팅방 묶음 발송
+    if main_lines:
+        header = (
+            f"🏆 <b>[52주 신고가 갱신] {today}</b>\n"
+            f"{'─' * 20}\n"
+        )
+        stock_api.send_telegram(DEFAULT_CHAT_ID, header + "\n".join(main_lines))
+        logging.info(f"🏆 [신고가 알림] 메인방 {len(main_lines)}개 발송")
 
 
 def job_collect_us_etf():
