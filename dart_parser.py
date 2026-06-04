@@ -717,7 +717,22 @@ def parse_mgmt_event(kv: dict) -> list:
         if bullets:
             lines.extend(bullets)
         else:
-            lines.append(f'  {_trunc(stripped, 120)}')
+            # 앞의 '- ' 또는 '· ' 제거 후 문장 단위로 자연스럽게 truncate
+            clean = re.sub(r'^[\-·•]\s*', '', stripped).strip()
+            # 150자 내에서 마지막 문장 종결('. ') 위치를 찾아 그 앞까지 표시
+            if len(clean) > 150:
+                cut = clean[:150]
+                # 마지막 '. ' 위치에서 끊기
+                last_period = cut.rfind('. ')
+                if last_period > 60:
+                    cut = cut[:last_period + 1]
+                else:
+                    # 마지막 공백에서 끊기
+                    last_space = cut.rfind(' ')
+                    if last_space > 60:
+                        cut = cut[:last_space]
+                clean = cut + '…'
+            lines.append(f'  {clean}')
 
     # 시험결과 (임상시험결과 공시)
     result_val = _get(kv, '2) 결과값', '결과값')
@@ -1810,13 +1825,37 @@ def parse_insider_report(kv: dict) -> list:
     return lines
 
 
+def _fmt_amendment_val(field_name: str, val: str) -> str:
+    """기재정정 비교값 포맷 — 금액/날짜/비율 필드에 맞게 변환."""
+    if not val or val in ('-', '—', '없음', 'N/A'):
+        return val
+    # 금액 필드
+    if any(kw in field_name for kw in ('금액', '가격', '대금', '보증금')):
+        try:
+            return _fmt_amount(val) + '원'
+        except Exception:
+            pass
+    # 날짜 필드
+    if any(kw in field_name for kw in ('일', '기간', '시작', '종료')):
+        cleaned = _clean_date(val)
+        if cleaned != val:
+            return cleaned
+    # 비율 필드
+    if any(kw in field_name for kw in ('대비', '비율', '%', '비중')):
+        nums = re.findall(r'\d+(?:\.\d+)?', val)
+        if nums:
+            return nums[0] + '%'
+    return _trunc(val, 40)
+
+
 def parse_amendment(kv: dict) -> list:
     """
     [기재정정] 공시 전용 파서 — 변경된 항목만 추출.
 
-    DART 정정 공시 KV 구조 (두 가지):
+    DART 정정 공시 KV 구조 (세 가지):
       패턴 A: "N. 섹션명 - 필드명": OLD  +  OLD: NEW
       패턴 B: "N. 섹션명": 부모헤더  +  "- 필드명: OLD": "- 필드명: NEW"
+      패턴 C: "정정전_필드명": OLD  +  "정정후_필드명": NEW  (접두어 방식)
     """
     lines = []
 
@@ -1829,7 +1868,25 @@ def parse_amendment(kv: dict) -> list:
     if v := _get(kv, '3. 정정사유', '정정사유'):
         lines.append(f'📋 사유: {_trunc(v, 80)}')
 
-    # ── 변경 항목 추출 ────────────────────────────────
+    change_lines = []
+
+    # ── 패턴 C: 정정전_* / 정정후_* 접두어 키 비교 (가장 신뢰도 높음) ──────
+    before_keys = {k[4:]: v for k, v in kv.items() if k.startswith('정정전')}
+    after_keys  = {k[4:]: v for k, v in kv.items() if k.startswith('정정후')}
+    for field, old_v in before_keys.items():
+        new_v = after_keys.get(field, '')
+        old_c = re.sub(r'\s+', ' ', old_v).strip()
+        new_c = re.sub(r'\s+', ' ', new_v).strip()
+        if old_c and new_c and old_c != new_c:
+            old_fmt = _fmt_amendment_val(field, old_c)
+            new_fmt = _fmt_amendment_val(field, new_c)
+            change_lines.append(f'🔧 {field}: {old_fmt} → {new_fmt}')
+
+    if change_lines:
+        lines.extend(change_lines)
+        return lines
+
+    # ── 패턴 A / B: 정정항목 섹션 파싱 ──────────────────────────────────────
     items = list(kv.items())
     header_idx = next((i for i, (k, _) in enumerate(items) if k == '정정항목'), None)
     if header_idx is None:
@@ -1839,20 +1896,23 @@ def parse_amendment(kv: dict) -> list:
     while i < len(items):
         k, val = items[i]
 
-        # 패턴 A: "N. 섹션명 - 필드명" + OLD값, 다음 행에 OLD→NEW
+        # 패턴 A: "N. 섹션명 - 필드명": OLD  +  OLD: NEW
         m = re.match(r'^\d+\.\s+.+\s+-\s+(.+)$', k)
         if m:
             field_name = m.group(1).strip()
             new_val    = kv.get(val.strip(), '')
-            old_clean, new_clean = val.strip(), new_val.strip()
+            old_clean  = val.strip()
+            new_clean  = new_val.strip()
             if old_clean and new_clean and old_clean != new_clean:
-                lines.append(f'🔧 {field_name}: {_trunc(old_clean, 40)} → {_trunc(new_clean, 40)}')
+                old_fmt = _fmt_amendment_val(field_name, old_clean)
+                new_fmt = _fmt_amendment_val(field_name, new_clean)
+                change_lines.append(f'🔧 {field_name}: {old_fmt} → {new_fmt}')
             elif old_clean:
-                lines.append(f'🔧 {field_name}: {_trunc(old_clean, 70)}')
+                change_lines.append(f'🔧 {field_name}: {_fmt_amendment_val(field_name, old_clean)}')
             i += 2
             continue
 
-        # 패턴 B: "N. 섹션명" 부모 헤더 → 하위에 "- 필드: old" → "- 필드: new" 행들
+        # 패턴 B: "N. 섹션명" 부모 헤더 → 하위 "- 필드: old" / "- 필드: new"
         if re.match(r'^\d+\.\s+\S', k):
             j = i + 1
             while j < len(items):
@@ -1862,15 +1922,20 @@ def parse_amendment(kv: dict) -> list:
                 mo = re.match(r'^-\s*(.+?):\s*(.+)$', ck)
                 mn = re.match(r'^-\s*(.+?):\s*(.+)$', cv)
                 if mo and mn:
-                    old_v, new_v = mo.group(2).strip(), mn.group(2).strip()
+                    fname  = mo.group(1).strip()
+                    old_v  = mo.group(2).strip()
+                    new_v  = mn.group(2).strip()
                     if old_v != new_v:
-                        lines.append(f'🔧 {mo.group(1).strip()}: {_trunc(old_v, 40)} → {_trunc(new_v, 40)}')
+                        old_fmt = _fmt_amendment_val(fname, old_v)
+                        new_fmt = _fmt_amendment_val(fname, new_v)
+                        change_lines.append(f'🔧 {fname}: {old_fmt} → {new_fmt}')
                 j += 1
             i = j
             continue
 
         break  # 정정 섹션 끝
 
+    lines.extend(change_lines)
     return lines
 
 
