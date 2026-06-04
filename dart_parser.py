@@ -519,38 +519,91 @@ def parse_rights_offering(kv: dict) -> list:
     return lines
 
 
+def _clean_party(raw: str) -> str:
+    """계약상대방 값에서 참고사항 주석(- 상기...) 제거 후 업체명만 반환.
+    값이 '- 상기...' 형태로 시작하면 내부 고유명사(대문자+괄호 패턴) 추출 시도."""
+    if not raw:
+        return raw
+    # 줄 단위로 분리 후 주석 전 첫 번째 실제 값 추출
+    first_line = raw.split(' - ')[0].strip()
+    if first_line and not first_line.startswith('-'):
+        return first_line[:80]
+    # 값 전체가 주석으로 시작하는 경우 — 영문 업체명 패턴 추출 시도
+    m = re.search(r'([A-Z][A-Za-z0-9\s\(\)]+(?:Co\.|Corp\.|Ltd\.|LLC|Inc\.|Board|Project|Power|Plant|Vietnam|Korea|China|Japan|USA)[A-Za-z0-9\s\(\)]*)', raw)
+    if m:
+        return m.group(1).strip()[:80]
+    return '미상'
+
+
+def _clean_date(raw: str) -> str:
+    """날짜 값에서 날짜 패턴만 추출. 참고사항이 붙어있으면 제거."""
+    if not raw:
+        return raw
+    # YYYY-MM-DD 또는 YYYY/MM/DD 패턴 추출
+    m = re.search(r'\d{4}[-/]\d{2}[-/]\d{2}', raw)
+    if m:
+        return m.group(0)
+    # '미확정', '협의중', '미정' 키워드 포함 시
+    if any(kw in raw for kw in ['협의', '미확정', '미정', '미결정', '추후']):
+        return '미정'
+    # 숫자로만 이루어진 날짜(YYYYMMDD)
+    m2 = re.search(r'\d{8}', raw)
+    if m2:
+        d = m2.group(0)
+        return f'{d[:4]}-{d[4:6]}-{d[6:]}'
+    return raw[:20] if len(raw) > 20 else raw
+
+
+def _clean_ratio(raw: str) -> str:
+    """매출액대비(%) 값 정리.
+    기재정정 시 '16.02 21.92' 형태로 정정전/후 두 값이 붙는 경우 처리."""
+    if not raw:
+        return raw
+    # 숫자만 추출
+    nums = re.findall(r'\d+(?:\.\d+)?', raw)
+    if len(nums) >= 2:
+        # 두 값이면 정정전 → 정정후 형식으로 표시
+        return f'{nums[0]}% → {nums[-1]}%'
+    if nums:
+        return f'{nums[0]}%'
+    return raw
+
+
 def parse_contract(kv: dict) -> list:
     """단일판매ㆍ공급계약체결 / 수주"""
     lines = []
 
     # 계약명
     if v := _get(kv, '체결계약명', '계약명'):
-        lines.append(f'📋 계약명: {_trunc(v, 50)}')
+        lines.append(f'📋 계약명: {_trunc(v, 60)}')
 
-    # 계약상대 + 지역
+    # 계약상대 + 지역 — 참고사항 주석 제거
     party  = _get(kv, '계약상대', '거래상대방', '발주처', '매수인')
     region = _get(kv, '판매ㆍ공급지역', '공급지역', '수주지역', '납품지역')
     if party:
-        lines.append(f'🏢 상대방: {party}' + (f' ({region})' if region else ''))
+        party_clean = _clean_party(party)
+        lines.append(f'🏢 상대방: {party_clean}' + (f' ({_trunc(region, 30)})' if region else ''))
 
-    # 계약금액 + 매출비중
+    # 계약금액 + 매출비중 — 정정전/후 두 값 처리
     amount = _get(kv, '계약금액(원)', '계약금액', '공급금액', '수주금액', '거래금액')
     ratio  = _get(kv, '매출액대비(%)', '최근매출액대비', '매출액 대비')
     if amount:
-        ratio_str = f' (매출대비 {ratio}%)' if ratio else ''
+        ratio_str = f' (매출대비 {_clean_ratio(ratio)})' if ratio else ''
         lines.append(f'💰 계약금액: {_fmt_amount(amount)}원{ratio_str}')
 
-    # 계약기간
+    # 계약기간 — 날짜만 추출, 참고사항 제거
     start = _get(kv, '시작일')
     end   = _get(kv, '종료일')
-    if start and end:
-        lines.append(f'📅 계약기간: {start} ~ {end}')
-    elif start:
-        lines.append(f'📅 시작일: {start}')
+    start_clean = _clean_date(start) if start else None
+    end_clean   = _clean_date(end)   if end   else None
+    if start_clean and end_clean:
+        lines.append(f'📅 계약기간: {start_clean} ~ {end_clean}')
+    elif start_clean:
+        lines.append(f'📅 시작일: {start_clean}')
 
     # 대금지급 조건
     if v := _get(kv, '대금지급 조건', '지급조건', '대금지급'):
-        lines.append(f'💳 지급조건: {_trunc(v, 50)}')
+        lines.append(f'💳 지급조건: {_trunc(v, 60)}')
 
     return lines
 
@@ -912,8 +965,10 @@ def parse_debt_guarantee(kv: dict) -> list:
     # 보증기간
     start = _get(kv, '시작일')
     end   = _get(kv, '종료일')
-    if start and end:
-        lines.append(f'📅 보증기간: {start} ~ {end}')
+    start_clean = _clean_date(start) if start else None
+    end_clean   = _clean_date(end)   if end   else None
+    if start_clean and end_clean:
+        lines.append(f'📅 보증기간: {start_clean} ~ {end_clean}')
 
     # 이사회결의일
     if v := _get(kv, '6. 이사회결의일(결정일)', '이사회결의일'):
