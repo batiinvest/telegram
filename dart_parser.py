@@ -534,6 +534,14 @@ def parse_rights_offering(kv: dict) -> list:
     return lines
 
 
+def _is_footnote(val: str) -> bool:
+    """값이 각주/부연설명 텍스트인지 판단.
+    '1. 적용환율', '2. 동 계약' 등 번호+설명으로 시작하고 100자 초과인 경우."""
+    if not val or len(val) < 30:
+        return False
+    return bool(re.match(r'^\d+\s*[.）)]\s*\S', val.strip())) and len(val) > 80
+
+
 def _clean_party(raw: str) -> str:
     """계약상대방 값에서 주소·주석 제거 후 업체명만 반환."""
     if not raw:
@@ -594,27 +602,45 @@ def parse_contract(kv: dict) -> list:
     if v := _get(kv, '체결계약명', '계약명'):
         lines.append(f'📋 계약명: {_trunc(v, 60)}')
 
-    # 계약상대 + 지역 — 참고사항 주석 제거
+    # 계약상대 + 지역 — 각주(1. 적용환율... 형태) 필터링
     party  = _get(kv, '계약상대', '거래상대방', '발주처', '매수인')
     region = _get(kv, '판매ㆍ공급지역', '공급지역', '수주지역', '납품지역')
-    if party:
+    if party and not _is_footnote(party):
         party_clean = _clean_party(party)
-        lines.append(f'🏢 상대방: {party_clean}' + (f' ({_trunc(region, 30)})' if region else ''))
+        region_str = f' ({_trunc(region, 30)})' if region and not _is_footnote(region) else ''
+        lines.append(f'🏢 상대방: {party_clean}{region_str}')
 
-    # 계약금액 + 매출비중 — 정정전/후 두 값 처리
+    # 계약금액 + 매출비중 — '- 계약금액: 숫자 - 매출액대비: 숫자' 복합값 처리
     amount = _get(kv, '계약금액(원)', '계약금액', '공급금액', '수주금액', '거래금액')
     ratio  = _get(kv, '매출액대비(%)', '최근매출액대비', '매출액 대비')
     if amount:
-        ratio_str = f' (매출대비 {_clean_ratio(ratio)})' if ratio else ''
-        lines.append(f'💰 계약금액: {_fmt_amount(amount)}원{ratio_str}')
+        # 복합값에서 계약금액 숫자 추출
+        m_amt = re.search(r'계약금액\s*[：:]\s*([\d,]+)', amount)
+        amt_clean = m_amt.group(1) if m_amt else amount
+        # 복합값에서 매출대비 비율 추출 (ratio 필드에도 같은 복합값이 올 수 있음)
+        ratio_src = ratio or amount
+        m_ratio = re.search(r'대비\s*[：:]\s*([\d.]+)', ratio_src)
+        ratio_clean = m_ratio.group(1) if m_ratio else (_clean_ratio(ratio) if ratio else '')
+        ratio_str = f' (매출대비 {ratio_clean}%)' if ratio_clean else ''
+        lines.append(f'💰 계약금액: {_fmt_amount(amt_clean)}원{ratio_str}')
 
-    # 계약기간 — 날짜만 추출, 참고사항 제거
+    # 계약기간 — 각주 필터링, 날짜만 추출
     start = _get(kv, '시작일')
     end   = _get(kv, '종료일')
-    start_clean = _clean_date(start) if start else None
-    end_clean   = _clean_date(end)   if end   else None
+    start_clean = _clean_date(start) if start and not _is_footnote(start) else None
+    end_clean   = _clean_date(end)   if end   and not _is_footnote(end)   else None
+    # 정정 섹션에서 종료일만 바뀐 경우 종료일은 kv에서 직접 탐색
+    if not end_clean:
+        for k, v in kv.items():
+            if '종료일' in k and v:
+                d = _clean_date(v)
+                if re.match(r'^\d{4}-\d{2}-\d{2}$', d):
+                    end_clean = d
+                    break
     if start_clean and end_clean:
         lines.append(f'📅 계약기간: {start_clean} ~ {end_clean}')
+    elif end_clean:
+        lines.append(f'📅 종료일: {end_clean}')
     elif start_clean:
         lines.append(f'📅 시작일: {start_clean}')
 
@@ -1957,8 +1983,22 @@ def _fmt_amendment_val(field_name: str, val: str) -> str:
     """기재정정 비교값 포맷 — 금액/날짜/비율 필드에 맞게 변환."""
     if not val or val in ('-', '—', '없음', 'N/A'):
         return val
-    # 금액 필드
+    # 비율 필드 — '- 계약금액:... - 매출액대비 : 70.12' 복합값에서 비율만 추출
+    if any(kw in field_name for kw in ('대비', '비율', '%', '비중')):
+        m = re.search(r'대비\s*[：:]\s*([\d.]+)', val)
+        if m:
+            return m.group(1) + '%'
+        nums = re.findall(r'\d+(?:\.\d+)?', val)
+        if nums:
+            return nums[-1] + '%'
+    # 금액 필드 — '- 계약금액: 141987535126' 복합값에서 숫자만 추출
     if any(kw in field_name for kw in ('금액', '가격', '대금', '보증금')):
+        m = re.search(r'([\d,]{5,})', val)
+        if m:
+            try:
+                return _fmt_amount(m.group(1)) + '원'
+            except Exception:
+                pass
         try:
             return _fmt_amount(val) + '원'
         except Exception:
@@ -1968,11 +2008,6 @@ def _fmt_amendment_val(field_name: str, val: str) -> str:
         cleaned = _clean_date(val)
         if cleaned != val:
             return cleaned
-    # 비율 필드
-    if any(kw in field_name for kw in ('대비', '비율', '%', '비중')):
-        nums = re.findall(r'\d+(?:\.\d+)?', val)
-        if nums:
-            return nums[0] + '%'
     return _trunc(val, 40)
 
 
