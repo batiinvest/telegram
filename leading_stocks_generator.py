@@ -1,18 +1,20 @@
 """
 leading_stocks_generator.py
 ────────────────────────────
-주도주 탐색기 — 매 영업일 장 마감 후 4개 지표 복합 스코어로
+주도주 탐색기 — 매 영업일 장 마감 후 복합 스코어로
 Top 50 주도주를 계산해 leading_stocks 테이블에 저장.
 
 스코어 구성 (합계 max 100):
-  price_momentum (max 30) : 5일/20일 수익률 복합 백분위 (5일 60%, 20일 40%)
-  volume_surge   (max 25) : 당일 거래대금 / 20일 평균 배율 (최대 5배 캡)
-  foreign_flow   (max 25) : 3일 누적 외국인 순매수 백분위
-  hgpr_score     (max 20) : 52주 신고가 종목 일괄 +20
+  price_momentum  (max 25) : 5일·20일·60일 수익률 백분위 + 추세 일관성 보너스
+  volume_surge    (max 20) : 거래대금 배율 × 방향성 × 3일 지속성
+  foreign_flow    (max 25) : 10일 누적 외국인 순매수 금액 백분위  (구 3일)
+  sector_strength (max 15) : 업종 평균 대비 초과 수익률 백분위    (신규)
+  hgpr_score      (max 15) : 52주 고가 근접도 연속 점수화
 
 필터:
-  시가총액 500억 이상 (5e10 원)
-  당일 거래대금 100억 이상 (1e10 원 = volume × price)
+  시가총액 500억 이상
+  당일 거래대금 100억 이상
+  하락장 조정: 시장 전체 20일 평균 수익률이 -3% 미만이면 momentum 기준 강화
 
 Supabase 테이블: leading_stocks
   base_date, stock_code UNIQUE
@@ -30,7 +32,6 @@ Supabase 테이블: leading_stocks
 import os
 import sys
 import time
-import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -43,7 +44,6 @@ log = get_logger(__name__)
 # ── Supabase 클라이언트 ──────────────────────────────────────────────────────
 try:
     from supabase import create_client, Client
-    # .env 키 이름은 supabase_bridge.py와 동일하게 SB_URL / SB_SERVICE_KEY 사용
     SUPABASE_URL = os.environ.get('SB_URL', os.environ.get('SUPABASE_URL', ''))
     SUPABASE_KEY = os.environ.get('SB_SERVICE_KEY', os.environ.get('SUPABASE_KEY', ''))
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -52,16 +52,17 @@ try:
     log.info('Supabase 연결 완료')
 except Exception as e:
     log.error(f'Supabase 연결 실패: {e}')
-    # sys.exit(1) 제거 — run_all.py 스레드로 호출될 때 전체 프로세스 종료 방지
-    # 대신 RuntimeError를 raise해 호출자가 처리하도록
     raise RuntimeError(f'leading_stocks_generator: Supabase 연결 실패 — {e}') from e
 
 # ── 상수 ─────────────────────────────────────────────────────────────────────
-LOOKBACK_DAYS   = 25     # 최근 25 거래일 조회
+LOOKBACK_DAYS   = 70     # 최근 70일 소급 (60거래일 확보용)
 TOP_N           = 50     # 저장할 상위 종목 수
-MIN_MARKET_CAP  = 50_000_000_000    # 시가총액 500억 이상 (원)
-MIN_TRADE_VALUE = 10_000_000_000    # 거래대금 100억 이상 (원, volume×price)
-HGPR_VALUES     = {'신고가', '52주 신고가', '1'}  # 신고가 코드
+MIN_MARKET_CAP  = 50_000_000_000    # 시가총액 500억 이상
+MIN_TRADE_VALUE = 10_000_000_000    # 거래대금 100억 이상
+HGPR_VALUES     = {'신고가', '52주 신고가', '1'}
+
+# 하락장 판단 기준 (시장 평균 20일 수익률이 이 값 미만이면 하락장)
+BEAR_MARKET_THRESHOLD = -3.0  # %
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -81,15 +82,16 @@ def get_latest_date(target: str | None) -> str:
 
 
 def fetch_history(base_date: str) -> list[dict]:
-    """base_date 기준 최근 LOOKBACK_DAYS 거래일 데이터 페이지네이션 조회"""
+    """base_date 기준 최근 LOOKBACK_DAYS × 2 캘린더일 데이터 조회"""
     dt       = datetime.strptime(base_date, '%Y-%m-%d')
-    from_dt  = dt - timedelta(days=LOOKBACK_DAYS * 2)  # 여유 소급
+    from_dt  = dt - timedelta(days=LOOKBACK_DAYS * 2)
     from_str = from_dt.strftime('%Y-%m-%d')
 
     log.info(f'market_data 조회: {from_str} ~ {base_date}')
     rows = fetch_all_pages(
         sb.from_('market_data')
-          .select('base_date,stock_code,corp_name,market,price,volume,market_cap,foreign_net_buy,hgpr_cls_code,w52_high')
+          .select('base_date,stock_code,corp_name,market,price,volume,'
+                  'market_cap,foreign_net_buy,hgpr_cls_code,w52_high')
           .gte('base_date', from_str)
           .lte('base_date', base_date)
           .order('base_date', desc=False)
@@ -99,7 +101,7 @@ def fetch_history(base_date: str) -> list[dict]:
 
 
 def fetch_industry_map() -> dict[str, str]:
-    """companies 테이블에서 전체 stock_code → industry 매핑 (is_monitored 무관)"""
+    """companies 테이블에서 stock_code → industry 매핑"""
     rows = fetch_all_pages(
         sb.from_('companies')
           .select('code,industry')
@@ -115,7 +117,7 @@ def fetch_industry_map() -> dict[str, str]:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-#  2. 스코어 계산
+#  2. 헬퍼
 # ────────────────────────────────────────────────────────────────────────────
 def _percentile_rank(values: list, v) -> float:
     """v가 values 중 몇 번째 백분위인가 (0~1). None → 중립 0.5"""
@@ -128,6 +130,31 @@ def _percentile_rank(values: list, v) -> float:
     return below / len(non_null)
 
 
+def _is_bear_market(by_date: dict, trading_days: list, today_idx: int) -> bool:
+    """
+    시장 전체 평균 20일 수익률로 하락장 여부 판단.
+    KOSPI 전 종목 평균을 시장 프록시로 사용.
+    """
+    if today_idx < 20:
+        return False
+    today_rows  = by_date[trading_days[today_idx]]
+    prev20_rows = by_date[trading_days[today_idx - 20]]
+    returns = []
+    for code, today in today_rows.items():
+        prev = prev20_rows.get(code)
+        if prev and prev.get('price') and today.get('price'):
+            r = (today['price'] / prev['price'] - 1) * 100
+            returns.append(r)
+    if not returns:
+        return False
+    avg_ret = sum(returns) / len(returns)
+    log.info(f'시장 20일 평균 수익률: {avg_ret:.2f}% → {"하락장" if avg_ret < BEAR_MARKET_THRESHOLD else "보통장"}')
+    return avg_ret < BEAR_MARKET_THRESHOLD
+
+
+# ────────────────────────────────────────────────────────────────────────────
+#  3. 스코어 계산
+# ────────────────────────────────────────────────────────────────────────────
 def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[dict]:
     # ─ 날짜별 그룹화 ─
     by_date: dict[str, dict[str, dict]] = defaultdict(dict)
@@ -143,6 +170,9 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
     today_idx  = len(trading_days) - 1
     log.info(f'오늘({target_date}) 종목 수: {len(today_rows):,}')
 
+    # 하락장 여부 (전체 점수 보정용)
+    bear_market = _is_bear_market(by_date, trading_days, today_idx)
+
     # ─ 종목별 지표 계산 ─
     records = []
     for stock_code, today in today_rows.items():
@@ -151,7 +181,6 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
         market_cap = today.get('market_cap') or 0
         tv         = price * volume
 
-        # 필터 적용
         if market_cap < MIN_MARKET_CAP:
             continue
         if tv < MIN_TRADE_VALUE:
@@ -162,9 +191,6 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
         industry  = ind_map.get(stock_code, '')
         hgpr_cls  = str(today.get('hgpr_cls_code') or '')
 
-        # ① 가격 모멘텀: 5일 40% + 20일 40% + 60일 20%
-        # 구: 5일 60% + 20일 40% → 단기 편중
-        # 개: 60일 추가로 진짜 주도주(꾸준한 중기 우상향) 포착
         def price_n_ago(n: int):
             idx = today_idx - n
             if idx < 0:
@@ -173,16 +199,24 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
             p   = row.get('price') if row else None
             return p if p and p > 0 else None
 
+        # ── 수익률 ──
+        p1  = price_n_ago(1)
         p5  = price_n_ago(5)
         p20 = price_n_ago(20)
-        p60 = price_n_ago(min(60, today_idx))  # 데이터 부족 시 최대 활용
+        p60 = price_n_ago(min(60, today_idx))
+
+        chg1  = round((price / p1  - 1) * 100, 2) if p1  else 0.0
         chg5  = round((price / p5  - 1) * 100, 2) if p5  else None
         chg20 = round((price / p20 - 1) * 100, 2) if p20 else None
         chg60 = round((price / p60 - 1) * 100, 2) if p60 else None
 
-        # ② 거래대금 급증 × 방향성 연계
-        # 구: 방향 무관 거래대금 배율만 반영 (패닉셀도 고점수)
-        # 개: 당일 등락 방향으로 가중/감쇄 — 상승 + 거래대금 폭증이 진짜 매수세
+        # ── 추세 일관성: 5일·20일·60일 모두 양수인지 ──
+        # 단기·중기·장기가 모두 우상향 = 진짜 주도주
+        positive_count = sum(1 for c in [chg5, chg20, chg60] if c is not None and c > 0)
+        # 3개 모두 양수: 1.25배, 2개: 1.0배, 1개 이하: 0.8배
+        trend_consistency = 1.25 if positive_count == 3 else (1.0 if positive_count == 2 else 0.8)
+
+        # ── 거래대금 배율 ──
         past_tvs = []
         for i in range(max(0, today_idx - 20), today_idx):
             r = by_date[trading_days[i]].get(stock_code)
@@ -191,84 +225,122 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
         avg_tv    = sum(past_tvs) / len(past_tvs) if past_tvs else tv
         vol_ratio = round(tv / avg_tv, 2) if avg_tv else 1.0
 
-        # 당일 등락률 (전일 대비)
-        p1 = price_n_ago(1)
-        chg1 = round((price / p1 - 1) * 100, 2) if p1 else 0.0
-        # 상승이면 최대 1.0 유지, 하락이면 최대 0.5로 캡 (패닉셀 페널티)
+        # 당일 방향성 페널티 (하락 + 거래대금 급증 = 패닉셀)
         dir_weight = 1.0 if chg1 >= 0 else 0.5
 
-        # ③ 외국인 3일 누적 순매수 — 금액 환산
-        # 구: 주(株) 단위 합산 → 저가주/고가주 왜곡
-        # 개: 순매수주 × 당일가 → 금액(원) 기준 백분위
-        frgn_3d_amt = 0.0
-        for i in range(max(0, today_idx - 2), today_idx + 1):
+        # ── 거래대금 3일 연속 증가 여부 (지속성) ──
+        # 주도주는 하루 이벤트가 아니라 꾸준히 거래가 늘어야 함
+        tv_series = []
+        for i in range(max(0, today_idx - 3), today_idx + 1):
+            r = by_date[trading_days[i]].get(stock_code)
+            if r and r.get('volume') and r.get('price'):
+                tv_series.append(r['volume'] * r['price'])
+        vol_continuous = (
+            len(tv_series) >= 3 and
+            all(tv_series[i] < tv_series[i+1] for i in range(len(tv_series)-1))
+        )
+
+        # ── 외국인 10일 누적 순매수 금액 (구 3일) ──
+        # 3일은 단기 포지션 조정, 10일이 실제 추세 매수
+        frgn_10d_amt = 0.0
+        for i in range(max(0, today_idx - 9), today_idx + 1):
             r = by_date[trading_days[i]].get(stock_code)
             if r and r.get('foreign_net_buy') is not None:
-                day_price = r.get('price') or price  # 해당일 가격, 없으면 오늘 가격
-                frgn_3d_amt += r['foreign_net_buy'] * day_price
+                day_price = r.get('price') or price
+                frgn_10d_amt += r['foreign_net_buy'] * day_price
 
-        # ④ 52주 신고가 근접도 — 연속 점수화
-        # 구: 신고가 여부만 (0 or 20) → 99% 근접도 0점 처리
-        # 개: 52주 고가 대비 현재 가격 비율로 연속 점수
-        #     w52_high 컬럼 없으면 hgpr_cls_code 이진 fallback
-        w52_high = today.get('w52_high') or 0
-        if w52_high and w52_high > 0:
-            hgpr_ratio = min(price / w52_high, 1.0)  # 현재가 / 52주 고가 (최대 1.0)
-        else:
-            # w52_high 없을 때: 신고가면 1.0, 아니면 0.7 fallback
-            hgpr_ratio = 1.0 if hgpr_cls in HGPR_VALUES else 0.7
+        # ── 52주 고가 근접도 ──
+        w52_high   = today.get('w52_high') or 0
+        hgpr_ratio = (
+            min(price / w52_high, 1.0) if w52_high and w52_high > 0
+            else (1.0 if hgpr_cls in HGPR_VALUES else 0.7)
+        )
 
         records.append({
-            'stock_code':   stock_code,
-            'corp_name':    corp_name,
-            'market':       market,
-            'industry':     industry,
-            'price':        price,
-            'market_cap':   market_cap,
-            'tv':           tv,
-            'chg1':         chg1,
-            'chg5':         chg5,
-            'chg20':        chg20,
-            'chg60':        chg60,
-            'vol_ratio':    vol_ratio,
-            'dir_weight':   dir_weight,
-            'frgn_3d_amt':  round(frgn_3d_amt, 0),
-            'hgpr_ratio':   round(hgpr_ratio, 4),
+            'stock_code':       stock_code,
+            'corp_name':        corp_name,
+            'market':           market,
+            'industry':         industry,
+            'price':            price,
+            'market_cap':       market_cap,
+            'tv':               tv,
+            'chg1':             chg1,
+            'chg5':             chg5,
+            'chg20':            chg20,
+            'chg60':            chg60,
+            'trend_consistency':trend_consistency,
+            'vol_ratio':        vol_ratio,
+            'dir_weight':       dir_weight,
+            'vol_continuous':   vol_continuous,
+            'frgn_10d_amt':     round(frgn_10d_amt, 0),
+            'hgpr_ratio':       round(hgpr_ratio, 4),
         })
 
-    log.info(f'필터 통과: {len(records):,}개')
+    log.info(f'필터 통과: {len(records):,}개 (하락장={bear_market})')
     if not records:
         return []
 
-    # ─ 백분위 정규화 ─
-    chg5_vals   = [r['chg5']      for r in records]
-    chg20_vals  = [r['chg20']     for r in records]
-    chg60_vals  = [r['chg60']     for r in records]
-    frgn_vals   = [r['frgn_3d_amt'] for r in records]
+    # ── 업종별 평균 5일 수익률 계산 (업종 상대 강도용) ──
+    ind_chg5: dict[str, list] = defaultdict(list)
+    for r in records:
+        if r['industry'] and r['chg5'] is not None:
+            ind_chg5[r['industry']].append(r['chg5'])
+    ind_avg_chg5 = {
+        ind: sum(vals) / len(vals)
+        for ind, vals in ind_chg5.items() if vals
+    }
+
+    # ── 백분위 정규화용 전체 분포 ──
+    chg5_vals   = [r['chg5']        for r in records]
+    chg20_vals  = [r['chg20']       for r in records]
+    chg60_vals  = [r['chg60']       for r in records]
+    frgn_vals   = [r['frgn_10d_amt'] for r in records]
+
+    # 업종 초과 수익률 분포 (sector_strength 백분위용)
+    excess_vals = []
+    for r in records:
+        avg = ind_avg_chg5.get(r['industry'])
+        excess = (r['chg5'] - avg) if (r['chg5'] is not None and avg is not None) else None
+        excess_vals.append(excess)
 
     scored = []
-    for r in records:
-        # ① 가격 모멘텀 (max 30): 5일 40% + 20일 40% + 60일 20%
+    for i, r in enumerate(records):
+        # ① 가격 모멘텀 (max 25)
+        #    5일·20일·60일 백분위 복합 + 추세 일관성 보너스
+        #    하락장에서는 momentum 기준 자동 강화 (상대 강도 더 중요)
         pct5  = _percentile_rank(chg5_vals,  r['chg5'])
         pct20 = _percentile_rank(chg20_vals, r['chg20'])
         pct60 = _percentile_rank(chg60_vals, r['chg60'])
         pct_mom = pct5 * 0.4 + pct20 * 0.4 + pct60 * 0.2
-        price_momentum = round(pct_mom * 30)
+        raw_mom = pct_mom * r['trend_consistency']  # 추세 일관성 가중
+        # 하락장: 상위 20% 이상 종목만 만점 가능하도록 기준 강화
+        if bear_market:
+            raw_mom = raw_mom * pct_mom  # 하락장 페널티 (상위권만 높은 점수)
+        price_momentum = min(round(raw_mom * 25), 25)
 
-        # ② 거래대금 급증 × 방향성 (max 25)
-        # 상승일: 최대 5배 캡 그대로, 하락일: 0.5 가중으로 패닉셀 페널티
+        # ② 거래대금 (max 20)
+        #    배율 × 방향성 × 지속성 보너스
         capped       = min(r['vol_ratio'], 5.0) / 5.0 * r['dir_weight']
-        volume_surge = round(capped * 25)
+        continuity   = 1.15 if r['vol_continuous'] else 1.0  # 3일 연속 증가 +15%
+        volume_surge = min(round(capped * continuity * 20), 20)
 
-        # ③ 외국인 수급 — 금액 기준 백분위 (max 25)
-        pct_frgn     = _percentile_rank(frgn_vals, r['frgn_3d_amt'])
+        # ③ 외국인 수급 (max 25)
+        #    10일 누적 금액 백분위
+        pct_frgn     = _percentile_rank(frgn_vals, r['frgn_10d_amt'])
         foreign_flow = round(pct_frgn * 25)
 
-        # ④ 52주 고가 근접도 (max 20) — 연속 점수화
-        # 1.0(신고가 갱신) → 20점, 0.9(90% 근접) → 16점, 0.7(70%) → 8점
-        hgpr_score = round(r['hgpr_ratio'] ** 2 * 20)  # 제곱으로 고근접 종목 차별화
+        # ④ 업종 상대 강도 (max 15) — 신규
+        #    동일 업종 평균 대비 초과 수익률 백분위
+        #    업종 전체가 오를 때 업종 내 1등 = 진짜 주도주
+        pct_excess      = _percentile_rank(excess_vals, excess_vals[i])
+        sector_strength = round(pct_excess * 15)
 
-        total_score = price_momentum + volume_surge + foreign_flow + hgpr_score
+        # ⑤ 52주 고가 근접도 (max 15)
+        #    제곱으로 고근접 종목 차별화
+        #    1.0(신고가) → 15점, 0.9 → 12점, 0.7 → 7점
+        hgpr_score = min(round(r['hgpr_ratio'] ** 2 * 15), 15)
+
+        total_score = price_momentum + volume_surge + foreign_flow + sector_strength + hgpr_score
 
         scored.append({
             **r,
@@ -276,12 +348,13 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
             'price_momentum': price_momentum,
             'volume_surge':   volume_surge,
             'foreign_flow':   foreign_flow,
+            'sector_strength':sector_strength,
             'hgpr_score':     hgpr_score,
-            # 저장용 alias (DB 컬럼명 유지)
-            'frgn_3d':        round(r['frgn_3d_amt'] / max(r['price'], 1)),  # 역산 주 단위 근사
+            # DB 저장용 alias
+            'frgn_3d':        round(r['frgn_10d_amt'] / max(r['price'], 1)),
         })
 
-    # 정렬 + 순위
+    # ─ 정렬 + 순위 ─
     scored.sort(key=lambda x: x['total_score'], reverse=True)
     for i, r in enumerate(scored[:TOP_N]):
         r['rank'] = i + 1
@@ -290,17 +363,17 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
     log.info('Top 5 미리보기:')
     for r in top[:5]:
         log.info(
-            f"  #{r['rank']:2d} {r['corp_name']:<12} "
-            f"총{r['total_score']:3d}pt "
-            f"(가격{r['price_momentum']}+거래{r['volume_surge']}+외국인{r['foreign_flow']}+신고가{r['hgpr_score']}) "
-            f"5d={r['chg5']}% 20d={r['chg20']}% 60d={r['chg60']}% "
-            f"vol×{r['vol_ratio']}(dir={r['dir_weight']}) hgpr={r['hgpr_ratio']:.2f}"
+            f"  #{r['rank']:2d} {r['corp_name']:<12} 총{r['total_score']:3d}pt "
+            f"(모멘텀{r['price_momentum']} 거래{r['volume_surge']} "
+            f"외국인{r['foreign_flow']} 섹터{r['sector_strength']} 신고가{r['hgpr_score']}) "
+            f"5d={r['chg5']}% 20d={r['chg20']}% consistency={r['trend_consistency']} "
+            f"vol_cont={r['vol_continuous']} hgpr={r['hgpr_ratio']:.2f}"
         )
     return top
 
 
 # ────────────────────────────────────────────────────────────────────────────
-#  3. Supabase 저장
+#  4. Supabase 저장
 # ────────────────────────────────────────────────────────────────────────────
 def save_results(base_date: str, scored: list[dict]):
     if not scored:
@@ -335,7 +408,7 @@ def save_results(base_date: str, scored: list[dict]):
 
 
 # ────────────────────────────────────────────────────────────────────────────
-#  4. 메인 실행
+#  5. 메인 실행
 # ────────────────────────────────────────────────────────────────────────────
 def run(target_date: str | None = None):
     base_date = get_latest_date(target_date)
