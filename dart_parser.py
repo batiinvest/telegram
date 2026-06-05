@@ -618,8 +618,63 @@ def parse_contract(kv: dict) -> list:
     elif start_clean:
         lines.append(f'📅 시작일: {start_clean}')
 
+    # 지급조건 — 중첩 번호 목록을 줄 단위로 정리
+    if v := _get(kv, '대금지급 조건', '지급조건', '대금지급'):
+        pay_lines = _fmt_payment_terms(v)
+        if pay_lines:
+            lines.append('💳 지급조건:')
+            lines.extend(pay_lines)
 
     return lines
+
+
+def _fmt_payment_terms(raw: str) -> list[str]:
+    """지급조건 텍스트를 줄 단위 목록으로 변환.
+
+    입력 예: '1. 기자재비 1) 선급금: 20%~50% 2) 납품불: 45%~75% 2. 설치비 1) 착공불: 30% ...'
+    출력 예:
+      • 기자재비: 선급금 20~50% / 납품불 45~75% / 최종불 5%
+      • 설치비: 착공불 30% / ...
+    """
+    # 최상위 항목 분리 (1. 2. 3. …)
+    top_parts = re.split(r'(?<!\d)(\d{1,2})\.\s+', raw.strip())
+    sections = []
+    i = 1
+    while i < len(top_parts) - 1:
+        title   = top_parts[i + 1].strip()
+        sections.append(title)
+        i += 2
+
+    if not sections:
+        # 번호 목록 구조 없으면 그냥 truncate
+        return [f'  {_trunc(re.sub(r"\s+", " ", raw), 80)}']
+
+    result = []
+    for sec in sections[:5]:
+        # 하위 항목 분리 (1) 2) 3) …)
+        sub_parts = re.split(r'(?<!\d)(\d{1,2})\)\s+', sec)
+        title_part = sub_parts[0].strip().rstrip(':：').strip()
+
+        subs = []
+        j = 1
+        while j < len(sub_parts) - 1:
+            content = re.sub(r'\s+', ' ', sub_parts[j + 1]).strip()
+            # 'key: value' 분리
+            m = re.match(r'^(.{1,15}?):\s*(.+)', content)
+            if m:
+                subs.append(f'{m.group(1).strip()} {m.group(2).strip()}')
+            else:
+                subs.append(_trunc(content, 30))
+            j += 2
+            if len(subs) >= 4:
+                break
+
+        if subs:
+            result.append(f'  • {title_part}: {" / ".join(subs)}')
+        elif title_part:
+            result.append(f'  • {_trunc(title_part, 60)}')
+
+    return result
 
 
 def _strip_disclaimer(text: str) -> str:
