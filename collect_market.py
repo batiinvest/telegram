@@ -408,10 +408,7 @@ def save_new_high_to_db(rows: list[dict], base_date: str, sb_client=None):
         return
     # sb_client 없으면 직접 생성
     if sb_client is None:
-        if not SB_URL or not SB_SERVICE_KEY:
-            logging.error("[신고가] Supabase 환경변수 없음")
-            return
-        sb_client = create_client(SB_URL, SB_SERVICE_KEY)
+        sb_client = get_supabase_client()
 
     # ① 오늘 전체 초기화 — 오전 수집에서 잘못 설정된 stale 값 제거
     try:
@@ -456,8 +453,7 @@ def collect_new_high():
             seen.add(r['code'])
             deduped.append(r)
     logging.info(f"[신고가] 전체 {len(deduped)}개 (코스피+코스닥)")
-    # sb_client 직접 생성해서 전달
-    sb_client = create_client(SB_URL, SB_SERVICE_KEY) if SB_URL and SB_SERVICE_KEY else None
+    sb_client = get_supabase_client()
     save_new_high_to_db(deduped, today, sb_client)
     return deduped
 
@@ -553,7 +549,7 @@ def collect_foreign_institution() -> dict:
     # Supabase에 저장 (market_data에 기관 순매수 업데이트)
     today = date.today().isoformat()
     if SB_URL and SB_SERVICE_KEY:
-        sb_client = create_client(SB_URL, SB_SERVICE_KEY)
+        sb_client = get_supabase_client()
         updated = 0
         # 외국인 + 기관 모두 포함
         all_rows = {r['code']: r for r in frgn}
@@ -605,7 +601,7 @@ def backfill_market(days: int = 90, max_workers: int = 3):
         log.error("[백필] 환경변수 없음")
         return
 
-    sb_client = create_client(SB_URL, SB_SERVICE_KEY)
+    sb_client = get_supabase_client()
     token = kis_auth.get_token()
     if not token:
         log.error("[백필] 토큰 없음")
@@ -878,7 +874,7 @@ def collect_analyst_opinions(from_date: str = None, to_date: str = None) -> int:
         logging.error("[투자의견] 환경변수 없음")
         return 0
 
-    sb_client = create_client(SB_URL, SB_SERVICE_KEY)
+    sb_client = get_supabase_client()
     today = date.today().strftime('%Y%m%d')
     from_date = from_date or today
     to_date   = to_date   or today
