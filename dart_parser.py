@@ -1715,26 +1715,49 @@ def parse_rights_exercise(kv: dict) -> list:
 
 
 def parse_large_holding_report(kv: dict) -> list:
-    """주식등의대량보유상황보고서 — 보고자 / 보유비율 / 보고사유 추출."""
+    """주식등의대량보유상황보고서 — 보고자 / 보유목적 / 보고전후비율 / 보고사유 추출."""
     lines = []
 
-    # 보고자명 — ENG 키('Reporting entity') 또는 한국어 키
+    # 보고자명
     reporter = _get(kv, 'Reporting entity', '보고자', '보고자명', '성명')
     if reporter:
         lines.append(f'👤 보고자: {reporter}')
 
-    # 보고사유 — ENG 키 또는 한국어 키 (인코딩 깨짐 가능, 그래도 출력)
-    reason = _get(kv, 'Reason for reporting', '보고사유', '보고 사유', '보고구분')
-    if reason:
-        lines.append(f'📋 사유: {_trunc(reason, 60)}')
+    # 보유목적
+    purpose = _get(kv, 'Purpose of holding', '보유목적', '주식등의보유목적', '보유 목적')
+    if purpose:
+        lines.append(f'🎯 보유목적: {_trunc(purpose, 60)}')
 
-    # 보유비율 — kv 값 중 숫자+% 패턴 탐색
+    # 보고전/후 보유비율 — kv 키에서 보고전/보고후 패턴 탐색
+    before_ratio = after_ratio = ''
     for k, v in kv.items():
-        if '보유비율' in k or 'Ownership ratio' in k or 'holding ratio' in k.lower():
-            clean = re.sub(r'\s+', ' ', v).strip()
-            if re.search(r'\d', clean):
-                lines.append(f'📊 보유비율: {_trunc(clean, 40)}')
-                break
+        kn = re.sub(r'\s+', '', k)
+        vn = re.sub(r'\s+', ' ', v).strip()
+        if not re.search(r'\d', vn):
+            continue
+        if not before_ratio and ('보고전' in kn or 'Before' in k):
+            before_ratio = vn
+        if not after_ratio and ('보고후' in kn or 'After' in k):
+            after_ratio = vn
+
+    # 보고전/후가 없으면 단순 보유비율 fallback
+    if before_ratio or after_ratio:
+        if before_ratio:
+            lines.append(f'📊 보고전: {before_ratio}%')
+        if after_ratio:
+            lines.append(f'📊 보고후: {after_ratio}%')
+    else:
+        for k, v in kv.items():
+            if '비율' in k or 'ratio' in k.lower():
+                clean = re.sub(r'\s+', ' ', v).strip()
+                if re.search(r'\d', clean):
+                    lines.append(f'📊 보유비율: {clean}')
+                    break
+
+    # 보고사유
+    reason = _get(kv, 'Reason for reporting', '보고사유', '보고 사유')
+    if reason:
+        lines.append(f'📋 보고사유: {_trunc(reason, 60)}')
 
     # 이전보고일
     prev = _get(kv, 'Previous report', '직전보고서', '전보고서제출일', '이전보고')
