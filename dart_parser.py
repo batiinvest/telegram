@@ -535,18 +535,20 @@ def parse_rights_offering(kv: dict) -> list:
 
 
 def _clean_party(raw: str) -> str:
-    """계약상대방 값에서 참고사항 주석(- 상기...) 제거 후 업체명만 반환.
-    값이 '- 상기...' 형태로 시작하면 내부 고유명사(대문자+괄호 패턴) 추출 시도."""
+    """계약상대방 값에서 주소·주석 제거 후 업체명만 반환."""
     if not raw:
         return raw
-    # 줄 단위로 분리 후 주석 전 첫 번째 실제 값 추출
+    # ' - 상기...' 주석 제거
     first_line = raw.split(' - ')[0].strip()
     if first_line and not first_line.startswith('-'):
-        return first_line[:80]
-    # 값 전체가 주석으로 시작하는 경우 — 영문 업체명 패턴 추출 시도
+        # 업체명 뒤 주소 괄호 제거: '한국동서발전(주) (제주특별자치도...)' → '한국동서발전(주)'
+        # 단, 짧은 괄호(약칭·코드)는 유지 — 길이 15자 초과 괄호만 제거
+        name = re.sub(r'\s*\([^)]{15,}\)', '', first_line).strip()
+        return (name or first_line)[:60]
+    # 값 전체가 주석으로 시작 — 영문 업체명 패턴 추출 시도
     m = re.search(r'([A-Z][A-Za-z0-9\s\(\)]+(?:Co\.|Corp\.|Ltd\.|LLC|Inc\.|Board|Project|Power|Plant|Vietnam|Korea|China|Japan|USA)[A-Za-z0-9\s\(\)]*)', raw)
     if m:
-        return m.group(1).strip()[:80]
+        return m.group(1).strip()[:60]
     return '미상'
 
 
@@ -616,9 +618,6 @@ def parse_contract(kv: dict) -> list:
     elif start_clean:
         lines.append(f'📅 시작일: {start_clean}')
 
-    # 대금지급 조건
-    if v := _get(kv, '대금지급 조건', '지급조건', '대금지급'):
-        lines.append(f'💳 지급조건: {_trunc(v, 60)}')
 
     return lines
 
