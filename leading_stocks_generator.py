@@ -393,18 +393,20 @@ def save_results(base_date: str, scored: list[dict]):
         'corp_name':      r['corp_name'],
         'market':         r['market'],
         'industry':       r['industry'] or None,
-        'total_score':    r['total_score'],
-        'price_momentum': r['price_momentum'],
-        'volume_surge':   r['volume_surge'],
-        'foreign_flow':   r['foreign_flow'],
-        'hgpr_score':     r['hgpr_score'],
-        'price_chg_5d':   r['chg5'],
-        'price_chg_20d':  r['chg20'],
-        'price_chg_60d':  r.get('chg60'),
-        'volume_ratio':   r['vol_ratio'],
-        'foreign_3d_sum': r.get('frgn_3d', 0),
-        'market_cap':     r['market_cap'],
-        'rank':           r.get('rank'),
+        'total_score':     r['total_score'],
+        'price_momentum':  r['price_momentum'],
+        'volume_surge':    r['volume_surge'],
+        'foreign_flow':    r['foreign_flow'],
+        'sector_strength': r['sector_strength'],   # 신규
+        'hgpr_score':      r['hgpr_score'],
+        'entry_price':     r['price'],              # 백테스트용 진입가
+        'price_chg_5d':    r['chg5'],
+        'price_chg_20d':   r['chg20'],
+        'price_chg_60d':   r.get('chg60'),
+        'volume_ratio':    r['vol_ratio'],
+        'foreign_3d_sum':  r.get('frgn_3d', 0),
+        'market_cap':      r['market_cap'],
+        'rank':            r.get('rank'),
     } for r in scored]
 
     log.info(f'Supabase upsert: {len(records)}개')
