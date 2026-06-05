@@ -1413,6 +1413,97 @@ def get_industry_weekly_ranking(industry_name: str) -> str:
     msg += f"════════════\n💡 괄호 안은 (1주 | 20일 | 60일) 수익률입니다."
     return msg
 
+def get_weekly_flow_summary(sb_client) -> str:
+    """
+    주간 외국인·기관 순매수 누적 Top/Bottom 5 — 토요일 메인채널 발송.
+    market_data 테이블에서 최근 5 거래일(월~금) 합산.
+    """
+    from datetime import date, timedelta
+
+    # 최근 5 거래일 날짜 범위 (토요일 기준 → 월~금)
+    today = date.today()
+    days_back = 7  # 주말 포함해서 7일 전부터 조회 후 최대 5 거래일만
+    from_date = (today - timedelta(days=days_back)).isoformat()
+
+    try:
+        res = sb_client.table('market_data') \
+            .select('stock_code,corp_name,foreign_net_buy,institution_net_buy,price,base_date') \
+            .gte('base_date', from_date) \
+            .not_.is_('foreign_net_buy', 'null') \
+            .execute()
+        rows = res.data or []
+    except Exception as e:
+        logging.error(f"[주간수급] 조회 실패: {e}")
+        return "❌ 주간 수급 데이터 조회 실패"
+
+    if not rows:
+        return "⚠️ 주간 수급 데이터 없음"
+
+    # 종목별 외국인·기관 순매수 합산 (주간 누적)
+    agg: dict = {}  # code → {name, foreign, institution, price}
+    for r in rows:
+        code = r['stock_code']
+        if code not in agg:
+            agg[code] = {
+                'name':        r.get('corp_name', code),
+                'foreign':     0,
+                'institution': 0,
+                'price':       r.get('price') or 0,
+            }
+        agg[code]['foreign']     += r.get('foreign_net_buy')     or 0
+        agg[code]['institution'] += r.get('institution_net_buy') or 0
+        if r.get('price'):
+            agg[code]['price'] = r['price']  # 최신 가격으로 갱신
+
+    # 금액 환산 (순매수 수량 × 현재가 = 원 단위)
+    flow_list = []
+    for code, v in agg.items():
+        f_amt = v['foreign']     * v['price']
+        i_amt = v['institution'] * v['price']
+        flow_list.append({
+            'name':    v['name'],
+            'f_amt':   f_amt,
+            'i_amt':   i_amt,
+        })
+
+    def _fmt_amt(n: int) -> str:
+        """억 단위 변환"""
+        sign = '+' if n >= 0 else ''
+        return f"{sign}{n // 100_000_000:,}억"
+
+    def _top5(data, key, reverse=True):
+        return sorted(data, key=lambda x: x[key], reverse=reverse)[:5]
+
+    f_buy  = _top5(flow_list, 'f_amt', reverse=True)
+    f_sell = _top5(flow_list, 'f_amt', reverse=False)
+    i_buy  = _top5(flow_list, 'i_amt', reverse=True)
+    i_sell = _top5(flow_list, 'i_amt', reverse=False)
+
+    week_str = f"{(today - timedelta(days=today.weekday())).strftime('%m/%d')} ~ {today.strftime('%m/%d')}"
+    msg = (
+        f"💰 <b>[주간 스마트머니 동향]</b>\n"
+        f"({week_str} 누적)\n"
+        f"{'━'*20}\n"
+        f"🔺 <b>외국인 순매수 Top5</b>\n"
+    )
+    for i, r in enumerate(f_buy, 1):
+        msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['f_amt'])}\n"
+
+    msg += f"\n🔻 <b>외국인 순매도 Top5</b>\n"
+    for i, r in enumerate(f_sell, 1):
+        msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['f_amt'])}\n"
+
+    msg += f"\n{'━'*20}\n🔺 <b>기관 순매수 Top5</b>\n"
+    for i, r in enumerate(i_buy, 1):
+        msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['i_amt'])}\n"
+
+    msg += f"\n🔻 <b>기관 순매도 Top5</b>\n"
+    for i, r in enumerate(i_sell, 1):
+        msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['i_amt'])}\n"
+
+    return msg
+
+
 def get_industry_cap_ranking(industry_name: str) -> str:
     _t = _get_industry_targets(industry_name)
     if isinstance(_t, str): return _t

@@ -1270,6 +1270,20 @@ def job_saturday_main_ranking():
         logging.error(f"주간 메인 랭킹 에러: {e}")
 
 
+def job_saturday_flow_summary():
+    """토요일 — 주간 외국인·기관 순매수 누적 Top/Bottom 5 메인채널 발송"""
+    if not _is_enabled("saturday"):
+        return
+    logging.info("💰 [주간수급] 발송 시작")
+    try:
+        sb = _bridge._get_client()
+        msg = stock_api.get_weekly_flow_summary(sb)
+        stock_api.send_telegram(DEFAULT_CHAT_ID, msg, keyboard=COMMON_BUTTON)
+        _log_notice(DEFAULT_CHAT_ID, "[토요일] 주간 수급 요약 발송")
+    except Exception as e:
+        logging.error(f"❌ [주간수급] 오류: {e}")
+
+
 def job_saturday_industry_report():
     if not _is_enabled("saturday"):
         return
@@ -1342,6 +1356,7 @@ def run_scheduler():
     schedule.every().day.at("18:35").do(job_collect_analyst_opinions)  # 투자의견 (장후)
     schedule.every().saturday.at("10:00").do(job_saturday_main_ranking)
     schedule.every().saturday.at("10:30").do(job_saturday_industry_report)
+    schedule.every().saturday.at("11:00").do(job_saturday_flow_summary)   # 주간 수급 요약
     schedule.every().sunday.at("10:00").do(job_sunday_industry_recap)
     schedule.every().sunday.at("10:30").do(job_sunday_company_diagnosis)
 
