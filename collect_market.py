@@ -347,8 +347,9 @@ def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
         res = req.get(url, headers=headers, params=params, timeout=10)
         data = res.json()
         if data.get('rt_cd') != '0':
-            logging.warning(f"[신고가] API 오류: {data.get('msg1')}")
+            logging.warning(f"[신고가] API 오류 (mkt={market_code}): rt_cd={data.get('rt_cd')} msg={data.get('msg1')}")
             return []
+        logging.info(f"[신고가] API 응답 (mkt={market_code}): output {len(data.get('output') or [])}개")
 
         result = []
         for row in (data.get('output') or []):
@@ -356,7 +357,11 @@ def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
             name  = row.get('hts_kor_isnm', '').strip()
             price = int(float(row.get('stck_prpr', 0) or 0))
             chg   = float(row.get('prdy_ctrt', 0) or 0)
-            near  = float(row.get('hprc_near_rate', -999) or -999)
+            near_raw = row.get('hprc_near_rate', '')
+            try:
+                near = float(near_raw) if near_raw not in ('', None) else None
+            except (ValueError, TypeError):
+                near = None
             high  = int(float(row.get('new_hgpr', 0) or 0))
             low   = int(float(row.get('new_lwpr', 0) or 0))
 
@@ -364,7 +369,8 @@ def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
                 continue
 
             # 52주 신고가 갱신 종목만 수집 (near_rate == 0.00 → 오늘 갱신)
-            if near != 0.0:
+            # near_raw가 빈 문자열인 경우도 0으로 처리 (신고가 갱신 당일 API 응답)
+            if near is not None and near != 0.0:
                 continue   # 근접(미갱신) 포함하지 않음
             cls_label = '신고가'
             cls_code  = '1'
