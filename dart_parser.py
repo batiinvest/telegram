@@ -1007,15 +1007,21 @@ def parse_trading_halt(kv: dict) -> list:
 
     # ── 일반 거래정지 형식 ───────────────────────────────────────
     if v := _get(kv, '2.정지사유', '정지사유'):
-        lines.append(f'⏸ 정지사유: {v}')
+        lines.append(f'⏸️ 정지사유: {v}')
 
+    # 정지일시: 날짜 형식 키 탐색, 값 끝 ' -' 제거
     for k, v in kv.items():
-        if re.match(r'^\d{4}-\d{2}-\d{2}$', k) and v:
-            lines.append(f'🕐 정지일시: {k} {v}')
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', k):
+            time_part = v.rstrip(' -').strip() if v else ''
+            dt_str = f'{k} {time_part}'.strip() if time_part else k
+            lines.append(f'🕐 정지일시: {dt_str}')
             break
 
+    # 해제조건/만료일시 — 날짜면 '재개일시', 문장이면 '해제조건'
     if v := _get(kv, '나.만료일시', '만료일시', '재개일시'):
-        lines.append(f'🔓 만료: {v}')
+        v_clean = v.strip()
+        label = '📅 재개일시' if re.match(r'^\d{4}-\d{2}-\d{2}', v_clean) else '📋 해제조건'
+        lines.append(f'{label}: {_trunc(v_clean, 100)}')
 
     return lines
 
