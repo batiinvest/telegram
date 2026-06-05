@@ -91,7 +91,7 @@ def fetch_history(base_date: str) -> list[dict]:
     rows = fetch_all_pages(
         sb.from_('market_data')
           .select('base_date,stock_code,corp_name,market,price,volume,'
-                  'market_cap,foreign_net_buy,hgpr_cls_code,w52_high')
+                  'market_cap,foreign_net_buy,institution_net_buy,hgpr_cls_code,w52_high')
           .gte('base_date', from_str)
           .lte('base_date', base_date)
           .order('base_date', desc=False)
@@ -240,14 +240,26 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
             all(tv_series[i] < tv_series[i+1] for i in range(len(tv_series)-1))
         )
 
-        # ── 외국인 10일 누적 순매수 금액 (구 3일) ──
-        # 3일은 단기 포지션 조정, 10일이 실제 추세 매수
-        frgn_10d_amt = 0.0
+        # ── 외국인 + 기관 동반 매수 10일 누적 금액 ──
+        # 외국인만 또는 기관만보다 동반 매수가 훨씬 강한 신호
+        # 동반 매수 시 1.5배 가중치 부여
+        frgn_10d_amt  = 0.0
+        inst_10d_amt  = 0.0
         for i in range(max(0, today_idx - 9), today_idx + 1):
             r = by_date[trading_days[i]].get(stock_code)
-            if r and r.get('foreign_net_buy') is not None:
-                day_price = r.get('price') or price
+            if not r:
+                continue
+            day_price = r.get('price') or price
+            if r.get('foreign_net_buy') is not None:
                 frgn_10d_amt += r['foreign_net_buy'] * day_price
+            if r.get('institution_net_buy') is not None:
+                inst_10d_amt += r['institution_net_buy'] * day_price
+
+        # 동반 매수 판정 및 합산
+        both_buying = frgn_10d_amt > 0 and inst_10d_amt > 0
+        either_buying = frgn_10d_amt > 0 or inst_10d_amt > 0
+        direction_bonus = 1.5 if both_buying else (1.0 if either_buying else 0.5)
+        combined_flow_amt = (frgn_10d_amt + inst_10d_amt) * direction_bonus
 
         # ── 52주 고가 근접도 ──
         w52_high   = today.get('w52_high') or 0
@@ -273,6 +285,9 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
             'dir_weight':       dir_weight,
             'vol_continuous':   vol_continuous,
             'frgn_10d_amt':     round(frgn_10d_amt, 0),
+            'inst_10d_amt':     round(inst_10d_amt, 0),
+            'combined_flow_amt':round(combined_flow_amt, 0),
+            'both_buying':      both_buying,
             'hgpr_ratio':       round(hgpr_ratio, 4),
         })
 
@@ -291,66 +306,58 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
     }
 
     # ── 백분위 정규화용 전체 분포 ──
-    chg5_vals   = [r['chg5']        for r in records]
-    chg20_vals  = [r['chg20']       for r in records]
-    chg60_vals  = [r['chg60']       for r in records]
-    frgn_vals   = [r['frgn_10d_amt'] for r in records]
+    # 배점: 모멘텀25 + 거래대금15 + 동반수급30 + 섹터강도20 + 신고가10 = 100
+    chg5_vals     = [r['chg5']             for r in records]
+    chg20_vals    = [r['chg20']            for r in records]
+    chg60_vals    = [r['chg60']            for r in records]
+    combined_vals = [r['combined_flow_amt'] for r in records]
 
-    # 업종 초과 수익률 분포 (sector_strength 백분위용)
+    # 업종 초과 수익률 분포
     excess_vals = []
     for r in records:
-        avg = ind_avg_chg5.get(r['industry'])
+        avg    = ind_avg_chg5.get(r['industry'])
         excess = (r['chg5'] - avg) if (r['chg5'] is not None and avg is not None) else None
         excess_vals.append(excess)
 
     scored = []
     for i, r in enumerate(records):
         # ① 가격 모멘텀 (max 25)
-        #    5일·20일·60일 백분위 복합 + 추세 일관성 보너스
-        #    하락장에서는 momentum 기준 자동 강화 (상대 강도 더 중요)
-        pct5  = _percentile_rank(chg5_vals,  r['chg5'])
-        pct20 = _percentile_rank(chg20_vals, r['chg20'])
-        pct60 = _percentile_rank(chg60_vals, r['chg60'])
+        pct5    = _percentile_rank(chg5_vals,  r['chg5'])
+        pct20   = _percentile_rank(chg20_vals, r['chg20'])
+        pct60   = _percentile_rank(chg60_vals, r['chg60'])
         pct_mom = pct5 * 0.4 + pct20 * 0.4 + pct60 * 0.2
-        raw_mom = pct_mom * r['trend_consistency']  # 추세 일관성 가중
-        # 하락장: 상위 20% 이상 종목만 만점 가능하도록 기준 강화
+        raw_mom = pct_mom * r['trend_consistency']
         if bear_market:
-            raw_mom = raw_mom * pct_mom  # 하락장 페널티 (상위권만 높은 점수)
+            raw_mom = raw_mom * pct_mom
         price_momentum = min(round(raw_mom * 25), 25)
 
-        # ② 거래대금 (max 20)
-        #    배율 × 방향성 × 지속성 보너스
+        # ② 거래대금 (max 15) — 구 20pt
         capped       = min(r['vol_ratio'], 5.0) / 5.0 * r['dir_weight']
-        continuity   = 1.15 if r['vol_continuous'] else 1.0  # 3일 연속 증가 +15%
-        volume_surge = min(round(capped * continuity * 20), 20)
+        continuity   = 1.15 if r['vol_continuous'] else 1.0
+        volume_surge = min(round(capped * continuity * 15), 15)
 
-        # ③ 외국인 수급 (max 25)
-        #    10일 누적 금액 백분위
-        pct_frgn     = _percentile_rank(frgn_vals, r['frgn_10d_amt'])
-        foreign_flow = round(pct_frgn * 25)
+        # ③ 외국인 + 기관 동반 수급 (max 30) — 구 외국인 단독 25pt
+        # combined_flow_amt = (외국인+기관) × 방향보너스(동반1.5 / 단독1.0 / 역방향0.5)
+        pct_combined  = _percentile_rank(combined_vals, r['combined_flow_amt'])
+        combined_flow = round(pct_combined * 30)
 
-        # ④ 업종 상대 강도 (max 15) — 신규
-        #    동일 업종 평균 대비 초과 수익률 백분위
-        #    업종 전체가 오를 때 업종 내 1등 = 진짜 주도주
+        # ④ 업종 상대 강도 (max 20) — 구 15pt
         pct_excess      = _percentile_rank(excess_vals, excess_vals[i])
-        sector_strength = round(pct_excess * 15)
+        sector_strength = round(pct_excess * 20)
 
-        # ⑤ 52주 고가 근접도 (max 15)
-        #    제곱으로 고근접 종목 차별화
-        #    1.0(신고가) → 15점, 0.9 → 12점, 0.7 → 7점
-        hgpr_score = min(round(r['hgpr_ratio'] ** 2 * 15), 15)
+        # ⑤ 52주 고가 근접도 (max 10) — 구 15pt
+        hgpr_score = min(round(r['hgpr_ratio'] ** 2 * 10), 10)
 
-        total_score = price_momentum + volume_surge + foreign_flow + sector_strength + hgpr_score
+        total_score = price_momentum + volume_surge + combined_flow + sector_strength + hgpr_score
 
         scored.append({
             **r,
             'total_score':    total_score,
             'price_momentum': price_momentum,
             'volume_surge':   volume_surge,
-            'foreign_flow':   foreign_flow,
+            'foreign_flow':   combined_flow,   # DB 컬럼 재활용
             'sector_strength':sector_strength,
             'hgpr_score':     hgpr_score,
-            # DB 저장용 alias
             'frgn_3d':        round(r['frgn_10d_amt'] / max(r['price'], 1)),
         })
 
@@ -365,9 +372,9 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
         log.info(
             f"  #{r['rank']:2d} {r['corp_name']:<12} 총{r['total_score']:3d}pt "
             f"(모멘텀{r['price_momentum']} 거래{r['volume_surge']} "
-            f"외국인{r['foreign_flow']} 섹터{r['sector_strength']} 신고가{r['hgpr_score']}) "
-            f"5d={r['chg5']}% 20d={r['chg20']}% consistency={r['trend_consistency']} "
-            f"vol_cont={r['vol_continuous']} hgpr={r['hgpr_ratio']:.2f}"
+            f"동반수급{r['foreign_flow']} 섹터{r['sector_strength']} 신고가{r['hgpr_score']}) "
+            f"동반={'Y' if r['both_buying'] else 'N'} "
+            f"외국인{r['frgn_10d_amt']/1e8:.0f}억 기관{r['inst_10d_amt']/1e8:.0f}억"
         )
     return top
 
