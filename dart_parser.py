@@ -281,8 +281,7 @@ def _build_kv(html: str) -> dict:
             else:
                 # ── DART XML 방식: <TD ENG="..."> + <TU AUNITVALUE="..."> / <TE ACODE="..."> ──
                 for td in tds:
-                    eng   = (td.get('eng') or td.get('ENG') or '').strip()
-                    label = eng if eng else _cell_text(td)
+                    label = _cell_text(td) or (td.get('eng') or td.get('ENG') or '').strip()
                     if not label:
                         continue
 
@@ -1994,6 +1993,8 @@ _SKIP_DETAIL_TYPES = frozenset([
     '대규모기업집단현황', '기업지배구조보고서',
     # 정기보고서류 — 수천 개 KV + 인코딩 깨짐, 헤더만 표시
     '사업보고서', '반기보고서', '분기보고서', '감사보고서',
+    # 대량보유/임원보유 보고서 — DART XML 인코딩 깨짐 + ENG 키 노출 문제
+    '주식등의대량보유상황보고서', '임원ㆍ주요주주특정증권등소유상황보고서',
 ])
 
 
