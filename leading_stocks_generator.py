@@ -89,7 +89,7 @@ def fetch_history(base_date: str) -> list[dict]:
     log.info(f'market_data 조회: {from_str} ~ {base_date}')
     rows = fetch_all_pages(
         sb.from_('market_data')
-          .select('base_date,stock_code,corp_name,market,price,volume,market_cap,foreign_net_buy,hgpr_cls_code')
+          .select('base_date,stock_code,corp_name,market,price,volume,market_cap,foreign_net_buy,hgpr_cls_code,w52_high')
           .gte('base_date', from_str)
           .lte('base_date', base_date)
           .order('base_date', desc=False)
@@ -162,7 +162,9 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
         industry  = ind_map.get(stock_code, '')
         hgpr_cls  = str(today.get('hgpr_cls_code') or '')
 
-        # ① 가격 모멘텀: 5일/20일 수익률
+        # ① 가격 모멘텀: 5일 40% + 20일 40% + 60일 20%
+        # 구: 5일 60% + 20일 40% → 단기 편중
+        # 개: 60일 추가로 진짜 주도주(꾸준한 중기 우상향) 포착
         def price_n_ago(n: int):
             idx = today_idx - n
             if idx < 0:
@@ -173,40 +175,65 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
 
         p5  = price_n_ago(5)
         p20 = price_n_ago(20)
+        p60 = price_n_ago(min(60, today_idx))  # 데이터 부족 시 최대 활용
         chg5  = round((price / p5  - 1) * 100, 2) if p5  else None
         chg20 = round((price / p20 - 1) * 100, 2) if p20 else None
+        chg60 = round((price / p60 - 1) * 100, 2) if p60 else None
 
-        # ② 거래대금 급증: today_tv / 20일 평균
+        # ② 거래대금 급증 × 방향성 연계
+        # 구: 방향 무관 거래대금 배율만 반영 (패닉셀도 고점수)
+        # 개: 당일 등락 방향으로 가중/감쇄 — 상승 + 거래대금 폭증이 진짜 매수세
         past_tvs = []
         for i in range(max(0, today_idx - 20), today_idx):
             r = by_date[trading_days[i]].get(stock_code)
             if r and r.get('volume') and r.get('price'):
                 past_tvs.append(r['volume'] * r['price'])
-        vol_ratio = round(tv / (sum(past_tvs) / len(past_tvs)), 2) if past_tvs else 1.0
+        avg_tv    = sum(past_tvs) / len(past_tvs) if past_tvs else tv
+        vol_ratio = round(tv / avg_tv, 2) if avg_tv else 1.0
 
-        # ③ 외국인 3일 누적 순매수
-        frgn_3d = 0.0
+        # 당일 등락률 (전일 대비)
+        p1 = price_n_ago(1)
+        chg1 = round((price / p1 - 1) * 100, 2) if p1 else 0.0
+        # 상승이면 최대 1.0 유지, 하락이면 최대 0.5로 캡 (패닉셀 페널티)
+        dir_weight = 1.0 if chg1 >= 0 else 0.5
+
+        # ③ 외국인 3일 누적 순매수 — 금액 환산
+        # 구: 주(株) 단위 합산 → 저가주/고가주 왜곡
+        # 개: 순매수주 × 당일가 → 금액(원) 기준 백분위
+        frgn_3d_amt = 0.0
         for i in range(max(0, today_idx - 2), today_idx + 1):
             r = by_date[trading_days[i]].get(stock_code)
             if r and r.get('foreign_net_buy') is not None:
-                frgn_3d += r['foreign_net_buy']
+                day_price = r.get('price') or price  # 해당일 가격, 없으면 오늘 가격
+                frgn_3d_amt += r['foreign_net_buy'] * day_price
 
-        # ④ 52주 신고가 여부
-        is_hgpr = hgpr_cls in HGPR_VALUES
+        # ④ 52주 신고가 근접도 — 연속 점수화
+        # 구: 신고가 여부만 (0 or 20) → 99% 근접도 0점 처리
+        # 개: 52주 고가 대비 현재 가격 비율로 연속 점수
+        #     w52_high 컬럼 없으면 hgpr_cls_code 이진 fallback
+        w52_high = today.get('w52_high') or 0
+        if w52_high and w52_high > 0:
+            hgpr_ratio = min(price / w52_high, 1.0)  # 현재가 / 52주 고가 (최대 1.0)
+        else:
+            # w52_high 없을 때: 신고가면 1.0, 아니면 0.7 fallback
+            hgpr_ratio = 1.0 if hgpr_cls in HGPR_VALUES else 0.7
 
         records.append({
-            'stock_code': stock_code,
-            'corp_name':  corp_name,
-            'market':     market,
-            'industry':   industry,
-            'price':      price,
-            'market_cap': market_cap,
-            'tv':         tv,
-            'chg5':       chg5,
-            'chg20':      chg20,
-            'vol_ratio':  vol_ratio,
-            'frgn_3d':    round(frgn_3d, 0),
-            'is_hgpr':    is_hgpr,
+            'stock_code':   stock_code,
+            'corp_name':    corp_name,
+            'market':       market,
+            'industry':     industry,
+            'price':        price,
+            'market_cap':   market_cap,
+            'tv':           tv,
+            'chg1':         chg1,
+            'chg5':         chg5,
+            'chg20':        chg20,
+            'chg60':        chg60,
+            'vol_ratio':    vol_ratio,
+            'dir_weight':   dir_weight,
+            'frgn_3d_amt':  round(frgn_3d_amt, 0),
+            'hgpr_ratio':   round(hgpr_ratio, 4),
         })
 
     log.info(f'필터 통과: {len(records):,}개')
@@ -214,25 +241,34 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
         return []
 
     # ─ 백분위 정규화 ─
-    chg5_vals  = [r['chg5']   for r in records]
-    chg20_vals = [r['chg20']  for r in records]
-    frgn_vals  = [r['frgn_3d'] for r in records]
+    chg5_vals   = [r['chg5']      for r in records]
+    chg20_vals  = [r['chg20']     for r in records]
+    chg60_vals  = [r['chg60']     for r in records]
+    frgn_vals   = [r['frgn_3d_amt'] for r in records]
 
     scored = []
     for r in records:
-        pct5   = _percentile_rank(chg5_vals,  r['chg5'])
-        pct20  = _percentile_rank(chg20_vals, r['chg20'])
-        pct_mom = pct5 * 0.6 + pct20 * 0.4
+        # ① 가격 모멘텀 (max 30): 5일 40% + 20일 40% + 60일 20%
+        pct5  = _percentile_rank(chg5_vals,  r['chg5'])
+        pct20 = _percentile_rank(chg20_vals, r['chg20'])
+        pct60 = _percentile_rank(chg60_vals, r['chg60'])
+        pct_mom = pct5 * 0.4 + pct20 * 0.4 + pct60 * 0.2
         price_momentum = round(pct_mom * 30)
 
-        capped       = min(r['vol_ratio'], 5.0) / 5.0
+        # ② 거래대금 급증 × 방향성 (max 25)
+        # 상승일: 최대 5배 캡 그대로, 하락일: 0.5 가중으로 패닉셀 페널티
+        capped       = min(r['vol_ratio'], 5.0) / 5.0 * r['dir_weight']
         volume_surge = round(capped * 25)
 
-        pct_frgn     = _percentile_rank(frgn_vals, r['frgn_3d'])
+        # ③ 외국인 수급 — 금액 기준 백분위 (max 25)
+        pct_frgn     = _percentile_rank(frgn_vals, r['frgn_3d_amt'])
         foreign_flow = round(pct_frgn * 25)
 
-        hgpr_score   = 20 if r['is_hgpr'] else 0
-        total_score  = price_momentum + volume_surge + foreign_flow + hgpr_score
+        # ④ 52주 고가 근접도 (max 20) — 연속 점수화
+        # 1.0(신고가 갱신) → 20점, 0.9(90% 근접) → 16점, 0.7(70%) → 8점
+        hgpr_score = round(r['hgpr_ratio'] ** 2 * 20)  # 제곱으로 고근접 종목 차별화
+
+        total_score = price_momentum + volume_surge + foreign_flow + hgpr_score
 
         scored.append({
             **r,
@@ -241,6 +277,8 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
             'volume_surge':   volume_surge,
             'foreign_flow':   foreign_flow,
             'hgpr_score':     hgpr_score,
+            # 저장용 alias (DB 컬럼명 유지)
+            'frgn_3d':        round(r['frgn_3d_amt'] / max(r['price'], 1)),  # 역산 주 단위 근사
         })
 
     # 정렬 + 순위
@@ -249,12 +287,14 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
         r['rank'] = i + 1
 
     top = scored[:TOP_N]
-    log.info(f'Top 5 미리보기:')
+    log.info('Top 5 미리보기:')
     for r in top[:5]:
         log.info(
             f"  #{r['rank']:2d} {r['corp_name']:<12} "
             f"총{r['total_score']:3d}pt "
-            f"(가격{r['price_momentum']}+거래{r['volume_surge']}+외국인{r['foreign_flow']}+신고가{r['hgpr_score']})"
+            f"(가격{r['price_momentum']}+거래{r['volume_surge']}+외국인{r['foreign_flow']}+신고가{r['hgpr_score']}) "
+            f"5d={r['chg5']}% 20d={r['chg20']}% 60d={r['chg60']}% "
+            f"vol×{r['vol_ratio']}(dir={r['dir_weight']}) hgpr={r['hgpr_ratio']:.2f}"
         )
     return top
 
@@ -280,8 +320,9 @@ def save_results(base_date: str, scored: list[dict]):
         'hgpr_score':     r['hgpr_score'],
         'price_chg_5d':   r['chg5'],
         'price_chg_20d':  r['chg20'],
+        'price_chg_60d':  r.get('chg60'),
         'volume_ratio':   r['vol_ratio'],
-        'foreign_3d_sum': r['frgn_3d'],
+        'foreign_3d_sum': r.get('frgn_3d', 0),
         'market_cap':     r['market_cap'],
         'rank':           r.get('rank'),
     } for r in scored]
