@@ -2194,13 +2194,13 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
         if is_amendment:
             lines = parse_amendment(kv)
             if lines:
+                has_changes = any(l.startswith('🔧') for l in lines)
                 lines.insert(0, '🔄 정정 내용')
-                # 원 공시 핵심 내용도 추가 (카테고리 파서 적용 가능한 경우)
-                if parser:
-                    sub = parser(kv)
-                    if sub:
-                        lines.append('─' * 12)
-                        lines.extend(sub)
+                # 카테고리 파서 또는 범용 파서로 원문 내용 추가
+                sub = (parser(kv) if parser else None) or (parse_all_fields(kv) if not has_changes else None)
+                if sub:
+                    lines.append('─' * 12)
+                    lines.extend(sub)
                 return '\n'.join(lines)
 
         if parser:
