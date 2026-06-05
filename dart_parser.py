@@ -250,6 +250,9 @@ def _build_kv(html: str) -> dict:
                 pass
         return v
 
+    # 기재정정 공시에서 [항목 | 정정전 | 정정후] 3컬럼 테이블 헤더를 만나면 True
+    _in_amendment_cols = False
+
     for row in soup.find_all('tr'):
         tds = row.find_all(['td', 'th'])
         tus = row.find_all('tu')   # DART XML 전용 값 태그
@@ -311,7 +314,19 @@ def _build_kv(html: str) -> dict:
                 if cells[0] and cells[1]:
                     kv[cells[0]] = cells[1]
             elif n == 3:
-                if cells[0] and cells[1]:
+                # [항목 | 정정전 | 정정후] 헤더 감지
+                if '정정전' in cells and '정정후' in cells:
+                    _in_amendment_cols = True
+                elif _in_amendment_cols and cells[0] and (cells[1] or cells[2]):
+                    # 정정전/후 데이터 행: 정정전_필드명 / 정정후_필드명 키로 저장
+                    field = cells[0]
+                    before = cells[1] if len(cells) > 1 else ''
+                    after  = cells[2] if len(cells) > 2 else ''
+                    if before:
+                        kv[f'정정전_{field}'] = before
+                    if after:
+                        kv[f'정정후_{field}'] = after
+                elif cells[0] and cells[1]:
                     if len(cells[2]) <= 6:
                         kv[cells[0]] = (cells[1] + ' ' + cells[2]).strip()
                     else:
