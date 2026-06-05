@@ -1866,7 +1866,10 @@ def parse_amendment(kv: dict) -> list:
         lines.append(f'📄 {orig_doc}' + (f' ({orig_date})' if orig_date else ''))
 
     if v := _get(kv, '3. 정정사유', '정정사유'):
-        lines.append(f'📋 사유: {_trunc(v, 80)}')
+        # "정정전" / "정정후" 등 의미 없는 placeholder 값 제외
+        v_clean = re.sub(r'\s+', '', v)
+        if v_clean not in ('정정전', '정정후', '해당없음', '없음', '-', '—'):
+            lines.append(f'📋 사유: {_trunc(v, 80)}')
 
     change_lines = []
 
