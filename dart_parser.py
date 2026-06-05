@@ -281,7 +281,8 @@ def _build_kv(html: str) -> dict:
             else:
                 # ── DART XML 방식: <TD ENG="..."> + <TU AUNITVALUE="..."> / <TE ACODE="..."> ──
                 for td in tds:
-                    label = _cell_text(td) or (td.get('eng') or td.get('ENG') or '').strip()
+                    eng   = (td.get('eng') or td.get('ENG') or '').strip()
+                    label = eng if eng else _cell_text(td)
                     if not label:
                         continue
 
@@ -1713,6 +1714,36 @@ def parse_rights_exercise(kv: dict) -> list:
     return lines
 
 
+def parse_large_holding_report(kv: dict) -> list:
+    """주식등의대량보유상황보고서 — 보고자 / 보유비율 / 보고사유 추출."""
+    lines = []
+
+    # 보고자명 — ENG 키('Reporting entity') 또는 한국어 키
+    reporter = _get(kv, 'Reporting entity', '보고자', '보고자명', '성명')
+    if reporter:
+        lines.append(f'👤 보고자: {reporter}')
+
+    # 보고사유 — ENG 키 또는 한국어 키 (인코딩 깨짐 가능, 그래도 출력)
+    reason = _get(kv, 'Reason for reporting', '보고사유', '보고 사유', '보고구분')
+    if reason:
+        lines.append(f'📋 사유: {_trunc(reason, 60)}')
+
+    # 보유비율 — kv 값 중 숫자+% 패턴 탐색
+    for k, v in kv.items():
+        if '보유비율' in k or 'Ownership ratio' in k or 'holding ratio' in k.lower():
+            clean = re.sub(r'\s+', ' ', v).strip()
+            if re.search(r'\d', clean):
+                lines.append(f'📊 보유비율: {_trunc(clean, 40)}')
+                break
+
+    # 이전보고일
+    prev = _get(kv, 'Previous report', '직전보고서', '전보고서제출일', '이전보고')
+    if prev:
+        lines.append(f'📅 이전보고: {prev}')
+
+    return lines
+
+
 def parse_major_shareholder_change(kv: dict) -> list:
     """최대주주변경"""
     lines = []
@@ -1986,6 +2017,7 @@ _PARSER_MAP = [
     (['신탁계약해지결정'],                       parse_trust_termination_decision),
     (['신탁계약해지결과'],                       parse_trust_termination),
     (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
+    (['대량보유상황보고서'],                      parse_large_holding_report),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
@@ -1993,8 +2025,8 @@ _SKIP_DETAIL_TYPES = frozenset([
     '대규모기업집단현황', '기업지배구조보고서',
     # 정기보고서류 — 수천 개 KV + 인코딩 깨짐, 헤더만 표시
     '사업보고서', '반기보고서', '분기보고서', '감사보고서',
-    # 대량보유/임원보유 보고서 — DART XML 인코딩 깨짐 + ENG 키 노출 문제
-    '주식등의대량보유상황보고서', '임원ㆍ주요주주특정증권등소유상황보고서',
+    # 임원보유 보고서 — DART XML 인코딩 깨짐 + ENG 키 노출 문제
+    '임원ㆍ주요주주특정증권등소유상황보고서',
 ])
 
 
