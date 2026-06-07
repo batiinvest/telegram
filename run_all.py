@@ -6,6 +6,7 @@ import os
 import datetime
 import json
 import re
+import functools
 from managers import market_timer, HistoryManager
 
 # ✅ 스케줄링 라이브러리
@@ -193,6 +194,29 @@ def _is_enabled(job_key: str) -> bool:
     except Exception:
         return True
 
+
+def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
+    """Job 함수 데코레이터: 휴장일/평일 체크 + DB 활성화 체크를 한곳에서 처리.
+
+    Args:
+        key:          DB 활성화 체크 키 (None이면 체크 안 함)
+        holiday:      True면 한국 휴장일(공휴일+주말) 스킵
+        weekday_only: True면 주말 스킵 (holiday보다 느슨한 조건)
+    """
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if weekday_only and datetime.datetime.now().weekday() >= 5:
+                return
+            if holiday and market_timer.is_kr_holiday():
+                return
+            if key is not None and not _is_enabled(key):
+                logging.info(f"⏸ [{key}] 비활성화 (DB 설정)")
+                return
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
+
 def _log_notice(target: str, content: str):
     """발송 기록을 Supabase에 저장. 실패해도 무시."""
     if not _BRIDGE_OK:
@@ -237,12 +261,8 @@ def run_dart_bot():
 # ⏰ 작업별 함수
 # ==========================================
 
+@_job("lunch", holiday=True)
 def job_lunch_briefing():
-    if market_timer.is_kr_holiday(): return
-    # ✅ [추가] DB에서 스케줄 ON/OFF 확인
-    if not _is_enabled("lunch"):
-        logging.info("⏸ 점심 브리핑 비활성화 (DB 설정)")
-        return
     logging.info("🍱 [점심 브리핑] 시작")
 
     msg_open = "🍱 <b>[점심 시황]</b> 맛점하세요! 오전 장 요약입니다."
@@ -259,12 +279,8 @@ def job_lunch_briefing():
     )
 
 
+@_job("report", holiday=True)
 def job_naver_report():
-    if market_timer.is_kr_holiday(): return
-    # ✅ [추가] DB에서 스케줄 ON/OFF 확인
-    if not _is_enabled("report"):
-        logging.info("⏸ 네이버 리포트 비활성화 (DB 설정)")
-        return
     logging.info("📑 [네이버 리포트] 발송 시작")
     try:
         stock_api.run_naver_report_job()
@@ -273,12 +289,8 @@ def job_naver_report():
         logging.error(f"네이버 리포트 발송 에러: {e}")
 
 
+@_job("closing", holiday=True)
 def job_daily_closing():
-    if market_timer.is_kr_holiday(): return
-    # ✅ [추가] DB에서 스케줄 ON/OFF 확인
-    if not _is_enabled("closing"):
-        logging.info("⏸ 마감 브리핑 비활성화 (DB 설정)")
-        return
     logging.info("🏁 [마감 브리핑] 시작")
 
     msg_close = "🏁 <b>[마감 시황]</b> 오늘 하루 고생 많으셨습니다."
@@ -833,10 +845,9 @@ def job_collect_macro():
         logging.error(f"매크로 데이터 수집 실패: {e}")
 
 
+@_job(weekday_only=True)
 def job_collect_analyst_opinions():
     """증권사 투자의견 수집 (하루 2회: 장전 + 장후)"""
-    if datetime.datetime.now().weekday() >= 5:
-        return
     logging.info("📋 [투자의견] 증권사 투자의견 수집 시작")
     try:
         import collect_market
@@ -846,10 +857,9 @@ def job_collect_analyst_opinions():
         logging.error(f"❌ [투자의견] 수집 실패: {e}")
 
 
+@_job(weekday_only=True)
 def job_collect_foreign_institution():
     """기관/외국인 매매가집계 수집 (장중 4회 + 장마감 후)"""
-    if datetime.datetime.now().weekday() >= 5:
-        return
     logging.info("=== 기관/외국인 수급 수집 시작 ===")
     try:
         import collect_market
@@ -859,10 +869,9 @@ def job_collect_foreign_institution():
         logging.error(f"❌ 수급 수집 실패: {e}")
 
 
+@_job(weekday_only=True)
 def job_collect_new_high():
     """장 마감 후 신고가 종목 수집 + 알림 발송"""
-    if datetime.datetime.now().weekday() >= 5:
-        return
     logging.info("=== 신고가 종목 수집 시작 ===")
     try:
         import collect_market
@@ -926,10 +935,9 @@ def _alert_new_high(rows: list):
         logging.info(f"🏆 [신고가 알림] 메인방 {len(main_lines)}개 발송")
 
 
+@_job("collect_macro")
 def job_collect_us_etf():
     """미국 산업별 ETF 수집 → us_market 테이블"""
-    if not _is_enabled('collect_macro'):
-        return
     logging.info("=== US ETF 수집 시작 ===")
     try:
         import collect_us_etf
@@ -1062,11 +1070,9 @@ def job_collect_market_closing():
     _check_market_warnings()
 
 
+@_job(holiday=True)
 def job_sector_summary():
     """평일 장 마감 후 (17:15) — 산업별 일별 요약 집계 (sector_daily_summary)"""
-    if market_timer.is_kr_holiday():
-        logging.info("⏸ [섹터요약] 주말/공휴일 스킵")
-        return
     try:
         logging.info("📊 [섹터요약] collect_sector_summary 실행")
         from collect_sector_summary import run as run_sector
@@ -1076,11 +1082,9 @@ def job_sector_summary():
         logging.error(f"❌ [섹터요약] 오류: {e}")
 
 
+@_job(holiday=True)
 def job_leading_stocks():
     """평일 장 마감 후 (17:30) — 주도주 탐색기 스코어 계산 및 저장"""
-    if market_timer.is_kr_holiday():
-        logging.info("⏸ [주도주] 주말/공휴일 스킵")
-        return
     try:
         logging.info("🚀 [주도주] leading_stocks_generator 실행 시작")
         from leading_stocks_generator import run as run_leading
@@ -1225,12 +1229,10 @@ def job_watchlist_alert():
         logging.error(f"❌ [관심가알림] 오류: {e}")
 
 
+@_job("kind_ir")
 def job_kind_ir():
     """매일 2회 (09:05, 18:05) — KIND IR자료실 수집 → @batiarchive 전송"""
     if not _KIND_IR_OK:
-        return
-    if not _is_enabled("kind_ir"):
-        logging.info("⏸ KIND IR 수집 비활성화 (DB 설정)")
         return
     try:
         logging.info("📋 [KIND IR] 수집 시작")
@@ -1256,11 +1258,8 @@ def job_pro_channel_check():
         logging.error(f"❌ [프로채널] 만료 체크 오류: {e}")
 
 
+@_job("saturday")
 def job_saturday_main_ranking():
-    # ✅ [추가] DB에서 스케줄 ON/OFF 확인
-    if not _is_enabled("saturday"):
-        logging.info("⏸ 토요일 주간 랭킹 비활성화 (DB 설정)")
-        return
     logging.info("🏆 [주간 랭킹] 메인방 발송 시작")
     try:
         msg = stock_api.get_weekly_universe_ranking()
@@ -1270,10 +1269,9 @@ def job_saturday_main_ranking():
         logging.error(f"주간 메인 랭킹 에러: {e}")
 
 
+@_job("saturday")
 def job_saturday_flow_summary():
     """토요일 — 주간 외국인·기관 순매수 누적 Top/Bottom 5 메인채널 발송"""
-    if not _is_enabled("saturday"):
-        return
     logging.info("💰 [주간수급] 발송 시작")
     try:
         sb = _bridge._get_client()
@@ -1284,9 +1282,8 @@ def job_saturday_flow_summary():
         logging.error(f"❌ [주간수급] 오류: {e}")
 
 
+@_job("saturday")
 def job_saturday_industry_report():
-    if not _is_enabled("saturday"):
-        return
     logging.info("🏭 [주간 산업 리포트] 각 산업방 발송 시작")
     _broadcast_to_industries(
         stock_api.get_industry_weekly_ranking,
@@ -1294,11 +1291,8 @@ def job_saturday_industry_report():
     )
 
 
+@_job("sunday")
 def job_sunday_industry_recap():
-    # ✅ [추가] DB에서 스케줄 ON/OFF 확인
-    if not _is_enabled("sunday"):
-        logging.info("⏸ 일요일 산업 리포트 비활성화 (DB 설정)")
-        return
     logging.info("🗓 일요일 산업별 시총 리포트 발송 시작")
     _broadcast_to_industries(
         stock_api.get_industry_cap_ranking,
@@ -1306,9 +1300,8 @@ def job_sunday_industry_recap():
     )
 
 
+@_job("sunday")
 def job_sunday_company_diagnosis():
-    if not _is_enabled("sunday"):
-        return
     logging.info("🗓 일요일 종목별 기술적 진단 발송 시작")
     _broadcast_to_companies(
         stock_api.get_stock_chart,

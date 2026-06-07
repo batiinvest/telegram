@@ -463,6 +463,18 @@ def _fmt_amount(v: str) -> str:
         return v
 
 
+def _f(lines: list, kv: dict, label: str, *keys,
+       fmt=None, suffix: str = '', trunc: int = 0):
+    """_get() + lines.append() 두 줄 패턴을 한 줄로 압축.
+    Returns the extracted value (or None)."""
+    v = _get(kv, *keys)
+    if v:
+        if trunc:
+            v = _trunc(v, trunc)
+        lines.append(f'{label}: {fmt(v) if fmt else v}{suffix}')
+    return v
+
+
 _CI_METHOD = {
     '1': '주주배정', '2': '주주우선공모', '3': '일반공모',
     '4': '직원배정', '5': '일반공모+주주배정', '6': '제3자배정', '7': '기타',
@@ -480,42 +492,27 @@ def parse_rights_offering(kv: dict) -> list:
     """유상증자결정 — ENG 키 기반 핵심 필드 추출"""
     lines = []
 
-    # 신주식수
-    if v := _get(kv, '1. Class and number of new shares'):
-        lines.append(f'🔢 신주식수: {v}주')
+    _f(lines, kv, '🔢 신주식수', '1. Class and number of new shares', suffix='주')
 
-    # 발행가액 + 할인율
+    # 발행가액 + 할인율 (두 필드 조합 — 직접 처리)
     price    = _get(kv, '6. Issuing price of new shares', 'Issuing price')
     discount = _get(kv, '7-2. Discount or premium ratio', 'Discount or premium ratio (%)')
     if price:
         disc_str = f' (할인율 {discount}%)' if discount else ''
         lines.append(f'💵 발행가액: {price}원{disc_str}')
 
-    # 기준주가
-    if v := _get(kv, '7. Base stock price', 'Base stock price: Lower'):
-        lines.append(f'📊 기준주가: {v}원')
+    _f(lines, kv, '📊 기준주가', '7. Base stock price', 'Base stock price: Lower', suffix='원')
 
-    # 조달금액 (목적별)
+    # 조달금액 (목적별 키 순회)
     for fk in _FUND_KEYS:
         if v := _get(kv, fk):
             lines.append(f'💰 조달금액: {_fmt_amount(v)}원')
             break
 
-    # 납입일
-    if v := _get(kv, 'Payment date'):
-        lines.append(f'📅 납입일: {v}')
-
-    # 상장예정일
-    if v := _get(kv, 'Scheduled listing date'):
-        lines.append(f'📅 상장예정: {v}')
-
-    # 증자방식
-    if v := _get(kv, '5. Capital increase method'):
-        lines.append(f'📋 방식: {_CI_METHOD.get(v, v)}')
-
-    # 이사회결의일
-    if v := _get(kv, 'Board resolution date'):
-        lines.append(f'📋 결의일: {v}')
+    _f(lines, kv, '📅 납입일', 'Payment date')
+    _f(lines, kv, '📅 상장예정', 'Scheduled listing date')
+    _f(lines, kv, '📋 방식', '5. Capital increase method', fmt=lambda v: _CI_METHOD.get(v, v))
+    _f(lines, kv, '📋 결의일', 'Board resolution date')
 
     # 제3자 배정대상자 (PART/ALL_CNT 행에서 수집)
     allottees = []
@@ -921,38 +918,26 @@ def parse_cb(kv: dict) -> list:
     """전환사채(CB) / 신주인수권부사채(BW) 파서"""
     lines = []
 
-    # 발행금액
-    if v := _get(kv, '2. Total face', 'Total face (or electronically registered) value'):
-        lines.append(f'💰 발행금액: {_fmt_amount(v)}원')
+    _f(lines, kv, '💰 발행금액', '2. Total face', 'Total face (or electronically registered) value', fmt=_fmt_amount, suffix='원')
+    _f(lines, kv, '💵 전환가액', 'Conversion price (KRW/share)', 'Exercise price', suffix='원/주')
 
-    # 전환가액
-    if v := _get(kv, 'Conversion price (KRW/share)', 'Exercise price'):
-        lines.append(f'💵 전환가액: {v}원/주')
-
-    # 이자율 / 만기수익률
+    # 이자율 / 만기수익률 (두 필드 조합)
     coupon = _get(kv, 'Coupon rate', '4. Interest rate of bonds')
     ytm    = _get(kv, 'Yield to maturity')
     if coupon:
         ytm_str = f' / YTM {ytm}%' if ytm and ytm != coupon else ''
         lines.append(f'📊 이자율: {coupon}%{ytm_str}')
 
-    # 만기
-    if v := _get(kv, '5. Bond maturity date', 'Maturity date'):
-        lines.append(f'📅 만기: {v}')
+    _f(lines, kv, '📅 만기', '5. Bond maturity date', 'Maturity date')
 
-    # 전환청구기간
+    # 전환청구기간 (두 필드 조합)
     start = _get(kv, 'Start date')
     end   = _get(kv, 'End date')
     if start and end:
         lines.append(f'📅 전환청구: {start} ~ {end}')
 
-    # 발행방식
-    if v := _get(kv, '8. Method of bond issuance'):
-        lines.append(f'📋 발행방식: {_BOND_METHOD.get(v, v)}')
-
-    # 납입일
-    if v := _get(kv, '12. Payment date', 'Payment date'):
-        lines.append(f'📅 납입일: {v}')
+    _f(lines, kv, '📋 발행방식', '8. Method of bond issuance', fmt=lambda v: _BOND_METHOD.get(v, v))
+    _f(lines, kv, '📅 납입일', '12. Payment date', 'Payment date')
 
     return lines
 
@@ -1063,13 +1048,8 @@ def parse_debt_guarantee(kv: dict) -> list:
         rel_str = f' ({relation})' if relation else ''
         lines.append(f'🏢 채무자: {debtor}{rel_str}')
 
-    # 채권자
-    if v := _get(kv, '2. 채권자', '채권자'):
-        lines.append(f'🏦 채권자: {v}')
-
-    # 차입금액
-    if v := _get(kv, '3. 채무(차입)금액(원)', '채무(차입)금액'):
-        lines.append(f'💳 차입금액: {_fmt_amount(v)}원')
+    _f(lines, kv, '🏦 채권자', '2. 채권자', '채권자')
+    _f(lines, kv, '💳 차입금액', '3. 채무(차입)금액(원)', '채무(차입)금액', fmt=_fmt_amount, suffix='원')
 
     # 보증금액 + 자기자본 대비
     guarantee = _get(kv, '채무보증금액(원)', '보증금액')
@@ -1086,9 +1066,7 @@ def parse_debt_guarantee(kv: dict) -> list:
     if start_clean and end_clean:
         lines.append(f'📅 보증기간: {start_clean} ~ {end_clean}')
 
-    # 이사회결의일
-    if v := _get(kv, '6. 이사회결의일(결정일)', '이사회결의일'):
-        lines.append(f'📋 결의일: {v}')
+    _f(lines, kv, '📋 결의일', '6. 이사회결의일(결정일)', '이사회결의일')
 
     # 기타 참고사항 (첫 문장만)
     if v := _get(kv, '7. 기타 투자판단에 참고할 사항', '기타 투자판단'):
@@ -1104,8 +1082,7 @@ def parse_trust_termination_decision(kv: dict) -> list:
     """자기주식 신탁계약 해지결정"""
     lines = []
 
-    if v := _get(kv, '1. Contract amount (KRW)', 'Contract amount'):
-        lines.append(f'💰 계약금액: {_fmt_amount(v)}원')
+    _f(lines, kv, '💰 계약금액', '1. Contract amount (KRW)', 'Contract amount', fmt=_fmt_amount, suffix='원')
 
     start = _get(kv, '2. Contract period before termination')
     end   = _get(kv, 'End date')
@@ -1123,8 +1100,7 @@ def parse_trust_termination_decision(kv: dict) -> list:
         v = re.sub(r'\s*\(.*\)\s*$', '', v).strip()
         lines.append(f'🏦 해지기관: {v}')
 
-    if v := _get(kv, '5. Scheduled termination date', 'Scheduled termination date'):
-        lines.append(f'📅 해지예정일: {v}')
+    _f(lines, kv, '📅 해지예정일', '5. Scheduled termination date', 'Scheduled termination date')
 
     return lines
 
@@ -1183,9 +1159,7 @@ def parse_treasury_acquisition(kv: dict) -> list:
     """자기주식 취득 신탁계약 체결 / 직접취득 결정"""
     lines = []
 
-    # 취득금액
-    if v := _get(kv, '1. Contract amount (KRW)', 'Contract amount'):
-        lines.append(f'💰 취득금액: {_fmt_amount(v)}원')
+    _f(lines, kv, '💰 취득금액', '1. Contract amount (KRW)', 'Contract amount', fmt=_fmt_amount, suffix='원')
 
     # 취득예정 주식수 + 단가
     shares = _get(kv, '9. Number of shares to be acquired', 'Number of shares to be acquired')
@@ -1213,9 +1187,7 @@ def parse_treasury_acquisition(kv: dict) -> list:
         v = re.sub(r'\s*\(.*\)\s*$', '', v).strip()
         lines.append(f'🏦 수탁사: {v}')
 
-    # 결의일
-    if v := _get(kv, '7. Board resolution date', 'Board resolution date'):
-        lines.append(f'📋 결의일: {v}')
+    _f(lines, kv, '📋 결의일', '7. Board resolution date', 'Board resolution date')
 
     return lines
 
@@ -1362,13 +1334,8 @@ def parse_value_enhancement(kv: dict) -> list:
             parts.append(f'YoY +{growth}%')
         lines.append(f'💰 {" / ".join(parts)}')
 
-    # 결정일
-    if v := _get(kv, '4. 결정일자', '결정일자'):
-        lines.append(f'📅 결정일: {v}')
-
-    # 관련공시
-    if v := _get(kv, '※ 관련공시', '관련공시'):
-        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+    _f(lines, kv, '📅 결정일', '4. 결정일자', '결정일자')
+    _f(lines, kv, '🔗 관련', '※ 관련공시', '관련공시', trunc=50)
 
     return lines
 
@@ -1413,9 +1380,7 @@ def parse_outside_director(kv: dict) -> list:
         if after_outside and ratio:
             lines.append(f'📊 사외이사: {after_outside}명/{after_reg}명 ({ratio}%)')
 
-    # 변경일
-    if v := _get(kv, '1. Date of change outside director', '1. Date of change in outside director'):
-        lines.append(f'📅 변경일: {v}')
+    _f(lines, kv, '📅 변경일', '1. Date of change outside director', '1. Date of change in outside director')
 
     return lines
 
@@ -1460,11 +1425,8 @@ def parse_hq_relocation(kv: dict) -> list:
     if after:
         lines.append(f'  변경후: {_trunc(after, 55)}')
 
-    if v := _get(kv, '2. 변경사유', '변경사유'):
-        lines.append(f'📋 사유: {_trunc(v, 60)}')
-
-    if v := _get(kv, '3. 이전(예정)일', '이전(예정)일', '이전일'):
-        lines.append(f'📅 이전일: {v}')
+    _f(lines, kv, '📋 사유', '2. 변경사유', '변경사유', trunc=60)
+    _f(lines, kv, '📅 이전일', '3. 이전(예정)일', '이전(예정)일', '이전일')
 
     return lines
 
@@ -1587,17 +1549,10 @@ def parse_ir_event(kv: dict) -> list:
         time_str = f' ({start_t}~{end_t})' if start_t and end_t else ''
         lines.append(f'📅 일시: {date_str}{time_str}')
 
-    if v := _get(kv, '2. 장소', '장소'):
-        lines.append(f'📍 장소: {_trunc(v, 40)}')
-
-    if v := _get(kv, '3. 대상자', '대상자'):
-        lines.append(f'👥 대상: {v}')
-
-    if v := _get(kv, '4. 실시목적', '실시목적'):
-        lines.append(f'📋 목적: {_trunc(v, 50)}')
-
-    if v := _get(kv, '6. 주요내용', '주요내용'):
-        lines.append(f'📋 내용: {_trunc(v, 50)}')
+    _f(lines, kv, '📍 장소', '2. 장소', '장소', trunc=40)
+    _f(lines, kv, '👥 대상', '3. 대상자', '대상자')
+    _f(lines, kv, '📋 목적', '4. 실시목적', '실시목적', trunc=50)
+    _f(lines, kv, '📋 내용', '6. 주요내용', '주요내용', trunc=50)
 
     return lines
 
@@ -1627,25 +1582,11 @@ def parse_equity_acquisition(kv: dict) -> list:
         ratio_str = f' (연결자산 대비 {ratio}%)' if ratio else ''
         lines.append(f'💰 취득금액: {_fmt_amount(amount)}원{ratio_str}')
 
-    # 취득 후 지분비율
-    if v := _get(kv, '지분비율(%)'):
-        lines.append(f'📊 취득 후 지분: {v}%')
-
-    # 취득방법
-    if v := _get(kv, '4. 취득방법', '취득방법'):
-        lines.append(f'📋 취득방법: {_trunc(v, 60)}')
-
-    # 취득목적
-    if v := _get(kv, '5. 취득목적', '취득목적'):
-        lines.append(f'📋 목적: {_trunc(v, 60)}')
-
-    # 취득예정일자
-    if v := _get(kv, '6. 취득예정일자', '취득예정일자'):
-        lines.append(f'📅 취득예정: {v}')
-
-    # 관련공시
-    if v := _get(kv, '※ 관련공시', '관련공시'):
-        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+    _f(lines, kv, '📊 취득 후 지분', '지분비율(%)', suffix='%')
+    _f(lines, kv, '📋 취득방법', '4. 취득방법', '취득방법', trunc=60)
+    _f(lines, kv, '📋 목적', '5. 취득목적', '취득목적', trunc=60)
+    _f(lines, kv, '📅 취득예정', '6. 취득예정일자', '취득예정일자')
+    _f(lines, kv, '🔗 관련', '※ 관련공시', '관련공시', trunc=50)
 
     return lines
 
@@ -1659,17 +1600,10 @@ def parse_agm_notice(kv: dict) -> list:
     if date:
         lines.append(f'📅 일시: {date}' + (f' {time}' if time else ''))
 
-    if v := _get(kv, '2. 장소', '장소', 'Place'):
-        lines.append(f'📍 장소: {_trunc(v, 50)}')
-
-    if v := _get(kv, '-주주총회 구분', '주주총회 구분'):
-        lines.append(f'📋 구분: {v}')
-
-    if v := _get(kv, '3. 의결권행사기준일', '의결권행사기준일'):
-        lines.append(f'📋 의결권기준일: {v}')
-
-    if v := _get(kv, '관련공시', '※관련공시'):
-        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+    _f(lines, kv, '📍 장소', '2. 장소', '장소', 'Place', trunc=50)
+    _f(lines, kv, '📋 구분', '-주주총회 구분', '주주총회 구분')
+    _f(lines, kv, '📋 의결권기준일', '3. 의결권행사기준일', '의결권행사기준일')
+    _f(lines, kv, '🔗 관련', '관련공시', '※관련공시', trunc=50)
 
     return lines
 
