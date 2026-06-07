@@ -670,7 +670,8 @@ def _fmt_payment_terms(raw: str) -> list[str]:
 
     if not sections:
         # 번호 목록 구조 없으면 그냥 truncate
-        return [f'  {_trunc(re.sub(r"\s+", " ", raw), 80)}']
+        cleaned = re.sub(r'\s+', ' ', raw)
+        return [f'  {_trunc(cleaned, 80)}']
 
     result = []
     for sec in sections[:5]:
