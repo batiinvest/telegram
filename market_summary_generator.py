@@ -23,7 +23,7 @@ import logging
 from logger_config import get_logger
 log = get_logger(__name__)
 
-from datetime import datetime, timedelta, date as date_type
+from datetime import datetime, timedelta
 from typing import Optional
 
 # ── Supabase 클라이언트 ──────────────────────────────────────────────────────

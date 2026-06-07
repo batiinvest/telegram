@@ -1289,15 +1289,13 @@ def get_sector_fundamental_comparison(target_name: str) -> str:
     msg = f"📑 <b>[{mode}] 심층 비교 분석</b>\n════════════\n"
 
     for i, d in enumerate(results):
-        i_5 = "🔺" if d['t_5d'] > 0 else "🔹"
-        i_20 = "🔺" if d['t_20d'] > 0 else "🔹"
-        i_60 = "🔺" if d['t_60d'] > 0 else "🔹"
-        
+        ti = {p: "🔺" if d[f't_{p}'] > 0 else "🔹" for p in ('5d', '20d', '60d')}
+
         msg += f"{i+1}️⃣ <b>{d['name']}</b> ({d['cap_str']})\n"
         msg += (
-            f"<b>추세:</b> 5일 {i_5}{d['t_5d']:.1f}% │ "
-            f"20일 {i_20}{d['t_20d']:.1f}% │ "
-            f"60일 {i_60}{d['t_60d']:.1f}%\n"
+            f"<b>추세:</b> 5일 {ti['5d']}{d['t_5d']:.1f}% │ "
+            f"20일 {ti['20d']}{d['t_20d']:.1f}% │ "
+            f"60일 {ti['60d']}{d['t_60d']:.1f}%\n"
         )
         msg += f"════════════\n" 
         msg += f"📊 <b>가치 지표</b>\n"

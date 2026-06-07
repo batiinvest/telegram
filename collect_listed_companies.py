@@ -34,6 +34,8 @@ except ImportError:
     from supabase import create_client as _cs
     def _get_sb(): return _cs(os.getenv("SB_URL",""), os.getenv("SB_SERVICE_KEY",""))
 
+from collect_utils import fetch_all_pages as _fetch_all_pages
+
 DART_API_KEY   = os.getenv("DART_API_KEY", "")
 SB_URL         = os.getenv("SB_URL", "")
 SB_SERVICE_KEY = os.getenv("SB_SERVICE_KEY", "")
@@ -70,18 +72,14 @@ def run(dry_run: bool = False):
 
     # 2. DB 로드
     log.info("DB 기존 종목 로드 중...")
-    db_map = {}
-    page = 0
-    while True:
-        res = sb.table("companies").select(
-            "id,name,code,corp_code,market,monitoring_level,is_monitored,chat_id"
-        ).range(page*1000, (page+1)*1000-1).execute()
-        if not res.data: break
-        for row in res.data:
-            code = (row.get("code") or "").strip()
-            if code: db_map[code] = row
-        if len(res.data) < 1000: break
-        page += 1
+    rows = _fetch_all_pages(sb.table("companies").select(
+        "id,name,code,corp_code,market,monitoring_level,is_monitored,chat_id"
+    ))
+    db_map = {
+        (row.get("code") or "").strip(): row
+        for row in rows
+        if (row.get("code") or "").strip()
+    }
     log.info(f"DB: {len(db_map)}개")
 
     dart_codes = set(dart_map.keys())

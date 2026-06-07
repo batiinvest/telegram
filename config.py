@@ -34,16 +34,8 @@ GOOGLE_SHEET_TAB = "시트1"
 
 # ✅ 네이버 API 키 리스트
 NAVER_KEYS = [
-    {"id": os.getenv("NAVER_ID_1"), "secret": os.getenv("NAVER_SECRET_1")},
-    {"id": os.getenv("NAVER_ID_2"), "secret": os.getenv("NAVER_SECRET_2")},
-    {"id": os.getenv("NAVER_ID_3"), "secret": os.getenv("NAVER_SECRET_3")},
-    {"id": os.getenv("NAVER_ID_4"), "secret": os.getenv("NAVER_SECRET_4")},
-    {"id": os.getenv("NAVER_ID_5"), "secret": os.getenv("NAVER_SECRET_5")},
-    {"id": os.getenv("NAVER_ID_6"), "secret": os.getenv("NAVER_SECRET_6")},
-    {"id": os.getenv("NAVER_ID_7"), "secret": os.getenv("NAVER_SECRET_7")},
-    {"id": os.getenv("NAVER_ID_8"), "secret": os.getenv("NAVER_SECRET_8")},
-    {"id": os.getenv("NAVER_ID_9"), "secret": os.getenv("NAVER_SECRET_9")},
-    {"id": os.getenv("NAVER_ID_10"), "secret": os.getenv("NAVER_SECRET_10")},
+    {"id": os.getenv(f"NAVER_ID_{i}"), "secret": os.getenv(f"NAVER_SECRET_{i}")}
+    for i in range(1, 11)
 ]
 
 if NAVER_KEYS[0]["id"]:
