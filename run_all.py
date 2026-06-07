@@ -823,7 +823,7 @@ def job_collect_macro():
         logging.info("=== 매크로 데이터 수집 완료 ===")
 
         # 06:xx 아침 수집에만 메인 채널 브리핑 발송 (16:10 저녁 수집 제외, 휴장일 제외)
-        if datetime.datetime.now().hour == 6 and _is_enabled('macro_briefing') and not market_timer.is_kr_holiday():
+        if datetime.datetime.now().hour == 6 and _is_enabled('macro_briefing') and not market_timer.is_us_holiday():
             msg = stock_api.get_macro_briefing(data)
             if msg:
                 stock_api.send_telegram(DEFAULT_CHAT_ID, msg)

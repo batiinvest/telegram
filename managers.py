@@ -486,6 +486,65 @@ class MarketTimeManager:
             logging.info(f"[휴장일] {today_str} 정적 공휴일 목록에서 휴장 확인")
         return is_holiday
 
+    def is_us_holiday(self) -> bool:
+        """오늘이 미국 NYSE 휴장일(주말+미국 공휴일)인지 확인 (KST 기준 날짜)
+        글로벌 시황 브리핑 발송 여부 판단에 사용.
+        미국 전날 장이 쉬었으면 → 브리핑할 데이터가 없으므로 발송 안 함.
+        """
+        now = self.get_now()
+        if now.weekday() >= 5:
+            return True
+        # KST 기준 오늘 아침 06:30 브리핑 시, 미국 전날(현지 기준 어제) 장 확인
+        # KST 06:30 = 미국 전날 (서머타임: EDT UTC-4 → 오후 5:30 / EST UTC-5 → 오후 4:30)
+        # → KST 오늘 날짜 기준 weekday로 미국 전날 거래일 유추
+        # 월요일(0) KST 아침 → 미국 기준 금요일이 마지막 거래일 (주말 체크는 위에서 처리)
+        # 화~금(1~4) KST 아침 → 미국 기준 전날 평일
+        # 즉 KST 월~금이면 미국도 전날 평일이므로 주말은 위에서 처리됨.
+        # 핵심: 미국 공휴일만 추가로 체크
+        today_str = now.strftime('%Y%m%d')
+        cache_key = '_us_holiday_cache'
+        if hasattr(self, cache_key) and getattr(self, cache_key, {}).get('date') == today_str:
+            return getattr(self, cache_key)['is_holiday']
+
+        US_HOLIDAYS = {
+            # 2025 NYSE 휴장일
+            '20250101',  # New Year's Day
+            '20250120',  # MLK Day
+            '20250217',  # Presidents' Day
+            '20250418',  # Good Friday
+            '20250526',  # Memorial Day
+            '20250619',  # Juneteenth
+            '20250704',  # Independence Day
+            '20250901',  # Labor Day
+            '20251127',  # Thanksgiving
+            '20251225',  # Christmas
+            # 2026 NYSE 휴장일
+            '20260101',  # New Year's Day
+            '20260119',  # MLK Day
+            '20260216',  # Presidents' Day
+            '20260403',  # Good Friday
+            '20260525',  # Memorial Day
+            '20260619',  # Juneteenth
+            '20260703',  # Independence Day (Friday observe)
+            '20260907',  # Labor Day
+            '20261126',  # Thanksgiving
+            '20261225',  # Christmas
+        }
+        # KST 기준 오늘(월~금)의 "미국 전날" 체크:
+        # KST 월요일 아침 → 미국 금요일이 마지막 장. 금요일 날짜 = KST 오늘 - 3일
+        # KST 화~금 아침 → 미국 전날 = KST 어제
+        from datetime import timedelta as _td
+        if now.weekday() == 0:  # KST 월요일 → 미국 금요일 체크
+            us_prev_date = (now - _td(days=3)).strftime('%Y%m%d')
+        else:
+            us_prev_date = (now - _td(days=1)).strftime('%Y%m%d')
+
+        is_holiday = us_prev_date in US_HOLIDAYS
+        setattr(self, cache_key, {'date': today_str, 'is_holiday': is_holiday})
+        if is_holiday:
+            logging.info(f"[미국휴장] 미국 전날({us_prev_date}) 휴장 → 글로벌 시황 브리핑 생략")
+        return is_holiday
+
     def is_market_open(self) -> bool:
         """현재 장이 열려있는지 확인 (평일 & 08:50 ~ 15:30)"""
         now = self.get_now()
