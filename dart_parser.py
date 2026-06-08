@@ -25,6 +25,7 @@ def _fetch_dart_reporter(rcept_no: str) -> str:
     """
     DART OpenAPI list.json으로 공시제출인명(flr_nm) 조회.
     rcept_no 앞 8자리가 접수일(YYYYMMDD).
+    하루 최대 ~600건이므로 page_count=100 × 최대 7페이지 순회.
     API 실패 또는 매칭 실패 시 빈 문자열 반환.
     """
     try:
@@ -32,24 +33,29 @@ def _fetch_dart_reporter(rcept_no: str) -> str:
         if not DART_API_KEY:
             return ''
         date = rcept_no[:8]  # 20260608000324 → 20260608
-        resp = _session.get(
-            f'{_DART_API_BASE}/list.json',
-            params={
-                'crtfc_key': DART_API_KEY,
-                'bgn_de': date,
-                'end_de': date,
-                'page_count': 100,
-            },
-            timeout=6,
-        )
-        if resp.status_code != 200:
-            return ''
-        data = resp.json()
-        if data.get('status') != '000':
-            return ''
-        for item in data.get('list', []):
-            if item.get('rcept_no') == rcept_no:
-                return (item.get('flr_nm') or '').strip()
+        for page in range(1, 8):
+            resp = _session.get(
+                f'{_DART_API_BASE}/list.json',
+                params={
+                    'crtfc_key': DART_API_KEY,
+                    'bgn_de': date,
+                    'end_de': date,
+                    'page_count': 100,
+                    'page_no': page,
+                },
+                timeout=6,
+            )
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            if data.get('status') != '000':
+                break
+            items = data.get('list', [])
+            if not items:
+                break
+            for item in items:
+                if item.get('rcept_no') == rcept_no:
+                    return (item.get('flr_nm') or '').strip()
     except Exception as e:
         log.debug(f'[DART API] 보고자명 조회 실패 ({rcept_no}): {e}')
     return ''
