@@ -18,6 +18,42 @@ from managers import global_session as _session
 
 log = logging.getLogger(__name__)
 
+_DART_API_BASE = 'https://opendart.fss.or.kr/api'
+
+
+def _fetch_dart_reporter(rcept_no: str) -> str:
+    """
+    DART OpenAPI list.json으로 공시제출인명(flr_nm) 조회.
+    rcept_no 앞 8자리가 접수일(YYYYMMDD).
+    API 실패 또는 매칭 실패 시 빈 문자열 반환.
+    """
+    try:
+        from config import DART_API_KEY
+        if not DART_API_KEY:
+            return ''
+        date = rcept_no[:8]  # 20260608000324 → 20260608
+        resp = _session.get(
+            f'{_DART_API_BASE}/list.json',
+            params={
+                'crtfc_key': DART_API_KEY,
+                'bgn_de': date,
+                'end_de': date,
+                'page_count': 100,
+            },
+            timeout=6,
+        )
+        if resp.status_code != 200:
+            return ''
+        data = resp.json()
+        if data.get('status') != '000':
+            return ''
+        for item in data.get('list', []):
+            if item.get('rcept_no') == rcept_no:
+                return (item.get('flr_nm') or '').strip()
+    except Exception as e:
+        log.debug(f'[DART API] 보고자명 조회 실패 ({rcept_no}): {e}')
+    return ''
+
 _DESKTOP_UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
     'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
@@ -1743,10 +1779,17 @@ def parse_large_holding_report(kv: dict) -> list:
     """주식등의대량보유상황보고서 — 보고자 / 보유목적 / 보고전후비율 / 보고사유 추출."""
     lines = []
 
-    # 보고자명 — 인코딩 깨진 앞부분 ? 제거
+    # 보고자명 — 인코딩 깨짐 시 DART API fallback
     reporter = _get(kv, 'Reporting entity', '보고자', '보고자명', '성명')
     if reporter:
         reporter = re.sub(r'^[?\s]+', '', reporter).strip()
+        # ? 포함(인코딩 깨짐) 시 DART OpenAPI list.json에서 flr_nm 조회
+        if '?' in reporter:
+            rcept_no = kv.get('_rcept_no', '')
+            if rcept_no:
+                api_name = _fetch_dart_reporter(rcept_no)
+                if api_name:
+                    reporter = api_name
         lines.append(f'👤 보고자: {reporter}')
 
     # 보유목적
@@ -2118,7 +2161,8 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
         if not kv:
             log.debug(f'[DART 파서] KV 없음 ({report_nm})')
             return ''
-        kv['_html'] = html  # 일부 파서에서 원문 직접 파싱 용도
+        kv['_html'] = html        # 일부 파서에서 원문 직접 파싱 용도
+        kv['_rcept_no'] = rcept_no  # API fallback용 접수번호
 
         if report_nm.startswith('[기재정정]'):
             log.debug(f'[DART 파서] 기재정정 kv 키: {list(kv.keys())[:10]}')
