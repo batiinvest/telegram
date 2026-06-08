@@ -915,7 +915,12 @@ def parse_mgmt_event(kv: dict) -> list:
 
     # 변경신청 사유 (변경승인 공시)
     if v := _get(kv, '3. 변경신청 사유', '변경신청 사유', '변경사유'):
-        lines.append(f'📋 변경사유: {_trunc(v, 70)}')
+        bullets = _parse_numbered_body(v, max_items=5)
+        if bullets:
+            lines.append('📋 변경사유:')
+            lines.extend(bullets)
+        else:
+            lines.append(f'📋 변경사유: {_trunc(v, 100)}')
 
     # 결정일 / 사실확인일
     if v := _get(kv, '4. 사실발생', '이사회결의일', '사실확인일', '결정일'):
