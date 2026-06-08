@@ -618,7 +618,7 @@ def parse_contract(kv: dict) -> list:
         ratio_src = ratio or amount
         m_ratio = re.search(r'대비\s*[：:]\s*([\d.]+)', ratio_src)
         ratio_clean = m_ratio.group(1) if m_ratio else (_clean_ratio(ratio) if ratio else '')
-        ratio_str = f' (매출대비 {ratio_clean}%)' if ratio_clean else ''
+        ratio_str = f' (매출대비 {ratio_clean.rstrip("%")}%)' if ratio_clean else ''
         lines.append(f'💰 계약금액: {_fmt_amount(amt_clean)}원{ratio_str}')
 
     # 계약기간 — 각주 필터링, 날짜만 추출
