@@ -2012,6 +2012,21 @@ def parse_insider_report(kv: dict) -> list:
     return lines
 
 
+def _clean_amendment_field(field: str) -> str:
+    """기재정정 필드명 정리 — 섹션경로 제거 후 핵심 필드명만 반환."""
+    f = field.strip()
+    # 'N. 섹션명' 앞 번호 제거
+    f = re.sub(r'^\d+\.\s*', '', f)
+    # '[섹션명]' 대괄호 제거
+    f = re.sub(r'^\[.+?\]\s*', '', f)
+    # ' - ' 구분자 중 마지막 세그먼트 추출 (경로의 끝 = 실제 필드명)
+    parts = [p.strip() for p in re.split(r'\s+-\s+', f) if p.strip()]
+    f = parts[-1] if parts else f
+    # 괄호 단위 제거: '체결일(당해건)' → '체결일'
+    f = re.sub(r'\([^)]{1,10}\)\s*$', '', f).strip()
+    return _trunc(f, 20)
+
+
 def _fmt_amendment_val(field_name: str, val: str) -> str:
     """기재정정 비교값 포맷 — 금액/날짜/비율 필드에 맞게 변환."""
     if not val or val in ('-', '—', '없음', 'N/A'):
@@ -2105,7 +2120,7 @@ def parse_amendment(kv: dict) -> list:
         if old_c and new_c and old_c != new_c and not _is_header_row(field, old_c, new_c):
             old_fmt = _fmt_amendment_val(field, old_c)
             new_fmt = _fmt_amendment_val(field, new_c)
-            change_lines.append(f'🔧 {_trunc(field, 25)}: {old_fmt} → {new_fmt}')
+            change_lines.append(f'🔧 {_clean_amendment_field(field)}: {old_fmt} → {new_fmt}')
 
     if change_lines:
         lines.extend(change_lines)
@@ -2132,9 +2147,9 @@ def parse_amendment(kv: dict) -> list:
                 if not _is_header_row(field_name, old_clean, new_clean):
                     old_fmt = _fmt_amendment_val(field_name, old_clean)
                     new_fmt = _fmt_amendment_val(field_name, new_clean)
-                    change_lines.append(f'🔧 {_trunc(field_name, 25)}: {old_fmt} → {new_fmt}')
+                    change_lines.append(f'🔧 {_clean_amendment_field(field_name)}: {old_fmt} → {new_fmt}')
             elif old_clean and not _is_label(old_clean):
-                change_lines.append(f'🔧 {_trunc(field_name, 25)}: {_fmt_amendment_val(field_name, old_clean)}')
+                change_lines.append(f'🔧 {_clean_amendment_field(field_name)}: {_fmt_amendment_val(field_name, old_clean)}')
             i += 2
             continue
 
