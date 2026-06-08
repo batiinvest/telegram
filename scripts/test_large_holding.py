@@ -31,10 +31,15 @@ detail = get_disclosure_detail(RCEPT_NO, REPORT_NM)
 print(detail or '(결과 없음)')
 
 print('\n=== 4. 텔레그램 전송 ===')
+links = (
+    f'🔗 <a href="http://dart.fss.or.kr/dsaf001/main.do?rcpNo={RCEPT_NO}">공시 원문</a> | '
+    f'📈 <a href="https://finance.naver.com/item/main.nhn?code=310210">네이버</a>'
+)
 msg = (
     f'🧪 [테스트] 대량보유보고서 보고자명 파싱\n'
     f'rcept_no: {RCEPT_NO}\n\n'
-    f'{detail or "(파싱 결과 없음)"}'
+    f'{detail or "(파싱 결과 없음)"}\n'
+    f'{links}'
 )
 stock_api.send_telegram(CHAT_ID, msg)
 print(f'전송 완료 → {CHAT_ID}')
