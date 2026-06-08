@@ -1743,9 +1743,10 @@ def parse_large_holding_report(kv: dict) -> list:
     """주식등의대량보유상황보고서 — 보고자 / 보유목적 / 보고전후비율 / 보고사유 추출."""
     lines = []
 
-    # 보고자명
+    # 보고자명 — 인코딩 깨진 앞부분 ? 제거
     reporter = _get(kv, 'Reporting entity', '보고자', '보고자명', '성명')
     if reporter:
+        reporter = re.sub(r'^[?\s]+', '', reporter).strip()
         lines.append(f'👤 보고자: {reporter}')
 
     # 보유목적
@@ -1753,12 +1754,15 @@ def parse_large_holding_report(kv: dict) -> list:
     if purpose:
         lines.append(f'🎯 보유목적: {_trunc(purpose, 60)}')
 
+    _IS_DATE = re.compile(r'^\d{4}-\d{2}-\d{2}')
+    _IS_RATIO = re.compile(r'^\d+(\.\d+)?$')  # 순수 숫자(비율)만 허용
+
     # 보고전/후 보유비율 — kv 키에서 보고전/보고후 패턴 탐색
     before_ratio = after_ratio = ''
     for k, v in kv.items():
         kn = re.sub(r'\s+', '', k)
         vn = re.sub(r'\s+', ' ', v).strip()
-        if not re.search(r'\d', vn):
+        if not re.search(r'\d', vn) or _IS_DATE.match(vn):
             continue
         if not before_ratio and ('보고전' in kn or 'Before' in k):
             before_ratio = vn
@@ -1775,14 +1779,19 @@ def parse_large_holding_report(kv: dict) -> list:
         for k, v in kv.items():
             if '비율' in k or 'ratio' in k.lower():
                 clean = re.sub(r'\s+', ' ', v).strip()
-                if re.search(r'\d', clean):
+                # 날짜 형식 제외, 숫자(%포함) 값만 허용
+                if re.search(r'\d', clean) and not _IS_DATE.match(clean):
                     lines.append(f'📊 보유비율: {clean}')
                     break
 
-    # 보고사유
+    # 보고사유 — 인코딩 깨짐(?) 과다 시 출력 제외
     reason = _get(kv, 'Reason for reporting', '보고사유', '보고 사유')
     if reason:
-        lines.append(f'📋 보고사유: {_trunc(reason, 60)}')
+        reason_clean = re.sub(r'\s+', ' ', reason).strip()
+        # ? 비율이 10% 미만인 경우만 출력 (인코딩 깨짐 필터)
+        q_ratio = reason_clean.count('?') / max(len(reason_clean), 1)
+        if q_ratio < 0.1:
+            lines.append(f'📋 보고사유: {_trunc(reason_clean, 80)}')
 
     # 이전보고일
     prev = _get(kv, 'Previous report', '직전보고서', '전보고서제출일', '이전보고')
