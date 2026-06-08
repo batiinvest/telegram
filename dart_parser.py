@@ -2068,18 +2068,44 @@ def parse_amendment(kv: dict) -> list:
             lines.append(f'📋 사유: {_trunc(v, 80)}')
 
     change_lines = []
+    _MAX_CHANGES = 6  # 🔧 최대 출력 수
+
+    # 헤더성 값 판별 — 컬럼 레이블이면 True (숫자 없고 괄호단위 포함 짧은 텍스트)
+    def _is_label(v: str) -> bool:
+        v = v.strip()
+        if len(v) > 25 or re.search(r'\d{4}', v):
+            return False
+        if re.search(r'\(주\)|\(%\)|\(건\)|\(원\)', v):
+            return True
+        # 순수 텍스트 레이블 (숫자 전혀 없고 짧음)
+        return not re.search(r'\d', v) and len(v) <= 15
+
+    # new값이 field_name 자체와 동일하거나 포함 → 헤더 행
+    def _is_header_row(field: str, old_v: str, new_v: str) -> bool:
+        fn = re.sub(r'\s+', '', field)
+        nv = re.sub(r'\s+', '', new_v)
+        ov = re.sub(r'\s+', '', old_v)
+        if fn == nv or fn == ov:
+            return True
+        if _is_label(old_v) and _is_label(new_v):
+            return True
+        if _is_label(old_v) and re.search(r'^\d[\d,]+$', new_v.replace(' ', '')):
+            return True  # old=컬럼헤더, new=숫자 → 헤더+데이터 혼합 행
+        return False
 
     # ── 패턴 C: 정정전_* / 정정후_* 접두어 키 비교 (가장 신뢰도 높음) ──────
     before_keys = {k[4:]: v for k, v in kv.items() if k.startswith('정정전')}
     after_keys  = {k[4:]: v for k, v in kv.items() if k.startswith('정정후')}
     for field, old_v in before_keys.items():
+        if len(change_lines) >= _MAX_CHANGES:
+            break
         new_v = after_keys.get(field, '')
         old_c = re.sub(r'\s+', ' ', old_v).strip()
         new_c = re.sub(r'\s+', ' ', new_v).strip()
-        if old_c and new_c and old_c != new_c:
+        if old_c and new_c and old_c != new_c and not _is_header_row(field, old_c, new_c):
             old_fmt = _fmt_amendment_val(field, old_c)
             new_fmt = _fmt_amendment_val(field, new_c)
-            change_lines.append(f'🔧 {field}: {old_fmt} → {new_fmt}')
+            change_lines.append(f'🔧 {_trunc(field, 25)}: {old_fmt} → {new_fmt}')
 
     if change_lines:
         lines.extend(change_lines)
@@ -2092,7 +2118,7 @@ def parse_amendment(kv: dict) -> list:
         return lines
 
     i = header_idx + 1
-    while i < len(items):
+    while i < len(items) and len(change_lines) < _MAX_CHANGES:
         k, val = items[i]
 
         # 패턴 A: "N. 섹션명 - 필드명": OLD  +  OLD: NEW
@@ -2103,31 +2129,32 @@ def parse_amendment(kv: dict) -> list:
             old_clean  = val.strip()
             new_clean  = new_val.strip()
             if old_clean and new_clean and old_clean != new_clean:
-                old_fmt = _fmt_amendment_val(field_name, old_clean)
-                new_fmt = _fmt_amendment_val(field_name, new_clean)
-                change_lines.append(f'🔧 {field_name}: {old_fmt} → {new_fmt}')
-            elif old_clean:
-                change_lines.append(f'🔧 {field_name}: {_fmt_amendment_val(field_name, old_clean)}')
+                if not _is_header_row(field_name, old_clean, new_clean):
+                    old_fmt = _fmt_amendment_val(field_name, old_clean)
+                    new_fmt = _fmt_amendment_val(field_name, new_clean)
+                    change_lines.append(f'🔧 {_trunc(field_name, 25)}: {old_fmt} → {new_fmt}')
+            elif old_clean and not _is_label(old_clean):
+                change_lines.append(f'🔧 {_trunc(field_name, 25)}: {_fmt_amendment_val(field_name, old_clean)}')
             i += 2
             continue
 
         # 패턴 B: "N. 섹션명" 부모 헤더 → 하위 "- 필드: old" / "- 필드: new"
         if re.match(r'^\d+\.\s+\S', k):
             j = i + 1
-            while j < len(items):
+            while j < len(items) and len(change_lines) < _MAX_CHANGES:
                 ck, cv = items[j]
                 if not ck.startswith('-'):
                     break
                 mo = re.match(r'^-\s*(.+?):\s*(.+)$', ck)
                 mn = re.match(r'^-\s*(.+?):\s*(.+)$', cv)
                 if mo and mn:
-                    fname  = mo.group(1).strip()
-                    old_v  = mo.group(2).strip()
-                    new_v  = mn.group(2).strip()
-                    if old_v != new_v:
+                    fname = mo.group(1).strip()
+                    old_v = mo.group(2).strip()
+                    new_v = mn.group(2).strip()
+                    if old_v != new_v and not _is_header_row(fname, old_v, new_v):
                         old_fmt = _fmt_amendment_val(fname, old_v)
                         new_fmt = _fmt_amendment_val(fname, new_v)
-                        change_lines.append(f'🔧 {fname}: {old_fmt} → {new_fmt}')
+                        change_lines.append(f'🔧 {_trunc(fname, 25)}: {old_fmt} → {new_fmt}')
                 j += 1
             i = j
             continue
