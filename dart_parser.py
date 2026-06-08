@@ -1853,7 +1853,7 @@ def parse_large_holding_report(kv: dict) -> list:
             irds_f   = float(irds_rt) if irds_rt else 0.0
             before_f = round(after_f - irds_f, 2)
             sign     = '+' if irds_f >= 0 else ''
-            lines.append(f'📊 보고전: {before_f}% → 보고후: {after_f}% ({sign}{irds_f}%)')
+            lines.append(f'📊 보고전: {before_f:.2f}% → 보고후: {after_f:.2f}% ({sign}{irds_f:.2f}%)')
         except ValueError:
             lines.append(f'📊 보유비율: {after_rt}%')
         if stkqy:
@@ -1870,7 +1870,7 @@ def parse_large_holding_report(kv: dict) -> list:
             reason = ''
     if reason:
         # '- ' 구분 목록을 bullet로 변환
-        items = [s.strip() for s in re.split(r'\n\s*-\s*|\s+-\s+', reason) if s.strip()]
+        items = [re.sub(r'^-\s*', '', s).strip() for s in re.split(r'\n\s*-\s*|\s+-\s+', reason) if s.strip()]
         if len(items) > 1:
             lines.append('📋 보고사유:')
             for it in items[:4]:
