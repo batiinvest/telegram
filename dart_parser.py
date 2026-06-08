@@ -2019,12 +2019,19 @@ def _clean_amendment_field(field: str) -> str:
     f = re.sub(r'^\d+\.\s*', '', f)
     # '[섹션명]' 대괄호 제거
     f = re.sub(r'^\[.+?\]\s*', '', f)
-    # ' - ' 구분자 중 마지막 세그먼트 추출 (경로의 끝 = 실제 필드명)
-    parts = [p.strip() for p in re.split(r'\s+-\s+', f) if p.strip()]
+    # ' -' 구분자로 분리 (뒤 공백 유무 관계없이)
+    parts = [p.strip() for p in re.split(r'\s+-\s*', f) if p.strip()]
     f = parts[-1] if parts else f
-    # 괄호 단위 제거: '체결일(당해건)' → '체결일'
-    f = re.sub(r'\([^)]{1,10}\)\s*$', '', f).strip()
-    return _trunc(f, 20)
+    # 괄호 단위 제거: '체결일(당해건)', '지분율(%)' → 핵심어만
+    f = re.sub(r'\s*\([^)]{1,10}\)\s*$', '', f).strip()
+    # 마지막 의미있는 한글 단어 추출 (공백 분리 후 뒤에서 탐색)
+    words = f.split()
+    for w in reversed(words):
+        w_core = re.sub(r'[()%주건원,.]', '', w)
+        if re.search(r'[가-힣]{2,}', w_core):
+            f = re.sub(r'\s*\([^)]{1,10}\)\s*$', '', w).strip()
+            break
+    return _trunc(f, 15)
 
 
 def _fmt_amendment_val(field_name: str, val: str) -> str:
