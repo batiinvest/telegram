@@ -11,7 +11,7 @@ from dart_parser import get_disclosure_detail, _fetch_dart_reporter, _fetch_html
 
 RCEPT_NO  = '20260608000324'
 REPORT_NM = '주식등의대량보유상황보고서(일반)'
-CHAT_ID   = '@BatiInvestChat'
+CHAT_ID   = '@batiinvest'
 
 print('=== 1. DART API 보고자명 직접 조회 ===')
 name = _fetch_dart_reporter(RCEPT_NO)
