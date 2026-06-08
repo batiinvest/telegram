@@ -1825,11 +1825,13 @@ def parse_large_holding_report(kv: dict) -> list:
         if after_ratio:
             lines.append(f'📊 보고후: {after_ratio}%')
     else:
+        # 'ratio' 단어 경계 체크 (corporation, registration 등 오매칭 방지)
+        _RATIO_KEY = re.compile(r'(?<!\w)ratio(?!\w)', re.IGNORECASE)
         for k, v in kv.items():
-            if '비율' in k or 'ratio' in k.lower():
+            if '보유비율' in k or _RATIO_KEY.search(k):
                 clean = re.sub(r'\s+', ' ', v).strip()
-                # 날짜 형식 제외, 숫자(%포함) 값만 허용
-                if re.search(r'\d', clean) and not _IS_DATE.match(clean):
+                # 날짜·텍스트 제외, 숫자+% 형태 값만 허용
+                if re.search(r'\d+\.?\d*\s*%', clean) and not _IS_DATE.match(clean):
                     lines.append(f'📊 보유비율: {clean}')
                     break
 
