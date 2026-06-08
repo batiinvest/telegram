@@ -21,18 +21,16 @@ log = logging.getLogger(__name__)
 _DART_API_BASE = 'https://opendart.fss.or.kr/api'
 
 
-def _fetch_dart_reporter(rcept_no: str) -> str:
+def _fetch_dart_list_item(rcept_no: str) -> dict:
     """
-    DART OpenAPI list.json으로 공시제출인명(flr_nm) 조회.
-    rcept_no 앞 8자리가 접수일(YYYYMMDD).
-    하루 최대 ~600건이므로 page_count=100 × 최대 7페이지 순회.
-    API 실패 또는 매칭 실패 시 빈 문자열 반환.
+    DART OpenAPI list.json에서 rcept_no에 해당하는 공시 항목 반환.
+    flr_nm(제출인명), corp_code 등 포함.
     """
     try:
         from config import DART_API_KEY
         if not DART_API_KEY:
-            return ''
-        date = rcept_no[:8]  # 20260608000324 → 20260608
+            return {}
+        date = rcept_no[:8]
         for page in range(1, 8):
             resp = _session.get(
                 f'{_DART_API_BASE}/list.json',
@@ -55,10 +53,47 @@ def _fetch_dart_reporter(rcept_no: str) -> str:
                 break
             for item in items:
                 if item.get('rcept_no') == rcept_no:
-                    return (item.get('flr_nm') or '').strip()
+                    return item
     except Exception as e:
-        log.debug(f'[DART API] 보고자명 조회 실패 ({rcept_no}): {e}')
-    return ''
+        log.debug(f'[DART API] list 조회 실패 ({rcept_no}): {e}')
+    return {}
+
+
+def _fetch_dart_reporter(rcept_no: str) -> str:
+    """list.json에서 flr_nm(공시제출인명) 반환. 하위호환용."""
+    return (_fetch_dart_list_item(rcept_no).get('flr_nm') or '').strip()
+
+
+def _fetch_dart_majorstock(rcept_no: str) -> dict:
+    """
+    DART majorstock.json으로 대량보유 상세 데이터 조회.
+    반환 필드: repror, stkqy, stkrt, stkrt_irds, ctr_stkrt, report_resn 등.
+    """
+    try:
+        from config import DART_API_KEY
+        if not DART_API_KEY:
+            return {}
+        # corp_code 먼저 획득
+        list_item = _fetch_dart_list_item(rcept_no)
+        corp_code = list_item.get('corp_code', '')
+        if not corp_code:
+            return {}
+        resp = _session.get(
+            f'{_DART_API_BASE}/majorstock.json',
+            params={'crtfc_key': DART_API_KEY, 'corp_code': corp_code},
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return {}
+        data = resp.json()
+        if data.get('status') != '000':
+            return {}
+        for item in data.get('list', []):
+            if item.get('rcept_no') == rcept_no:
+                return item
+    except Exception as e:
+        log.debug(f'[DART API] majorstock 조회 실패 ({rcept_no}): {e}')
+    return {}
 
 _DESKTOP_UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -1782,67 +1817,66 @@ def parse_rights_exercise(kv: dict) -> list:
 
 
 def parse_large_holding_report(kv: dict) -> list:
-    """주식등의대량보유상황보고서 — 보고자 / 보유목적 / 보고전후비율 / 보고사유 추출."""
+    """주식등의대량보유상황보고서 — majorstock API 우선, HTML KV fallback."""
     lines = []
+    rcept_no = kv.get('_rcept_no', '')
 
-    # 보고자명 — 인코딩 깨짐 시 DART API fallback
-    reporter = _get(kv, 'Reporting entity', '보고자', '보고자명', '성명')
-    if reporter:
+    # ── DART majorstock API 조회 ──────────────────────────────────────
+    api = _fetch_dart_majorstock(rcept_no) if rcept_no else {}
+
+    # 보고자명
+    reporter = (api.get('repror') or '').strip()
+    if not reporter:
+        reporter = _get(kv, 'Reporting entity', '보고자', '보고자명', '성명') or ''
         reporter = re.sub(r'^[?\s]+', '', reporter).strip()
-        # ? 포함(인코딩 깨짐) 시 DART OpenAPI list.json에서 flr_nm 조회
         if '?' in reporter:
-            rcept_no = kv.get('_rcept_no', '')
-            if rcept_no:
-                api_name = _fetch_dart_reporter(rcept_no)
-                if api_name:
-                    reporter = api_name
+            api_name = _fetch_dart_reporter(rcept_no)
+            if api_name:
+                reporter = api_name
+    if reporter:
         lines.append(f'👤 보고자: {reporter}')
 
-    # 보유목적
+    # 보유목적 (API에 없으므로 HTML KV 사용)
     purpose = _get(kv, 'Purpose of holding', '보유목적', '주식등의보유목적', '보유 목적')
-    if purpose:
-        lines.append(f'🎯 보유목적: {_trunc(purpose, 60)}')
+    if purpose and '?' not in purpose:
+        lines.append(f'🎯 보유목적: {_trunc(purpose, 40)}')
 
-    _IS_DATE = re.compile(r'^\d{4}-\d{2}-\d{2}')
-    _IS_RATIO = re.compile(r'^\d+(\.\d+)?$')  # 순수 숫자(비율)만 허용
+    # 보고전/후 보유비율 — API 우선
+    after_rt  = api.get('stkrt', '')       # 보고후 비율
+    irds_rt   = api.get('stkrt_irds', '')  # 증감 (음수 가능)
+    stkqy     = api.get('stkqy', '')       # 보유주식수
+    ctr_stkrt = api.get('ctr_stkrt', '')   # 주요계약 비율
 
-    # 보고전/후 보유비율 — kv 키에서 보고전/보고후 패턴 탐색
-    before_ratio = after_ratio = ''
-    for k, v in kv.items():
-        kn = re.sub(r'\s+', '', k)
-        vn = re.sub(r'\s+', ' ', v).strip()
-        if not re.search(r'\d', vn) or _IS_DATE.match(vn):
-            continue
-        if not before_ratio and ('보고전' in kn or 'Before' in k):
-            before_ratio = vn
-        if not after_ratio and ('보고후' in kn or 'After' in k):
-            after_ratio = vn
+    if after_rt:
+        try:
+            after_f  = float(after_rt)
+            irds_f   = float(irds_rt) if irds_rt else 0.0
+            before_f = round(after_f - irds_f, 2)
+            sign     = '+' if irds_f >= 0 else ''
+            lines.append(f'📊 보고전: {before_f}% → 보고후: {after_f}% ({sign}{irds_f}%)')
+        except ValueError:
+            lines.append(f'📊 보유비율: {after_rt}%')
+        if stkqy:
+            lines.append(f'🔢 보유주식: {stkqy}주')
+        if ctr_stkrt and ctr_stkrt != '0':
+            lines.append(f'📋 주요계약: {ctr_stkrt}%')
 
-    # 보고전/후가 없으면 단순 보유비율 fallback
-    if before_ratio or after_ratio:
-        if before_ratio:
-            lines.append(f'📊 보고전: {before_ratio}%')
-        if after_ratio:
-            lines.append(f'📊 보고후: {after_ratio}%')
-    else:
-        # 'ratio' 단어 경계 체크 (corporation, registration 등 오매칭 방지)
-        _RATIO_KEY = re.compile(r'(?<!\w)ratio(?!\w)', re.IGNORECASE)
-        for k, v in kv.items():
-            if '보유비율' in k or _RATIO_KEY.search(k):
-                clean = re.sub(r'\s+', ' ', v).strip()
-                # 날짜·텍스트 제외, 숫자+% 형태 값만 허용
-                if re.search(r'\d+\.?\d*\s*%', clean) and not _IS_DATE.match(clean):
-                    lines.append(f'📊 보유비율: {clean}')
-                    break
-
-    # 보고사유 — 인코딩 깨짐(?) 과다 시 출력 제외
-    reason = _get(kv, 'Reason for reporting', '보고사유', '보고 사유')
+    # 보고사유 — API 우선 (인코딩 깨짐 없음)
+    reason = (api.get('report_resn') or '').strip()
+    if not reason:
+        reason = _get(kv, 'Reason for reporting', '보고사유', '보고 사유') or ''
+        q_ratio = reason.count('?') / max(len(reason), 1)
+        if q_ratio >= 0.1:
+            reason = ''
     if reason:
-        reason_clean = re.sub(r'\s+', ' ', reason).strip()
-        # ? 비율이 10% 미만인 경우만 출력 (인코딩 깨짐 필터)
-        q_ratio = reason_clean.count('?') / max(len(reason_clean), 1)
-        if q_ratio < 0.1:
-            lines.append(f'📋 보고사유: {_trunc(reason_clean, 80)}')
+        # '- ' 구분 목록을 bullet로 변환
+        items = [s.strip() for s in re.split(r'\n\s*-\s*|\s+-\s+', reason) if s.strip()]
+        if len(items) > 1:
+            lines.append('📋 보고사유:')
+            for it in items[:4]:
+                lines.append(f'  • {_trunc(it, 60)}')
+        else:
+            lines.append(f'📋 보고사유: {_trunc(reason, 100)}')
 
     # 이전보고일
     prev = _get(kv, 'Previous report', '직전보고서', '전보고서제출일', '이전보고')
