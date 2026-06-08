@@ -669,7 +669,11 @@ def _fmt_payment_terms(raw: str) -> list[str]:
         i += 2
 
     if not sections:
-        # 번호 목록 구조 없으면 그냥 truncate
+        # '-' 구분 목록 처리 (예: '30% 지급 - 30% 지급 - 잔금 ...')
+        dash_items = [s.strip() for s in re.split(r'\s+-\s+', raw.strip()) if s.strip()]
+        if len(dash_items) > 1:
+            return [f'  • {_trunc(item, 60)}' for item in dash_items[:6]]
+        # 번호 목록도 dash도 없으면 truncate
         cleaned = re.sub(r'\s+', ' ', raw)
         return [f'  {_trunc(cleaned, 80)}']
 
