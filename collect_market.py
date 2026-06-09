@@ -551,7 +551,10 @@ def collect_foreign_institution() -> dict:
     if SB_URL and SB_SERVICE_KEY:
         sb_client = get_supabase_client()
         updated = 0
-        # 외국인 + 기관 모두 포함
+        # frgn 코드 집합 (외국인 기준 API로 조회된 종목 — 수급 신뢰 가능)
+        frgn_codes_set = {r['code'] for r in frgn}
+
+        # 외국인 + 기관 병합
         all_rows = {r['code']: r for r in frgn}
         for r in orgn:
             if r['code'] in all_rows:
@@ -563,7 +566,10 @@ def collect_foreign_institution() -> dict:
         for code, r in all_rows.items():
             try:
                 upd = {}
-                if r.get('frgn_net_buy') is not None:
+                # foreign_net_buy: 외국인 기준 API(frgn)에 포함된 종목만 갱신.
+                # 기관 기준 API(orgn)에서 반환된 frgn_ntby_qty는 부정확(0)할 수 있어
+                # 기존 DB 값을 덮어쓰지 않음.
+                if code in frgn_codes_set and r.get('frgn_net_buy') is not None:
                     upd['foreign_net_buy'] = r['frgn_net_buy']
                 if r.get('orgn_net_buy') is not None:
                     upd['institution_net_buy'] = r['orgn_net_buy']
