@@ -131,7 +131,7 @@ def get_industry_map() -> dict[str, str]:
 def get_kr_data(codes: list[str], cutoff: str, base_date: str) -> list[dict]:
     return fetch_all_pages(
         sb.from_('market_data')
-          .select('base_date,stock_code,price_change_rate,foreign_net_buy,institution_net_buy')
+          .select('base_date,stock_code,price,price_change_rate,foreign_net_buy,institution_net_buy')
           .in_('stock_code', codes)
           .gte('base_date', cutoff)
           .lte('base_date', base_date)
@@ -206,9 +206,11 @@ def calc_summary(trading_days: list[str],
             buckets[ind] = {p: {'chg': [], 'frgn': 0, 'inst': 0, 'cnt': 0}
                             for p in PERIODS}
 
-        chg  = row.get('price_change_rate') or 0
-        frgn = row.get('foreign_net_buy')    or 0
-        inst = row.get('institution_net_buy') or 0
+        chg   = row.get('price_change_rate') or 0
+        price = row.get('price') or 0
+        # 주수 × 가격 / 1e6 = 백만원 단위 (fmtNet 기준)
+        frgn  = (row.get('foreign_net_buy')    or 0) * price / 1_000_000
+        inst  = (row.get('institution_net_buy') or 0) * price / 1_000_000
 
         for p in PERIODS:
             if idx < p:
