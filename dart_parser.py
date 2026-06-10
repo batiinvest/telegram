@@ -2098,6 +2098,8 @@ def parse_amendment(kv: dict) -> list:
 
     change_lines = []
     _MAX_CHANGES = 6  # 🔧 최대 출력 수
+    # 설명성 필드 — 변경 전/후 비교 표시에서 제외
+    _SKIP_FIELDS = {'중요사항', '비고', '기타사항', '첨부서류'}
 
     # 헤더성 값 판별 — 컬럼 레이블이면 True (숫자 없고 괄호단위 포함 짧은 텍스트)
     def _is_label(v: str) -> bool:
@@ -2130,6 +2132,8 @@ def parse_amendment(kv: dict) -> list:
     for field, old_v in before_keys.items():
         if len(change_lines) >= _MAX_CHANGES:
             break
+        if _clean_amendment_field(field) in _SKIP_FIELDS:
+            continue
         new_v = after_keys.get(field, '')
         old_c = re.sub(r'\s+', ' ', old_v).strip()
         new_c = re.sub(r'\s+', ' ', new_v).strip()
@@ -2156,6 +2160,9 @@ def parse_amendment(kv: dict) -> list:
         m = re.match(r'^\d+\.\s+.+\s+-\s+(.+)$', k)
         if m:
             field_name = m.group(1).strip()
+            if _clean_amendment_field(field_name) in _SKIP_FIELDS:
+                i += 1
+                continue
             new_val    = kv.get(val.strip(), '')
             old_clean  = val.strip()
             new_clean  = new_val.strip()
@@ -2182,6 +2189,9 @@ def parse_amendment(kv: dict) -> list:
                     fname = mo.group(1).strip()
                     old_v = mo.group(2).strip()
                     new_v = mn.group(2).strip()
+                    if _clean_amendment_field(fname) in _SKIP_FIELDS:
+                        j += 1
+                        continue
                     if old_v != new_v and not _is_header_row(fname, old_v, new_v):
                         old_fmt = _fmt_amendment_val(fname, old_v)
                         new_fmt = _fmt_amendment_val(fname, new_v)
