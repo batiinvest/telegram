@@ -2285,6 +2285,65 @@ def parse_tender_offer_result(kv: dict) -> list:
     if before_ratio and after_ratio:
         lines.append(f'📊 지분율: {before_ratio}% → {after_ratio}%')
 
+    # ── 보유자별 보유 현황 테이블 파싱 ─────────────────────────────────────
+    # 헤더에 '명칭' 또는 '보유주식' 포함된 테이블을 찾아 각 행 추출
+    holder_lines = []
+    _IS_NUM = re.compile(r'^[\d,]+$')
+    _IS_RATIO = re.compile(r'^\d{1,2}\.\d{1,2}$')
+
+    for table in soup.find_all('table'):
+        headers = [td.get_text(strip=True) for td in table.find_all(['th', 'td'])[:8]]
+        header_text = ' '.join(headers)
+        # 보유자별 테이블 식별: '명칭' 또는 '보유주식' 키워드 포함
+        if not re.search(r'명칭|보유주|비율', header_text):
+            continue
+
+        for tr in table.find_all('tr'):
+            cells = [td.get_text(strip=True) for td in tr.find_all('td')]
+            if len(cells) < 3:
+                continue
+            name = cells[0]
+            # 이름 셀: 한글 포함, 숫자만이거나 비율이면 스킵
+            if not re.search(r'[가-힣?]', name) or _IS_NUM.match(name) or _IS_RATIO.match(name):
+                continue
+            # 헤더성 텍스트 스킵 ('명칭', '수량' 등)
+            if len(name) <= 3 and not re.search(r'\(', name):
+                continue
+
+            # 숫자 셀 추출
+            nums   = [c.replace(',', '') for c in cells[1:] if _IS_NUM.match(c.replace(',', ''))]
+            ratios_r = [c for c in cells[1:] if _IS_RATIO.match(c)]
+
+            before_sh = nums[0] if len(nums) > 0 else ''
+            planned_sh = nums[1] if len(nums) > 1 else ''
+            after_sh   = nums[2] if len(nums) > 2 else ''
+            b_ratio    = ratios_r[0] if len(ratios_r) > 0 else ''
+            a_ratio    = ratios_r[1] if len(ratios_r) > 1 else ''
+
+            # 이름 정리 (인코딩 깨진 문자 제거 후 표시)
+            name_clean = re.sub(r'[^가-힣(-)\w\s\(\)]', '', name).strip()
+            if not name_clean:
+                name_clean = name
+
+            parts = []
+            if before_sh:
+                parts.append(f'전: {int(before_sh):,}주')
+            if planned_sh and planned_sh != '0':
+                parts.append(f'매수: {int(planned_sh):,}주')
+            if after_sh:
+                parts.append(f'후: {int(after_sh):,}주')
+            ratio_str = f' ({b_ratio}%→{a_ratio}%)' if b_ratio and a_ratio else (f' ({b_ratio}%)' if b_ratio else '')
+
+            if parts:
+                holder_lines.append(f'  • {name_clean}{ratio_str}: {" / ".join(parts)}')
+
+        if holder_lines:
+            break  # 첫 번째 유효 테이블만 사용
+
+    if holder_lines:
+        lines.append('👥 보유자별 현황')
+        lines.extend(holder_lines)
+
     return lines
 
 
