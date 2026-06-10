@@ -2099,7 +2099,8 @@ def parse_amendment(kv: dict) -> list:
     change_lines = []
     _MAX_CHANGES = 6  # 🔧 최대 출력 수
     # 설명성 필드 — 변경 전/후 비교 표시에서 제외
-    _SKIP_FIELDS = {'중요사항', '비고', '기타사항', '첨부서류'}
+    _SKIP_FIELDS = {'중요사항', '비고', '기타사항', '첨부서류', '사항'}
+    _MAX_VAL_LEN = 80  # 변경값이 이 길이 초과 시 가독성 없으므로 생략
 
     # 헤더성 값 판별 — 컬럼 레이블이면 True (숫자 없고 괄호단위 포함 짧은 텍스트)
     def _is_label(v: str) -> bool:
@@ -2138,6 +2139,8 @@ def parse_amendment(kv: dict) -> list:
         old_c = re.sub(r'\s+', ' ', old_v).strip()
         new_c = re.sub(r'\s+', ' ', new_v).strip()
         if old_c and new_c and old_c != new_c and not _is_header_row(field, old_c, new_c):
+            if len(old_c) > _MAX_VAL_LEN or len(new_c) > _MAX_VAL_LEN:
+                continue  # 너무 길어 잘리면 가독성 없음
             old_fmt = _fmt_amendment_val(field, old_c)
             new_fmt = _fmt_amendment_val(field, new_c)
             change_lines.append(f'🔧 {_clean_amendment_field(field)}: {old_fmt} → {new_fmt}')
@@ -2168,9 +2171,10 @@ def parse_amendment(kv: dict) -> list:
             new_clean  = new_val.strip()
             if old_clean and new_clean and old_clean != new_clean:
                 if not _is_header_row(field_name, old_clean, new_clean):
-                    old_fmt = _fmt_amendment_val(field_name, old_clean)
-                    new_fmt = _fmt_amendment_val(field_name, new_clean)
-                    change_lines.append(f'🔧 {_clean_amendment_field(field_name)}: {old_fmt} → {new_fmt}')
+                    if len(old_clean) <= _MAX_VAL_LEN and len(new_clean) <= _MAX_VAL_LEN:
+                        old_fmt = _fmt_amendment_val(field_name, old_clean)
+                        new_fmt = _fmt_amendment_val(field_name, new_clean)
+                        change_lines.append(f'🔧 {_clean_amendment_field(field_name)}: {old_fmt} → {new_fmt}')
             elif old_clean and not _is_label(old_clean):
                 change_lines.append(f'🔧 {_clean_amendment_field(field_name)}: {_fmt_amendment_val(field_name, old_clean)}')
             i += 2
@@ -2193,9 +2197,10 @@ def parse_amendment(kv: dict) -> list:
                         j += 1
                         continue
                     if old_v != new_v and not _is_header_row(fname, old_v, new_v):
-                        old_fmt = _fmt_amendment_val(fname, old_v)
-                        new_fmt = _fmt_amendment_val(fname, new_v)
-                        change_lines.append(f'🔧 {_trunc(fname, 25)}: {old_fmt} → {new_fmt}')
+                        if len(old_v) <= _MAX_VAL_LEN and len(new_v) <= _MAX_VAL_LEN:
+                            old_fmt = _fmt_amendment_val(fname, old_v)
+                            new_fmt = _fmt_amendment_val(fname, new_v)
+                            change_lines.append(f'🔧 {_trunc(fname, 25)}: {old_fmt} → {new_fmt}')
                 j += 1
             i = j
             continue
