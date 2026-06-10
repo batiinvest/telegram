@@ -2120,6 +2120,8 @@ def parse_amendment(kv: dict) -> list:
             return True
         if _is_label(old_v) and re.search(r'^\d[\d,]+$', new_v.replace(' ', '')):
             return True  # old=컬럼헤더, new=숫자 → 헤더+데이터 혼합 행
+        if _is_label(old_v) and re.search(r'^\d{4}-\d{2}-\d{2}$', new_v.strip()):
+            return True  # old=서브레이블(시작일 등), new=날짜값 → 중첩 테이블 행
         return False
 
     # ── 패턴 C: 정정전_* / 정정후_* 접두어 키 비교 (가장 신뢰도 높음) ──────
