@@ -1901,6 +1901,8 @@ def parse_major_shareholder_change(kv: dict) -> list:
     after_name  = after_shares  = after_ratio  = ''
 
     for idx, (k, v) in enumerate(items):
+        if k.startswith('_'):
+            continue
         if '변경전 최대주주' in v and k not in ('-', '', '성명(법인명,조합명,기타단체명)'):
             before_name = k
             if idx + 1 < len(items):
