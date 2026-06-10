@@ -2211,6 +2211,83 @@ def parse_amendment(kv: dict) -> list:
     return lines
 
 
+def parse_tender_offer_result(kv: dict) -> list:
+    """공개매수결과보고서 — HTML 인코딩 깨짐이 심해 HTML 원문에서 직접 추출."""
+    lines = []
+    html = kv.get('_html', '')
+    if not html:
+        return lines
+
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, 'html.parser')
+    text = soup.get_text(' ', strip=True)
+
+    # 1주당 가격
+    m = re.search(r'1주당\s*([\d,]+)\s*원', text)
+    price = m.group(1) if m else None
+
+    # 예정 매수수량 (공개매수 예정 주식수)
+    planned = None
+    for pat in [r'예정\s*주식[^\d]*([\d,]+)', r'공개매수\s*예정\s*주식[^\d]*([\d,]+)']:
+        m = re.search(pat, text)
+        if m:
+            planned = m.group(1)
+            break
+
+    # 응모 주식수
+    applied = None
+    m = re.search(r'응모\s*주식[^\d]*([\d,]+)', text)
+    if m:
+        applied = m.group(1)
+
+    # 실제 매수 주식수 (예정 이하)
+    bought = None
+    m = re.search(r'매수\s*주식[^\d]*([\d,]+)', text)
+    if m:
+        bought = m.group(1)
+
+    # 공개매수 전/후 보유비율 — 소수점 포함 비율 두 개 추출
+    ratios = re.findall(r'(\d{1,2}\.\d{1,2})\s*%?', text)
+    before_ratio = after_ratio = None
+    if len(ratios) >= 2:
+        # 보통 전→후 순서로 두 번 나옴
+        before_ratio, after_ratio = ratios[0], ratios[1]
+
+    # 매수대리인 (NH투자증권 등 — 인코딩 살아남는 편)
+    agent = None
+    m = re.search(r'(NH투자증권|한국투자증권|미래에셋|삼성증권|KB증권|신한투자증권|하나증권|키움증권)', text)
+    if m:
+        agent = m.group(1)
+
+    # 공개매수자 (KV에서 가능한 값 탐색)
+    buyer = None
+    for k, v in kv.items():
+        if k.startswith('_'):
+            continue
+        # 값에 '공개매수자' 레이블이 있거나 키에 포함
+        if '공개매수자' in k and len(v) > 1 and not re.search(r'\d{4}', v):
+            buyer = v
+            break
+
+    lines.append('📢 공개매수 결과')
+    if buyer:
+        lines.append(f'🏢 공개매수자: {buyer}')
+    if agent:
+        lines.append(f'🏦 매수대리인: {agent}')
+    if price:
+        lines.append(f'💰 매수가격: 1주당 {price}원')
+    if planned:
+        lines.append(f'📋 예정수량: {planned}주')
+    if applied:
+        lines.append(f'📥 응모수량: {applied}주')
+    if bought:
+        lines.append(f'✅ 실제매수: {bought}주')
+    if before_ratio and after_ratio:
+        lines.append(f'📊 지분율: {before_ratio}% → {after_ratio}%')
+
+    return lines
+
+
 # 공시 제목 키워드 → 카테고리 파서 매핑
 # ※ 순서 중요: 구체적인 타입을 먼저, 일반적인 타입을 나중에
 _PARSER_MAP = [
@@ -2242,6 +2319,7 @@ _PARSER_MAP = [
     (['신탁계약해지결과'],                       parse_trust_termination),
     (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
     (['대량보유상황보고서'],                      parse_large_holding_report),
+    (['공개매수결과보고서', '공개매수청약'],       parse_tender_offer_result),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
