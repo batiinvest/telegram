@@ -75,24 +75,67 @@ TICKERS = {
 def fetch_price_and_chg(ticker_sym: str) -> tuple:
     """
     yfinance에서 현재가 + 전일 대비 등락률 + 실제 데이터 날짜 반환
+    1차: fast_info (현재가/전일종가 직접 조회, 가장 정확)
+    2차: history(auto_adjust=False) fallback
     returns: (price, chg_pct, data_date) or (None, None, None)
     """
     import math
+    from datetime import timezone as _tz
     try:
         t = yf.Ticker(ticker_sym)
-        hist = t.history(period='10d')
+
+        # 1차: fast_info — 실시간/당일 값, 자동조정 없음
+        try:
+            fi = t.fast_info
+            price = fi.last_price
+            prev  = fi.previous_close
+            if price and prev and not math.isnan(price) and not math.isnan(prev) and prev > 0:
+                chg = round((price - prev) / prev * 100, 2)
+                # 데이터 날짜: regularMarketTime 있으면 사용, 없으면 오늘(KST)
+                from datetime import datetime, timedelta
+                try:
+                    ts = fi.last_volume  # fast_info에 직접 날짜 없으므로 history 1행으로 날짜만 추출
+                except Exception:
+                    pass
+                hist1 = t.history(period='2d', auto_adjust=False)
+                if not hist1.empty:
+                    last_idx = hist1.index[-1]
+                    # timezone-aware → UTC로 정규화 후 KST 변환
+                    if hasattr(last_idx, 'tzinfo') and last_idx.tzinfo is not None:
+                        last_idx_utc = last_idx.astimezone(_tz.utc)
+                        data_date = (last_idx_utc + timedelta(hours=9)).strftime('%Y-%m-%d')
+                    else:
+                        data_date = last_idx.strftime('%Y-%m-%d')
+                else:
+                    from datetime import datetime, timedelta
+                    kst_today = (datetime.now(_tz.utc) + timedelta(hours=9)).strftime('%Y-%m-%d')
+                    data_date = kst_today
+                log.debug(f"[{ticker_sym}] fast_info → {price} ({chg}%) [{data_date}]")
+                return round(price, 4), chg, data_date
+        except Exception as e:
+            log.debug(f"[{ticker_sym}] fast_info 실패, fallback: {e}")
+
+        # 2차: history fallback (auto_adjust=False 로 원시 종가 사용)
+        hist = t.history(period='10d', auto_adjust=False)
         if hist.empty:
             return None, None, None
         closes = hist['Close'].dropna()
         if len(closes) < 2:
             return None, None, None
-        price     = float(closes.iloc[-1])
-        prev      = float(closes.iloc[-2])
-        data_date = closes.index[-1].strftime('%Y-%m-%d')
-        if math.isnan(price) or math.isnan(prev):
+        price = float(closes.iloc[-1])
+        prev  = float(closes.iloc[-2])
+        if math.isnan(price) or math.isnan(prev) or prev == 0:
             return None, None, None
-        chg = round((price - prev) / prev * 100, 2) if prev else None
+        last_idx = closes.index[-1]
+        if hasattr(last_idx, 'tzinfo') and last_idx.tzinfo is not None:
+            from datetime import timedelta
+            last_idx_utc = last_idx.astimezone(_tz.utc)
+            data_date = (last_idx_utc + timedelta(hours=9)).strftime('%Y-%m-%d')
+        else:
+            data_date = last_idx.strftime('%Y-%m-%d')
+        chg = round((price - prev) / prev * 100, 2)
         return round(price, 4), chg, data_date
+
     except Exception as e:
         log.debug(f"[{ticker_sym}] 조회 실패: {e}")
         return None, None, None
