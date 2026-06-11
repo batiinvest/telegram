@@ -41,6 +41,7 @@ try:
     from grade                     import save_grade_history as _save_grade_history
     from collect_insider           import collect_insider_trades as _collect_insider
     from collect_company_info      import collect_one as _collect_company_one
+    from collect_short             import run as run_short, check_surge as _check_short_surge
     _COLLECTOR_OK = True
 except ImportError as _ie:
     _COLLECTOR_OK = False
@@ -1071,6 +1072,44 @@ def job_collect_market_closing():
 
 
 @_job(holiday=True)
+def job_short_surge():
+    """평일 17:05 — KRX 공매도 비중 수집 + 5거래일 평균 대비 2배 급증 종목 텔레그램 알림"""
+    if not _COLLECTOR_OK:
+        logging.warning("[공매도급증] 수집 모듈 없음 — 스킵")
+        return
+    try:
+        # 1. 당일 공매도 데이터 수집
+        saved, _ = run_short()
+        logging.info(f"📉 [공매도급증] 수집 완료 {saved}건")
+
+        # 2. 급증 탐지
+        if not _BRIDGE_OK:
+            return
+        sb = _bridge._get_client()
+        if not sb:
+            return
+        surges = _check_short_surge(sb, n_days=5, multiplier=2.0)
+        if not surges:
+            logging.info("📉 [공매도급증] 급증 종목 없음")
+            return
+
+        # 3. 메인 채널 알림
+        lines = [f"📉 <b>[공매도 급증 알림]</b>\n"
+                 f"5거래일 평균 대비 2배↑ 종목 ({len(surges)}개)\n"]
+        for i, s in enumerate(surges[:10], 1):
+            lines.append(
+                f"{i}. <b>{s['corp_name']}</b>({s['stock_code']})\n"
+                f"   오늘 <b>{s['today_ratio']}%</b> / 5일평균 {s['avg_ratio']}% "
+                f"→ <b>{s['surge_ratio']}배</b>"
+            )
+        msg = "\n".join(lines)
+        stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
+        logging.info(f"📉 [공매도급증] 알림 발송 완료 ({len(surges)}건)")
+    except Exception as e:
+        logging.error(f"❌ [공매도급증] job 실패: {e}")
+
+
+@_job(holiday=True)
 def job_sector_summary():
     """평일 장 마감 후 (17:15) — 산업별 일별 요약 집계 (sector_daily_summary)"""
     try:
@@ -1334,6 +1373,7 @@ def run_scheduler():
     schedule.every().day.at("16:20").do(job_collect_us_etf)            # US ETF 수집 (미장 전일 종가)
     schedule.every().day.at("16:30").do(job_collect_new_high)          # 신고가 종목 수집
     schedule.every().day.at("17:00").do(job_collect_market_closing)    # 장 마감 확정치 수집 (외국인 집계 완료 후)
+    schedule.every().day.at("17:05").do(job_short_surge)               # 공매도 수집 + 5일 평균 대비 2배 급증 알림
     schedule.every().day.at("17:15").do(job_sector_summary)            # 산업별 일별 요약 집계
     schedule.every().day.at("17:30").do(job_leading_stocks)            # 주도주 탐색기 스코어 계산
     schedule.every().day.at("18:00").do(job_naver_report)

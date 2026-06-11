@@ -388,6 +388,140 @@ def backfill(stock_codes: list[str], days: int = 252) -> int:
     return total_saved
 
 
+def check_surge(sb, n_days: int = 5, multiplier: float = 2.0) -> list[dict]:
+    """
+    당일 공매도 비중이 최근 n_days 거래일 평균 대비 multiplier배 이상인 종목 탐지.
+
+    short_selling_history 테이블에서 최신 base_date(당일) + 직전 n_days일 데이터를 읽어
+    종목별로 평균 대비 급증 여부를 판단.
+
+    Returns: 급증 종목 리스트 (today_ratio, avg_ratio, surge_ratio, corp_name 포함)
+    """
+    try:
+        # 최신 날짜 조회
+        date_res = sb.table("short_selling_history") \
+                     .select("base_date") \
+                     .order("base_date", desc=True) \
+                     .limit(1).execute()
+        if not (date_res.data):
+            log.warning("[공매도급증] 데이터 없음")
+            return []
+        latest_date = date_res.data[0]["base_date"]
+
+        # 최근 n_days+1일치 전체 조회 (당일 포함)
+        rows_res = sb.table("short_selling_history") \
+                     .select("stock_code,base_date,short_ratio") \
+                     .order("base_date", desc=True) \
+                     .limit((n_days + 1) * 500).execute()
+        rows = rows_res.data or []
+        if not rows:
+            return []
+
+        # 종목별 날짜 정렬된 리스트 구성
+        from collections import defaultdict
+        by_code = defaultdict(list)
+        for r in rows:
+            by_code[r["stock_code"]].append(r)
+        # 날짜 내림차순 정렬 보장
+        for code in by_code:
+            by_code[code].sort(key=lambda x: x["base_date"], reverse=True)
+
+        # 종목명 조회 (market_data 최신)
+        name_res = sb.table("market_data") \
+                     .select("stock_code,corp_name") \
+                     .eq("base_date", latest_date).execute()
+        name_map = {r["stock_code"]: r["corp_name"] for r in (name_res.data or [])}
+
+        surges = []
+        for code, hist in by_code.items():
+            if not hist or hist[0]["base_date"] != latest_date:
+                continue  # 당일 데이터 없는 종목 스킵
+            today_ratio = hist[0]["short_ratio"]
+            if today_ratio is None or today_ratio < 1.0:
+                continue  # 비중 1% 미만 노이즈 제외
+
+            prev = [r["short_ratio"] for r in hist[1:n_days + 1] if r["short_ratio"] is not None]
+            if len(prev) < 3:
+                continue  # 비교 데이터 3일 미만이면 스킵
+
+            avg_ratio = sum(prev) / len(prev)
+            if avg_ratio < 0.5:
+                continue  # 평균이 너무 낮으면 배율 의미 없음
+
+            if today_ratio >= avg_ratio * multiplier:
+                surges.append({
+                    "stock_code":  code,
+                    "corp_name":   name_map.get(code, code),
+                    "today_ratio": round(today_ratio, 2),
+                    "avg_ratio":   round(avg_ratio, 2),
+                    "surge_ratio": round(today_ratio / avg_ratio, 1),
+                })
+
+        surges.sort(key=lambda x: x["surge_ratio"], reverse=True)
+        log.info(f"📉 [공매도급증] 탐지 {len(surges)}개 (기준: {n_days}일 평균 × {multiplier}배)")
+        return surges
+
+    except Exception as e:
+        log.error(f"❌ [공매도급증] check_surge 실패: {e}")
+        return []
+
+
+def run_and_alert(trd_date: str = None, telegram_token: str = None,
+                  chat_id: str = None, n_days: int = 5, multiplier: float = 2.0) -> int:
+    """
+    공매도 수집 → 급증 알림 일괄 처리.
+    run_all.py의 job_short_surge에서 호출.
+
+    Returns: 알림 발송 건수
+    """
+    if not SB_URL or not SB_SERVICE_KEY:
+        log.error("SB_URL, SB_SERVICE_KEY 환경변수 필요")
+        return 0
+
+    sb = create_client(SB_URL, SB_SERVICE_KEY)
+
+    # 1. 당일 데이터 수집
+    run(trd_date)
+
+    # 2. 급증 탐지
+    surges = check_surge(sb, n_days=n_days, multiplier=multiplier)
+    if not surges:
+        return 0
+
+    # 3. 텔레그램 알림 (stock_api.send_telegram 사용)
+    if not telegram_token or not chat_id:
+        log.info(f"📉 [공매도급증] 텔레그램 미설정 — 콘솔 출력만")
+        for s in surges[:10]:
+            log.info(f"  {s['corp_name']}({s['stock_code']}) "
+                     f"오늘 {s['today_ratio']}% / 5일평균 {s['avg_ratio']}% "
+                     f"→ {s['surge_ratio']}배")
+        return len(surges)
+
+    # 상위 10개 알림 포맷
+    lines = [f"📉 <b>[공매도 급증 알림]</b> {trd_date or '오늘'}\n"
+             f"5거래일 평균 대비 {multiplier:.0f}배 이상 급증 종목\n"]
+    for i, s in enumerate(surges[:10], 1):
+        lines.append(
+            f"{i}. <b>{s['corp_name']}</b>({s['stock_code']})\n"
+            f"   오늘 <b>{s['today_ratio']}%</b> / 5일평균 {s['avg_ratio']}% "
+            f"→ <b>{s['surge_ratio']}배</b>"
+        )
+    msg = "\n".join(lines)
+
+    try:
+        import requests as _req
+        _req.post(
+            f"https://api.telegram.org/bot{telegram_token}/sendMessage",
+            json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"},
+            timeout=10
+        )
+        log.info(f"📉 [공매도급증] 텔레그램 발송 완료 ({len(surges)}건)")
+    except Exception as e:
+        log.error(f"❌ [공매도급증] 텔레그램 발송 실패: {e}")
+
+    return len(surges)
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="KRX 공매도 거래 비중 수집")
