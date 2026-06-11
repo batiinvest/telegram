@@ -38,7 +38,7 @@ try:
     # run_financials(year, quarter, monitored_only=True) 형태로 호출 가능
     from collect_market            import run as run_market
     from collect_listed_companies  import run as run_sync_companies
-    from grade                     import save_grade_history as _save_grade_history
+    from grade                     import save_grade_history as _save_grade_history, save_trend_flags as _save_trend_flags
     from collect_insider           import collect_insider_trades as _collect_insider
     from collect_company_info      import collect_one as _collect_company_one
     from collect_short             import run as run_short, check_surge as _check_short_surge
@@ -745,10 +745,11 @@ def job_collect_financials():
                 f"daily_disclosures 저장 완료"
             )
 
-        # 재무수집 완료 후 등급 이력 저장
+        # 재무수집 완료 후 등급 이력 + 추세 신호 저장
         if today_corps and quarter_groups:
             for (y, q) in quarter_groups.keys():
                 job_save_grade_history(y, q)
+                job_save_trend_flags(y, q)
 
     except Exception as e:
         logging.error(f"❌ [재무수집] 오류: {e}")
@@ -822,6 +823,20 @@ def job_save_grade_history(year: str = None, quarter: str = None):
 
     except Exception as e:
         logging.error(f"❌ [등급이력] 오류: {e}")
+
+
+def job_save_trend_flags(year: str = None, quarter: str = None):
+    """재무수집/등급이력 완료 후 — 재무 추세 신호 탐지 & financials.trend_flags 저장"""
+    if not _BRIDGE_OK or not _COLLECTOR_OK:
+        return
+    try:
+        if not year or not quarter:
+            year, quarter = auto_detect_quarter()
+        sb = _bridge._get_client()
+        flagged = _save_trend_flags(sb, year, quarter)
+        logging.info(f"📈 [추세신호] {year} {quarter} 완료 — 경고 {flagged}개")
+    except Exception as e:
+        logging.error(f"❌ [추세신호] 오류: {e}")
 
 
 def job_collect_macro():

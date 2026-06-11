@@ -239,3 +239,124 @@ def save_grade_history(sb, year: str, quarter: str) -> dict:
         f"하락 {len(result_map['down'])}개)"
     )
     return {'saved': len(records), **result_map}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  재무 추세 신호 자동 감지
+# ══════════════════════════════════════════════════════════════════════════════
+
+def detect_trend_flags(quarters: list) -> dict:
+    """
+    단일 종목의 시계열 분기 데이터에서 추세 경고 신호 탐지.
+    quarters: bsns_year/quarter 오름차순 정렬된 재무 행 리스트
+    Returns: {'rev_slowdown': bool, 'op_leverage_fail': bool, 'debt_surge': bool}
+    """
+    flags = {
+        'rev_slowdown':      False,
+        'op_leverage_fail':  False,
+        'debt_surge':        False,
+    }
+    if len(quarters) < 2:
+        return flags
+
+    # ── 매출 성장 둔화: revenue_qoq가 3분기 연속 하락 ──
+    qoq_vals = [r.get('revenue_qoq') for r in quarters if r.get('revenue_qoq') is not None]
+    if len(qoq_vals) >= 3:
+        tail = qoq_vals[-3:]
+        if tail[0] > tail[1] > tail[2]:
+            flags['rev_slowdown'] = True
+
+    # ── 영업레버리지 역전: 매출 YoY↑ but 영업익 YoY↓ ──
+    last = quarters[-1]
+    rev_yoy = last.get('revenue_yoy')
+    op_yoy  = last.get('op_profit_yoy')
+    if rev_yoy is not None and op_yoy is not None and rev_yoy > 5 and op_yoy < -10:
+        flags['op_leverage_fail'] = True
+
+    # ── 부채비율 급증: (total_debt / total_equity) QoQ +30%p 이상 ──
+    if len(quarters) >= 2:
+        prev_q = quarters[-2]
+        cur_q  = quarters[-1]
+        p_eq   = prev_q.get('total_equity') or 0
+        c_eq   = cur_q.get('total_equity')  or 0
+        p_debt = prev_q.get('total_debt')   or 0
+        c_debt = cur_q.get('total_debt')    or 0
+        if p_eq > 0 and c_eq > 0:
+            prev_ratio = p_debt / p_eq * 100
+            cur_ratio  = c_debt / c_eq * 100
+            if (cur_ratio - prev_ratio) >= 30:
+                flags['debt_surge'] = True
+
+    return flags
+
+
+def save_trend_flags(sb, year: str, quarter: str) -> int:
+    """
+    해당 분기 financials 레코드에 trend_flags JSONB 저장.
+    최근 5분기 데이터 기반 신호 탐지 후 financials 테이블 update.
+
+    사전 조건: ALTER TABLE financials ADD COLUMN IF NOT EXISTS trend_flags JSONB;
+
+    Returns: 플래그가 1개 이상인 종목 수
+    """
+    from db_utils import fetch_all_pages
+
+    log.info(f"📈 [추세신호] {year} {quarter} 계산 시작")
+
+    target_rows = fetch_all_pages(
+        sb.table('financials')
+          .select('stock_code')
+          .eq('bsns_year', year).eq('quarter', quarter).eq('fs_div', 'CFS')
+    )
+    if not target_rows:
+        log.info(f"📈 [추세신호] {year} {quarter} 데이터 없음 — 스킵")
+        return 0
+
+    codes = [r['stock_code'] for r in target_rows]
+
+    # 현재 분기 포함 최근 5분기 수집
+    quarters_needed = [(year, quarter)]
+    y, q = year, quarter
+    for _ in range(4):
+        y, q = get_prev_quarter(y, q)
+        if y and q:
+            quarters_needed.append((y, q))
+    years_set    = list({yy for yy, _ in quarters_needed})
+    quarters_set = list({qq for _, qq in quarters_needed})
+
+    all_hist = []
+    for i in range(0, len(codes), 200):
+        batch = codes[i:i + 200]
+        res = (sb.table('financials')
+               .select('stock_code,bsns_year,quarter,revenue,operating_profit,'
+                       'revenue_yoy,op_profit_yoy,revenue_qoq,total_debt,total_equity')
+               .in_('bsns_year', years_set)
+               .in_('quarter',   quarters_set)
+               .eq('fs_div', 'CFS')
+               .in_('stock_code', batch)
+               .execute())
+        all_hist.extend(res.data or [])
+
+    by_code = {}
+    for r in all_hist:
+        by_code.setdefault(r['stock_code'], []).append(r)
+
+    for code in by_code:
+        by_code[code].sort(key=lambda x: (x['bsns_year'], x['quarter']))
+
+    flagged = 0
+    for code, hist in by_code.items():
+        flags = detect_trend_flags(hist)
+        # 신호 없는 경우도 빈 dict로 저장해 명시적으로 "검사 완료" 표시
+        (sb.table('financials')
+           .update({'trend_flags': flags})
+           .eq('stock_code', code)
+           .eq('bsns_year',  year)
+           .eq('quarter',    quarter)
+           .eq('fs_div',     'CFS')
+           .execute())
+        if any(flags.values()):
+            flagged += 1
+
+    log.info(f"📈 [추세신호] {year} {quarter} — {flagged}개 경고 신호 (전체 {len(by_code)}개 종목)")
+    return flagged
