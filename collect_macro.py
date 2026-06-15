@@ -190,13 +190,18 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
             log.warning(f"[KIS 지수] 데이터 없음 (iscd={iscd}) rt_cd={body.get('rt_cd')} msg={body.get('msg1','')}")
             return None, None
 
-        # 가장 최근 거래일 (첫 번째 행)
-        latest = rows[0]
+        # 실제 거래일 행 탐색: 등락률이 0이 아닌 첫 번째 행 (주말/휴장 행 스킵)
+        # KIS는 비거래일에도 전일 종가와 0% 등락률 행을 삽입하므로 필터 필요
+        trading_rows = [r for r in rows if float(r.get('bstp_nmix_prdy_ctrt') or 0) != 0.0]
+        if not trading_rows:
+            # 등락률이 모두 0이면 가장 최근 행의 가격만 반환 (개장 직전 등)
+            trading_rows = rows
+        latest = trading_rows[0]
         price = float(latest.get('bstp_nmix_clpr') or latest.get('bstp_nmix_prpr') or 0) or None
         rate  = float(latest.get('bstp_nmix_prdy_ctrt') or 0)
         if not price:
             return None, None
-        chg = round(rate, 2)
+        chg = round(rate, 2) if rate else None
         stck_bsop_date = latest.get('stck_bsop_date', '')
         log.info(f"  [KIS 지수] iscd={iscd} → {price} ({chg}%) [{stck_bsop_date}]")
         return round(price, 2), chg
