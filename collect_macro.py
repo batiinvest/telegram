@@ -141,15 +141,75 @@ def fetch_price_and_chg(ticker_sym: str) -> tuple:
         return None, None, None
 
 
+def fetch_kr_index_kis(iscd: str) -> tuple:
+    """
+    KIS API로 국내 지수 현재값 + 전일 대비 등락률 조회
+    iscd: '0001'=코스피, '1001'=코스닥, '2001'=코스피200
+    returns: (price, chg_pct) or (None, None)
+    """
+    try:
+        from managers import kis_auth, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
+        import requests as req
+        token = kis_auth.get_token()
+        if not token:
+            log.warning(f"[KIS 지수] 토큰 없음 (iscd={iscd})")
+            return None, None
+        url = f"{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-index-price"
+        headers = {
+            "authorization": f"Bearer {token}",
+            "appkey":    KIS_APP_KEY,
+            "appsecret": KIS_APP_SECRET,
+            "tr_id":     "FHPUP02100000",
+            "custtype":  "P",
+        }
+        params = {"iscd": iscd}
+        r = req.get(url, headers=headers, params=params, timeout=10)
+        r.raise_for_status()
+        output = r.json().get('output', {})
+        price = float(output.get('bstp_nmix_prpr') or 0) or None  # 현재 지수
+        prdy  = float(output.get('bstp_nmix_prdy_vrss') or 0)     # 전일 대비 등락값
+        rate  = float(output.get('bstp_nmix_prdy_ctrt') or 0)     # 전일 대비 등락률
+        if not price:
+            return None, None
+        chg = round(rate, 2) if rate else None
+        log.info(f"  [KIS 지수] iscd={iscd} → {price} ({chg}%)")
+        return round(price, 2), chg
+    except Exception as e:
+        log.warning(f"[KIS 지수] 조회 실패 iscd={iscd}: {e}")
+        return None, None
+
+
 def collect_all() -> dict:
     """모든 지표 수집"""
     result = {}
 
     log.info("매크로 데이터 수집 시작...")
 
-    latest_dates = {}  # 티커별 실제 데이터 날짜 추적
+    # ── 코스피/코스닥/코스피200: KIS API (yfinance보다 정확) ──
+    log.info("  [KIS] 국내 지수 수집...")
+    kospi_val,   kospi_chg   = fetch_kr_index_kis('0001')
+    kosdaq_val,  kosdaq_chg  = fetch_kr_index_kis('1001')
+    kospi200_val, kospi200_chg = fetch_kr_index_kis('2001')
+
+    result['kospi']        = kospi_val
+    result['kospi_chg']    = kospi_chg
+    result['kosdaq']       = kosdaq_val
+    result['kosdaq_chg']   = kosdaq_chg
+    result['kospi200']     = kospi200_val
+    result['kospi200_chg'] = kospi200_chg
+
+    # KIS에서 값을 못 가져온 경우 경고 (휴장일 등)
+    if kospi_val is None:
+        log.warning("⚠️  코스피 KIS 수집 실패 — 휴장일이거나 토큰 만료")
+
+    latest_dates = {}  # 티커별 실제 데이터 날짜 추적 (해외 지표용)
+
+    # TICKERS에서 국내 지수는 제외 (KIS로 대체)
+    KR_INDEX_KEYS = {'kospi', 'kosdaq', 'kospi200'}
 
     for col, sym in TICKERS.items():
+        if col in KR_INDEX_KEYS:
+            continue  # KIS로 수집했으므로 스킵
         price, chg, data_date = fetch_price_and_chg(sym)
         result[col] = price
         result[col + '_chg_raw'] = chg
@@ -157,26 +217,6 @@ def collect_all() -> dict:
             latest_dates[col] = data_date
         log.info(f"  {col:15} {sym:12} → {price} ({chg}%) [{data_date}]")
         time.sleep(0.3)
-
-    # 휴장일 감지: 코스피 데이터가 오늘 또는 어제(전 거래일) 날짜면 정상
-    # yfinance는 당일 장 종료 후 수 시간 후 반영되므로 전일 데이터도 허용
-    from datetime import datetime, timedelta, timezone
-    kst_now   = datetime.now(timezone.utc) + timedelta(hours=9)
-    kst_today = kst_now.date().isoformat()
-    kst_yesterday = (kst_now.date() - timedelta(days=1)).isoformat()
-    kst_2daysago  = (kst_now.date() - timedelta(days=2)).isoformat()
-    # 주말 포함 최근 3일을 허용 (금요일 장 → 토/일에도 유효)
-    valid_dates = {kst_today, kst_yesterday, kst_2daysago}
-    kospi_date = latest_dates.get('kospi')
-    if kospi_date and kospi_date not in valid_dates:
-        log.warning(f"⚠️  코스피 최신 데이터 날짜: {kospi_date} (KST 오늘: {kst_today})")
-        log.warning(f"   오늘 국내 휴장일로 판단 — kospi/kosdaq/kospi200 수집값 제거 (이전 DB값 유지)")
-        result['kospi']    = None
-        result['kosdaq']   = None
-        result['kospi200'] = None
-        result['kospi_chg_raw']    = None
-        result['kosdaq_chg_raw']   = None
-        result['kospi200_chg_raw'] = None
 
     # ── 환율 변환 ──────────────────────────────────────────────
     usd_krw = result.get('usd_krw_raw')  # 1 USD = N KRW
