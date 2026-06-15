@@ -143,36 +143,55 @@ def fetch_price_and_chg(ticker_sym: str) -> tuple:
 
 def fetch_kr_index_kis(iscd: str) -> tuple:
     """
-    KIS API로 국내 지수 현재값 + 전일 대비 등락률 조회
+    KIS 일별 지수 차트 API로 최근 거래일 종가 + 등락률 조회
+    (장중/장외/주말/휴장일 모두 마지막 거래일 종가 반환)
     iscd: '0001'=코스피, '1001'=코스닥, '2001'=코스피200
     returns: (price, chg_pct) or (None, None)
     """
     try:
         from managers import kis_auth, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
+        from datetime import datetime, timedelta, timezone
         import requests as req
+
         token = kis_auth.get_token()
         if not token:
             log.warning(f"[KIS 지수] 토큰 없음 (iscd={iscd})")
             return None, None
-        url = f"{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-index-price"
+
+        kst_now   = datetime.now(timezone.utc) + timedelta(hours=9)
+        end_date  = kst_now.strftime('%Y%m%d')
+        start_date = (kst_now - timedelta(days=10)).strftime('%Y%m%d')  # 최근 10일치 조회
+
+        url = f"{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-index-daily-price"
         headers = {
             "authorization": f"Bearer {token}",
             "appkey":    KIS_APP_KEY,
             "appsecret": KIS_APP_SECRET,
-            "tr_id":     "FHPUP02100000",
+            "tr_id":     "FHKUP03500100",
             "custtype":  "P",
         }
-        params = {"iscd": iscd}
+        params = {
+            "iscd":               iscd,
+            "fid_input_date_1":   start_date,
+            "fid_input_date_2":   end_date,
+            "fid_period_div_code": "D",  # 일별
+        }
         r = req.get(url, headers=headers, params=params, timeout=10)
         r.raise_for_status()
-        output = r.json().get('output', {})
-        price = float(output.get('bstp_nmix_prpr') or 0) or None  # 현재 지수
-        prdy  = float(output.get('bstp_nmix_prdy_vrss') or 0)     # 전일 대비 등락값
-        rate  = float(output.get('bstp_nmix_prdy_ctrt') or 0)     # 전일 대비 등락률
+        rows = r.json().get('output2', [])  # output2 = 일별 데이터 리스트
+        if not rows:
+            log.warning(f"[KIS 지수] 데이터 없음 (iscd={iscd})")
+            return None, None
+
+        # 가장 최근 거래일 (첫 번째 행)
+        latest = rows[0]
+        price = float(latest.get('bstp_nmix_clpr') or 0) or None   # 종가
+        rate  = float(latest.get('bstp_nmix_prdy_ctrt') or 0)      # 전일 대비 등락률
         if not price:
             return None, None
-        chg = round(rate, 2) if rate else None
-        log.info(f"  [KIS 지수] iscd={iscd} → {price} ({chg}%)")
+        chg = round(rate, 2)
+        stck_bsop_date = latest.get('stck_bsop_date', '')
+        log.info(f"  [KIS 지수] iscd={iscd} → {price} ({chg}%) [{stck_bsop_date}]")
         return round(price, 2), chg
     except Exception as e:
         log.warning(f"[KIS 지수] 조회 실패 iscd={iscd}: {e}")
