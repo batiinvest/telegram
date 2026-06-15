@@ -171,10 +171,11 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
             "custtype":  "P",
         }
         params = {
-            "fid_input_iscd":      iscd,
-            "fid_input_date_1":    start_date,
-            "fid_input_date_2":    end_date,
-            "fid_period_div_code": "D",
+            "fid_cond_mrkt_div_code": "U",   # U = 지수
+            "fid_input_iscd":          iscd,
+            "fid_input_date_1":        start_date,
+            "fid_input_date_2":        end_date,
+            "fid_period_div_code":     "D",
         }
         r = req.get(url, headers=headers, params=params, timeout=10)
         r.raise_for_status()
