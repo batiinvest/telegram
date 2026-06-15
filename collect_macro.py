@@ -171,22 +171,28 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
             "custtype":  "P",
         }
         params = {
-            "iscd":               iscd,
-            "fid_input_date_1":   start_date,
-            "fid_input_date_2":   end_date,
-            "fid_period_div_code": "D",  # 일별
+            "fid_input_iscd":      iscd,
+            "fid_input_date_1":    start_date,
+            "fid_input_date_2":    end_date,
+            "fid_period_div_code": "D",
         }
         r = req.get(url, headers=headers, params=params, timeout=10)
         r.raise_for_status()
-        rows = r.json().get('output2', [])  # output2 = 일별 데이터 리스트
+        body = r.json()
+        log.debug(f"[KIS 지수 raw] iscd={iscd} keys={list(body.keys())} rt_cd={body.get('rt_cd')} msg={body.get('msg1','')}")
+
+        # output2 = 일별 리스트, output = 단일 / 키가 다를 수 있으므로 순서대로 시도
+        rows = body.get('output2') or body.get('output1') or []
+        if isinstance(rows, dict):
+            rows = [rows]
         if not rows:
-            log.warning(f"[KIS 지수] 데이터 없음 (iscd={iscd})")
+            log.warning(f"[KIS 지수] 데이터 없음 (iscd={iscd}) rt_cd={body.get('rt_cd')} msg={body.get('msg1','')}")
             return None, None
 
         # 가장 최근 거래일 (첫 번째 행)
         latest = rows[0]
-        price = float(latest.get('bstp_nmix_clpr') or 0) or None   # 종가
-        rate  = float(latest.get('bstp_nmix_prdy_ctrt') or 0)      # 전일 대비 등락률
+        price = float(latest.get('bstp_nmix_clpr') or latest.get('bstp_nmix_prpr') or 0) or None
+        rate  = float(latest.get('bstp_nmix_prdy_ctrt') or 0)
         if not price:
             return None, None
         chg = round(rate, 2)
