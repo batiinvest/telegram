@@ -1700,7 +1700,7 @@ def _run_watchdog_flags(threads: dict):
                         logging.error(f"❌ [주도주] 수동 생성 오류: {_le}")
                 _start_daemon(_run_leading_stocks, "Thread-LeadingStocks")
         except Exception as _lse:
-            logging.debug(f"leading_stocks_flag 체크 오류: {_lse}")
+            logging.error(f"❌ [주도주] 플래그 체크 오류: {_lse}")
 
     # ── run_sector_summary_flag — 산업별 요약·신호 수동 트리거 ──
     if _BRIDGE_OK:
