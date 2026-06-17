@@ -296,8 +296,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="KIS 시장 데이터 수집")
     parser.add_argument("--all-listed", action="store_true")
     parser.add_argument("--workers",    type=int, default=5)
+    parser.add_argument("--backfill",   type=int, default=0, help="과거 N일치 백필")
+    parser.add_argument("--from",       dest="from_date", default=None, help="백필 시작일 YYYY-MM-DD")
+    parser.add_argument("--to",         dest="to_date",   default=None, help="백필 종료일 YYYY-MM-DD")
     args = parser.parse_args()
-    run(all_listed=args.all_listed, max_workers=args.workers)
+    if args.from_date and args.to_date:
+        backfill_market(from_date=args.from_date, to_date=args.to_date)
+    elif args.backfill:
+        backfill_market(days=args.backfill)
+    else:
+        run(all_listed=args.all_listed, max_workers=args.workers)
 
 
 # ══════════════════════════════════════════════════════════
