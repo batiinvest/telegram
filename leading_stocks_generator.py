@@ -181,7 +181,7 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
         market_cap = today.get('market_cap') or 0
         tv         = price * volume
 
-        if market_cap < MIN_MARKET_CAP:
+        if market_cap and market_cap < MIN_MARKET_CAP:  # None/0이면 시총 필터 스킵
             continue
         if tv < MIN_TRADE_VALUE:
             continue
