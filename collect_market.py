@@ -292,12 +292,15 @@ def run(all_listed: bool = False, max_workers: int = 5):
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="KIS 시장 데이터 수집")
-    parser.add_argument("--all-listed", action="store_true")
-    parser.add_argument("--workers",    type=int, default=5)
-    args = parser.parse_args()
-    run(all_listed=args.all_listed, max_workers=args.workers)
+    import argparse, sys as _sys
+    # --from/--to 가 있으면 backfill 모드 — backfill_market은 파일 하단에 정의됨
+    # 아래 두 번째 __main__ 블록이 처리하므로 여기서는 일반 수집만 담당
+    if '--from' not in _sys.argv and '--backfill' not in _sys.argv:
+        parser = argparse.ArgumentParser(description="KIS 시장 데이터 수집")
+        parser.add_argument("--all-listed", action="store_true")
+        parser.add_argument("--workers",    type=int, default=5)
+        args = parser.parse_args()
+        run(all_listed=args.all_listed, max_workers=args.workers)
 
 
 # ══════════════════════════════════════════════════════════
