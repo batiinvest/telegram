@@ -593,11 +593,14 @@ def collect_foreign_institution() -> dict:
 # 90일 백필 (FHKST03010100 일별시세 + FHKST01010100 보완)
 # ══════════════════════════════════════════════════════════
 
-def backfill_market(days: int = 90, max_workers: int = 3):
+def backfill_market(days: int = 90, max_workers: int = 3,
+                    from_date: str = None, to_date: str = None):
     """
     과거 N일치 market_data 백필
     Step1: FHKST03010100으로 종목별 일별 OHLCV + 기본 밸류 수집
     Step2: FHKST01010100(오늘)의 수급/52주/종목상태 등 오늘값을 전 날짜에 공통 적용
+
+    from_date/to_date: 'YYYY-MM-DD' 형식으로 날짜 범위 지정 가능
     """
     from managers import kis_auth, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
     import requests as req
@@ -626,12 +629,17 @@ def backfill_market(days: int = 90, max_workers: int = 3):
         page += 1
     targets = [{'code': r['code'].split('.')[0], 'name': r['name']}
                for r in all_res if r.get('code')]
-    log.info(f"[백필] 대상: {len(targets)}개 종목 (전체 상장사), {days}일치")
 
-    end_dt   = datetime.date.today()
-    start_dt = end_dt - datetime.timedelta(days=days + 30)  # 여유있게
-    date_from = start_dt.strftime('%Y%m%d')
-    date_to   = end_dt.strftime('%Y%m%d')
+    if from_date and to_date:
+        log.info(f"[백필] 대상: {len(targets)}개 종목, {from_date} ~ {to_date}")
+        date_from = from_date.replace('-', '')
+        date_to   = to_date.replace('-', '')
+    else:
+        log.info(f"[백필] 대상: {len(targets)}개 종목 (전체 상장사), {days}일치")
+        end_dt   = datetime.date.today()
+        start_dt = end_dt - datetime.timedelta(days=days + 30)  # 여유있게
+        date_from = start_dt.strftime('%Y%m%d')
+        date_to   = end_dt.strftime('%Y%m%d')
 
     headers = {
         'authorization': f'Bearer {token}',
@@ -787,13 +795,19 @@ def backfill_market(days: int = 90, max_workers: int = 3):
     return upserted
 
 
-if __name__ == '__main__' and False:
-    # 직접 실행: python3 collect_market.py --backfill 90
+if __name__ == '__main__':
+    # 직접 실행:
+    #   python3 collect_market.py --backfill 90
+    #   python3 collect_market.py --from 2026-06-09 --to 2026-06-12
     import argparse, sys
     parser = argparse.ArgumentParser()
     parser.add_argument('--backfill', type=int, default=0)
+    parser.add_argument('--from', dest='from_date', default=None)
+    parser.add_argument('--to',   dest='to_date',   default=None)
     args, _ = parser.parse_known_args()
-    if args.backfill:
+    if args.from_date and args.to_date:
+        backfill_market(from_date=args.from_date, to_date=args.to_date)
+    elif args.backfill:
         backfill_market(days=args.backfill)
 
 
