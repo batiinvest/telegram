@@ -21,6 +21,7 @@ DB:
 """
 
 import time
+import html as _html
 import requests
 from typing import Optional
 from logger_config import get_logger
@@ -71,6 +72,11 @@ def _sb():
     if not _BRIDGE_OK:
         return None
     return _bridge._get_client()
+
+
+def _esc(s) -> str:
+    """텔레그램 HTML parse_mode용 이스케이프 (&, <, >). 사용자/방 이름에 적용."""
+    return _html.escape(str(s or ''), quote=False)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -165,15 +171,23 @@ def request_room(uid: int, username: str, name: str, room_id) -> bool:
             text="선택하신 방을 찾을 수 없습니다. 문의: @batiinvest")
         return False
 
-    # 이미 승인된 방이면 중복 신청 차단
+    rname = _esc(room['name'])
+
+    # 이미 승인됐거나 대기 중이면 중복 신청 차단 (pending 중복 → 이중승인·unique충돌 방지)
     try:
-        dup = sb.table('room_entries').select('id') \
+        dup = sb.table('room_entries').select('id,status') \
                 .eq('telegram_id', uid).eq('room_id', room_id) \
-                .eq('status', 'approved').execute()
-        if dup.data:
+                .in_('status', ['approved', 'pending']).execute()
+        rows = dup.data or []
+        if any(r['status'] == 'approved' for r in rows):
             _tg('sendMessage', chat_id=uid, parse_mode='HTML',
-                text=(f"이미 <b>{room['name']}</b> 입장이 승인된 계정입니다.\n"
+                text=(f"이미 <b>{rname}</b> 입장이 승인된 계정입니다.\n"
                       f"링크 분실 시 @batiinvest로 문의해 주세요."))
+            return False
+        if any(r['status'] == 'pending' for r in rows):
+            _tg('sendMessage', chat_id=uid, parse_mode='HTML',
+                text=(f"<b>{rname}</b> 입장 신청이 이미 접수되어 확인 중입니다.\n"
+                      f"조금만 기다려 주세요. 문의: @batiinvest"))
             return False
     except Exception as e:
         log.debug(f"[room] 중복 확인 오류(무시): {e}")
@@ -195,7 +209,7 @@ def request_room(uid: int, username: str, name: str, room_id) -> bool:
         return False
 
     _tg('sendMessage', chat_id=uid, parse_mode='HTML',
-        text=(f"✅ <b>{room['name']}</b> 입장 신청이 접수되었습니다.\n"
+        text=(f"✅ <b>{rname}</b> 입장 신청이 접수되었습니다.\n"
               f"결제 확인 후 입장 링크를 보내드릴게요. 잠시만 기다려 주세요."))
 
     _notify_admin(uid, username, name, room)
@@ -209,11 +223,11 @@ def _notify_admin(uid: int, username: str, name: str, room: dict):
     if not admin:
         log.warning("[room] admin_chat_id 미설정 — 입장 신청 알림 불가")
         return
-    uname = f"@{username}" if username else "없음"
+    uname = ('@' + _esc(username)) if username else "없음"
     msg = (
         f"🎟 <b>[유료방 입장 신청]</b>\n\n"
-        f"방: <b>{room['name']}</b>\n"
-        f"이름: {name or '-'}\n"
+        f"방: <b>{_esc(room['name'])}</b>\n"
+        f"이름: {_esc(name) or '-'}\n"
         f"@username: {uname}\n"
         f"텔레그램 ID: <code>{uid}</code>\n\n"
         f"👉 Litt.ly 주문(@username)과 대조 후 승인하세요."
@@ -235,20 +249,36 @@ def approve_room(uid: int, room_id, admin_id: str = '') -> tuple[bool, str]:
     if not room:
         return False, "방을 찾을 수 없습니다."
 
+    sb = _sb()
+
+    # 이미 승인된 사용자면 새 링크 발급 안 함 (이중 승인·링크 중복 방지)
+    if sb:
+        try:
+            done = sb.table('room_entries').select('id') \
+                     .eq('telegram_id', uid).eq('room_id', room_id) \
+                     .eq('status', 'approved').execute()
+            if done.data:
+                return False, "이미 승인된 사용자입니다 (링크 기발급)."
+        except Exception as e:
+            log.debug(f"[room] approve 중복 확인 오류(무시): {e}")
+
     link = create_invite_link(room['chat_id'])
     if not link:
         return False, "초대 링크 생성 실패 — 봇이 해당 방 관리자인지 확인하세요."
 
     res = _tg('sendMessage', chat_id=uid, parse_mode='HTML',
               text=(
-                  f"🔓 <b>{room['name']}</b> 입장 링크입니다.\n\n"
+                  f"🔓 <b>{_esc(room['name'])}</b> 입장 링크입니다.\n\n"
                   f"🔗 {link}\n\n"
                   f"⚠️ 1회용 링크이며 입장 시 자동으로 만료됩니다. "
                   f"{_INVITE_EXPIRE_HOURS}시간 내 사용해 주세요.\n"
                   f"문의: @batiinvest"
               ))
 
-    sb = _sb()
+    # DM 성공했을 때만 'approved' 마킹 (실패 시 pending 유지 → 재승인 가능)
+    if not res.get('ok'):
+        return False, "링크 DM 발송 실패 — 사용자가 봇을 차단했을 수 있습니다."
+
     if sb:
         try:
             from datetime import datetime, timezone
@@ -262,8 +292,6 @@ def approve_room(uid: int, room_id, admin_id: str = '') -> tuple[bool, str]:
         except Exception as e:
             log.warning(f"[room] approve DB 업데이트 실패: {e}")
 
-    if not res.get('ok'):
-        return False, "링크 DM 발송 실패 — 사용자가 봇을 차단했을 수 있습니다."
     log.info(f"[room] 입장 승인: {uid} → {room['name']}")
     return True, f"{room['name']} 입장 승인 완료"
 
