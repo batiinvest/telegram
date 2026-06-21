@@ -42,7 +42,7 @@ except ImportError:
 from telegram_utils import get_admin_chat_id as _get_admin_chat
 
 _TG_API = "https://api.telegram.org/bot{token}/{method}"
-_INVITE_EXPIRE_HOURS = 48   # 1회용 링크 미사용 시 자동 만료
+_INVITE_EXPIRE_HOURS = 3    # 1회용 링크 미사용 시 자동 만료
 
 
 # ══════════════════════════════════════════════════════════════
