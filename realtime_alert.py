@@ -861,6 +861,17 @@ class KisMyStockScanner:
                             self.process_report(chat_id, message.get("message_id"), user_name, text)
                             continue
 
+                        # 1:1 DM의 봇 명령어(/start, /status, /myid)는 admin 계정 포함 항상 bot_commands로
+                        # (admin chat_id가 allowed_configs에 잡혀 _handle을 건너뛰는 문제 방지)
+                        if message.get("chat", {}).get("type") == "private" and \
+                           text.startswith(("/start", "/status", "/myid")):
+                            try:
+                                import bot_commands as _bc
+                                _bc._handle(update)
+                            except Exception as _bce:
+                                logging.debug(f"bot_commands handle 오류: {_bce}")
+                            continue
+
                         matched_key = None
                         str_cid = str(chat_id)
                         
