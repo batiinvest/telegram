@@ -64,7 +64,6 @@ _menu_setup_done = False
 _MENU_KEYBOARD = {
     'keyboard': [
         [{'text': '🎟 유료 채팅방 입장'}],
-        [{'text': '📋 구독 현황'}],
     ],
     'resize_keyboard': True,
     'is_persistent': True,
@@ -79,8 +78,7 @@ def _ensure_menu():
     _menu_setup_done = True
     try:
         _post('setMyCommands', commands=[
-            {'command': 'start',  'description': '🎟 유료 채팅방 입장'},
-            {'command': 'status', 'description': '구독 현황 확인'},
+            {'command': 'start', 'description': '🎟 유료 채팅방 입장'},
         ])
         _post('setChatMenuButton', menu_button={'type': 'commands'})
         log.info("[cmd] 봇 메뉴(명령어) 등록 완료")
@@ -154,9 +152,6 @@ def _handle(update: dict):
             log.error(f"[cmd] 메뉴 입장 오류: {e}")
             _reply(chat_id, "처리 중 오류가 발생했습니다. 문의: @batiinvest")
         return
-    if text == '📋 구독 현황':
-        cmd = '/status'   # 아래 /status 처리로 전달
-
     # ── /start (페이로드 무관) · 일반 메시지 → 고정 메뉴 노출 + 방 선택 ──
     if cmd == '/start' or not cmd:
         try:
