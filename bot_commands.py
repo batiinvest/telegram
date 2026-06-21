@@ -58,6 +58,25 @@ def _reply(chat_id: int, text: str):
     _post('sendMessage', chat_id=chat_id, text=text, parse_mode='HTML')
 
 
+_menu_setup_done = False
+
+def _ensure_menu():
+    """봇 입력창 옆 ≡ 메뉴에 명령어 등록 (프로세스당 1회).
+    사용자가 /start를 직접 치지 않아도 메뉴 버튼이 보이게 합니다."""
+    global _menu_setup_done
+    if _menu_setup_done:
+        return
+    _menu_setup_done = True
+    try:
+        _post('setMyCommands', commands=[
+            {'command': 'start',  'description': '🎟 유료 채팅방 입장'},
+            {'command': 'status', 'description': '구독 현황 확인'},
+        ])
+        _post('setChatMenuButton', menu_button={'type': 'commands'})
+        log.info("[cmd] 봇 메뉴(명령어) 등록 완료")
+    except Exception as e:
+        log.debug(f"[cmd] 메뉴 등록 실패(무시): {e}")
+
 
 def _notify_admin_subscribe(uid: int, fname: str, lname: str, username: str):
     """구독 신청 내용을 어드민에게 전달 (인라인 버튼 포함)."""
@@ -94,6 +113,8 @@ def _handle(update: dict):
     if not msg:
         return
 
+    _ensure_menu()
+
     # 봇과의 1:1 DM만 처리 (그룹 메시지 무시)
     if msg['chat']['type'] != 'private':
         return
@@ -113,47 +134,17 @@ def _handle(update: dict):
         cmd = _bits[0].split('@')[0].lower()
         payload = _bits[1] if len(_bits) > 1 else ''
 
-    # ── /start paidroom — 유료 종목방 1회 입장 (Litt.ly 결제 후) ──
-    if cmd == '/start' and payload.startswith('paidroom'):
+    # ── /start (페이로드 유무 무관) · 일반 메시지 → 유료 채팅방 입장 메뉴 ──
+    #    /start, /start paidroom, 빈 메시지 모두 방 선택 메뉴를 띄움
+    if cmd == '/start' or not cmd:
         try:
             import room_access as _ra
             _ra.start_entry(uid, username=username,
                             name=f"{fname} {lname}".strip())
         except Exception as e:
-            log.error(f"[cmd] paidroom start 오류: {e}")
+            log.error(f"[cmd] start_entry 오류: {e}")
             _reply(chat_id, "처리 중 오류가 발생했습니다. 문의: @batiinvest")
         return
-
-    # ── /start 또는 일반 메시지 ───────────────────────────────
-    if cmd == '/start' or not cmd:
-        # 이미 구독 중인지 확인
-        if _PRO_OK:
-            try:
-                member = _pro.get_member(uid)
-                if member and member.get('is_active'):
-                    from datetime import date
-                    until = member['paid_until']
-                    days  = (date.fromisoformat(until) - date.today()).days
-                    _reply(chat_id,
-                        f"안녕하세요, {fname}님! 👋\n\n"
-                        f"✅ 구독 중 — 만료일 <b>{until}</b> (D-{days})\n\n"
-                        f"/status — 구독 현황 상세 조회"
-                    )
-                    return
-            except Exception:
-                pass
-
-        # 미구독자: 구독 안내 + 자동으로 어드민 알림
-        _reply(chat_id,
-            f"안녕하세요, {fname}님! 👋\n\n"
-            f"<b>바티인베스트 증권사 리포트 채널</b>에 관심 가져주셔서 감사합니다.\n\n"
-            f"구독 신청이 접수되었습니다.\n"
-            f"담당자가 확인 후 구독 안내를 드릴게요.\n\n"
-            f"문의: @batiinvest"
-        )
-        # 어드민에게 신청자 정보 전달
-        _notify_admin_subscribe(uid, fname, lname, username)
-        log.info(f"[cmd] 구독 신청: {uid} ({fname} {lname} @{username})")
 
     # ── /status ──────────────────────────────────────────────
     elif cmd == '/status':

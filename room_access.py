@@ -142,8 +142,8 @@ def start_entry(uid: int, username: str = '', name: str = '') -> bool:
     res = _tg('sendMessage', chat_id=uid, parse_mode='HTML',
               text=(
                   "🎟 <b>종목 유료방 입장</b>\n\n"
-                  "결제 감사합니다! 입장하실 종목방을 선택해 주세요.\n"
-                  "확인 후 <b>1회용 입장 링크</b>를 보내드립니다."
+                  "입장하실 종목방을 선택해 주세요.\n"
+                  "후원(litt.ly/batiinvest) 확인 후 <b>1회용 입장 링크</b>를 보내드립니다."
               ),
               reply_markup=keyboard)
     return res.get('ok', False)
