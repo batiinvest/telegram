@@ -107,8 +107,22 @@ def _handle(update: dict):
     text     = (msg.get('text') or '').strip()
 
     cmd = ''
+    payload = ''
     if text.startswith('/'):
-        cmd = text.split()[0].split('@')[0].lower()
+        _bits = text.split()
+        cmd = _bits[0].split('@')[0].lower()
+        payload = _bits[1] if len(_bits) > 1 else ''
+
+    # ── /start paidroom — 유료 종목방 1회 입장 (Litt.ly 결제 후) ──
+    if cmd == '/start' and payload.startswith('paidroom'):
+        try:
+            import room_access as _ra
+            _ra.start_entry(uid, username=username,
+                            name=f"{fname} {lname}".strip())
+        except Exception as e:
+            log.error(f"[cmd] paidroom start 오류: {e}")
+            _reply(chat_id, "처리 중 오류가 발생했습니다. 문의: @batiinvest")
+        return
 
     # ── /start 또는 일반 메시지 ───────────────────────────────
     if cmd == '/start' or not cmd:

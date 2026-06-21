@@ -641,6 +641,110 @@ class KisMyStockScanner:
         else:
             answer("알 수 없는 액션", alert=True)
 
+    def _handle_room_select(self, cb_id, chat_id, message_id, callback_q, parts):
+        """유료방 입장 — 구매자가 방 선택 버튼 클릭 (ROOMSEL|room_id)."""
+        base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+        def answer(text='', alert=False):
+            try:
+                self.listener_session.post(
+                    f"{base_url}/answerCallbackQuery",
+                    json={'callback_query_id': cb_id, 'text': text, 'show_alert': alert},
+                    timeout=5)
+            except Exception:
+                pass
+
+        def edit(text):
+            try:
+                self.listener_session.post(
+                    f"{base_url}/editMessageText",
+                    json={'chat_id': chat_id, 'message_id': message_id,
+                          'text': text, 'parse_mode': 'HTML'},
+                    timeout=5)
+            except Exception:
+                pass
+
+        if len(parts) < 2:
+            answer("잘못된 요청", alert=True)
+            return
+        try:
+            room_id = int(parts[1])
+        except (ValueError, IndexError):
+            answer("잘못된 방", alert=True)
+            return
+
+        frm      = callback_q.get('from', {})
+        uid      = frm.get('id')
+        username = frm.get('username', '')
+        name     = f"{frm.get('first_name', '')} {frm.get('last_name', '')}".strip()
+
+        try:
+            import room_access as _ra
+            ok = _ra.request_room(uid, username, name, room_id)
+            if ok:
+                answer("신청 접수됨 ✅")
+                edit("✅ 입장 신청이 접수되었습니다.\n승인되면 입장 링크를 보내드립니다.")
+            else:
+                answer("처리됨")
+        except Exception as e:
+            logging.error(f"[ROOMSEL] 오류: {e}")
+            answer("오류 발생", alert=True)
+
+    def _handle_room_callback(self, cb_id, chat_id, message_id, parts):
+        """유료방 입장 — 어드민 승인/거절 (ROOM|approve|uid|room_id)."""
+        base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+        def answer(text='', alert=False):
+            try:
+                self.listener_session.post(
+                    f"{base_url}/answerCallbackQuery",
+                    json={'callback_query_id': cb_id, 'text': text, 'show_alert': alert},
+                    timeout=5)
+            except Exception:
+                pass
+
+        def edit(text):
+            try:
+                self.listener_session.post(
+                    f"{base_url}/editMessageText",
+                    json={'chat_id': chat_id, 'message_id': message_id,
+                          'text': text, 'parse_mode': 'HTML'},
+                    timeout=5)
+            except Exception:
+                pass
+
+        if len(parts) < 4:
+            answer("잘못된 요청", alert=True)
+            return
+        action = parts[1]
+        try:
+            uid     = int(parts[2])
+            room_id = int(parts[3])
+        except (ValueError, IndexError):
+            answer("잘못된 ID", alert=True)
+            return
+
+        try:
+            import room_access as _ra
+            if action == 'approve':
+                ok, msg = _ra.approve_room(uid, room_id, admin_id=chat_id)
+                if ok:
+                    answer("✅ 승인 완료")
+                    edit(f"✅ <b>[입장 승인]</b>\n{msg}\nID: <code>{uid}</code>")
+                else:
+                    answer(f"❌ {msg}", alert=True)
+                    edit(f"⚠️ <b>[승인 실패]</b>\n{msg}\nID: <code>{uid}</code>")
+            elif action == 'reject':
+                _ra.reject_room(uid, room_id)
+                answer("거절 처리")
+                edit(f"❌ <b>[입장 거절]</b>\nID: <code>{uid}</code>")
+            else:
+                answer("알 수 없는 액션", alert=True)
+        except Exception as e:
+            logging.error(f"[ROOM callback] 오류: {e}")
+            answer("❌ 오류 발생", alert=True)
+            edit(f"❌ <b>[입장 처리 오류]</b>\n<code>{e}</code>")
+
     def handle_callback(self, callback_q):
         cb_id = callback_q['id']
         data = callback_q['data']
@@ -652,6 +756,16 @@ class KisMyStockScanner:
         # PRO 채널 콜백 (승인/거절)
         if parts[0] == 'PRO':
             self._handle_pro_callback(cb_id, chat_id, message_id, parts)
+            return
+
+        # 유료방 입장 — 구매자가 방 선택 (ROOMSEL|room_id)
+        if parts[0] == 'ROOMSEL':
+            self._handle_room_select(cb_id, chat_id, message_id, callback_q, parts)
+            return
+
+        # 유료방 입장 — 어드민 승인/거절 (ROOM|approve|uid|room_id)
+        if parts[0] == 'ROOM':
+            self._handle_room_callback(cb_id, chat_id, message_id, parts)
             return
 
         if len(parts) != 3 or parts[0] != "REP": return
