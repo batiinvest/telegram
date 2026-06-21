@@ -400,7 +400,7 @@ class SupabaseBridge:
             return fallback
         try:
             res = client.table('app_config') \
-                        .select('value') \
+                        .select('key,value') \
                         .in_('key', ['pro_admin_chat_id', 'admin_chat_id']) \
                         .execute()
             cfg = {r['key']: r['value'] for r in (res.data or [])}
