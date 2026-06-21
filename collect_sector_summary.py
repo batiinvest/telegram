@@ -235,10 +235,16 @@ def calc_summary(trading_days: list[str],
             kr_avg   = round(sum(chg_list) / len(chg_list), 3) if chg_list else None
             us_avg   = us_d.get(p)
 
+            # foreign_net_Nd / inst_net_Nd 컬럼은 BIGINT — '× price / 1e6'(백만원 환산)이
+            # 소수 float를 내므로 반드시 int로 반올림해야 한다. (소수 float 그대로 upsert하면
+            # PostgreSQL 22P02 'invalid input syntax for type bigint'로 save() 전체가 실패 →
+            # sector_daily_summary 갱신이 멈춘 근본 원인. 06-09 단위수정 이후 발생.)
+            _frgn = pb.get('frgn')
+            _inst = pb.get('inst')
             rec[f'avg_chg_{p}d']     = kr_avg
             rec[f'us_chg_{p}d']      = us_avg
-            rec[f'foreign_net_{p}d'] = pb.get('frgn') or None
-            rec[f'inst_net_{p}d']    = pb.get('inst') or None
+            rec[f'foreign_net_{p}d'] = int(round(_frgn)) if _frgn else None
+            rec[f'inst_net_{p}d']    = int(round(_inst)) if _inst else None
             rec[f'signal_{p}d']      = detect_signal(us_avg, kr_avg, p)
 
         rec['stock_count'] = b.get(1, {}).get('cnt', 0)
