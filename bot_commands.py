@@ -60,6 +60,16 @@ def _reply(chat_id: int, text: str):
 
 _menu_setup_done = False
 
+# 입력창 하단에 항상 고정되는 메뉴 (reply keyboard). 첫 /start 이후 계속 노출됨.
+_MENU_KEYBOARD = {
+    'keyboard': [
+        [{'text': '🎟 유료 채팅방 입장'}],
+        [{'text': '📋 구독 현황'}],
+    ],
+    'resize_keyboard': True,
+    'is_persistent': True,
+}
+
 def _ensure_menu():
     """봇 입력창 옆 ≡ 메뉴에 명령어 등록 (프로세스당 1회).
     사용자가 /start를 직접 치지 않아도 메뉴 버튼이 보이게 합니다."""
@@ -134,15 +144,31 @@ def _handle(update: dict):
         cmd = _bits[0].split('@')[0].lower()
         payload = _bits[1] if len(_bits) > 1 else ''
 
-    # ── /start (페이로드 유무 무관) · 일반 메시지 → 유료 채팅방 입장 메뉴 ──
-    #    /start, /start paidroom, 빈 메시지 모두 방 선택 메뉴를 띄움
-    if cmd == '/start' or not cmd:
+    # ── 하단 고정 메뉴(reply keyboard) 버튼 처리 ──
+    if text == '🎟 유료 채팅방 입장':
         try:
             import room_access as _ra
             _ra.start_entry(uid, username=username,
                             name=f"{fname} {lname}".strip())
         except Exception as e:
-            log.error(f"[cmd] start_entry 오류: {e}")
+            log.error(f"[cmd] 메뉴 입장 오류: {e}")
+            _reply(chat_id, "처리 중 오류가 발생했습니다. 문의: @batiinvest")
+        return
+    if text == '📋 구독 현황':
+        cmd = '/status'   # 아래 /status 처리로 전달
+
+    # ── /start (페이로드 무관) · 일반 메시지 → 고정 메뉴 노출 + 방 선택 ──
+    if cmd == '/start' or not cmd:
+        try:
+            _post('sendMessage', chat_id=uid, parse_mode='HTML',
+                  text=("🎟 <b>바티인베스트 유료 채팅방</b>\n"
+                        "아래 메뉴는 항상 여기 있어요 👇"),
+                  reply_markup=_MENU_KEYBOARD)
+            import room_access as _ra
+            _ra.start_entry(uid, username=username,
+                            name=f"{fname} {lname}".strip())
+        except Exception as e:
+            log.error(f"[cmd] start 오류: {e}")
             _reply(chat_id, "처리 중 오류가 발생했습니다. 문의: @batiinvest")
         return
 
