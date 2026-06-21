@@ -93,7 +93,10 @@ def collect_market_one(code: str, name: str) -> Optional[dict]:
             # ── 수급 ──
             "foreign_hold_rate": safe_float(output.get("hts_frgn_ehrt"),      zero_as_none=True),
             "foreign_hold_qty":  safe_int(output.get("frgn_hldn_qty")),
-            "foreign_net_buy":   safe_int(output.get("frgn_ntby_qty")),
+            # foreign_net_buy / institution_net_buy 는 여기서 쓰지 않는다.
+            #   inquire-price 의 frgn_ntby_qty 는 '장중 추정치'라 장 마감 후(17시) 대부분 0으로 비고,
+            #   기관 순매수는 애초에 제공하지 않는다. → collect_investor_trend(inquire-investor)가
+            #   종목별 확정치로 갱신한다. (여기서 0을 써버리면 그 값을 덮어쓰므로 의도적으로 제외)
             "program_net_buy":   safe_int(output.get("pgtr_ntby_qty")),
             "loan_balance_rate": safe_float(output.get("whol_loan_rmnd_rate"),zero_as_none=True),
             "short_sell_qty":    safe_int(output.get("last_ssts_cntg_qty"),   zero_as_none=True),
@@ -590,6 +593,101 @@ def collect_foreign_institution() -> dict:
         'both_buy': both[:10],
         'collected_at': date.today().isoformat(),
     }
+
+
+# ══════════════════════════════════════════════════════════
+# 종목별 투자자 순매수 (FHKST01010900 inquire-investor)
+# ──────────────────────────────────────────────────────────
+# 외국인·기관 순매수를 '종목별 확정치'로 집계해 market_data 수급을 채운다.
+# 배경: 일별 수집(collect_market_one→inquire-price)의 frgn_ntby_qty 는 장중 추정치라
+#       장 마감 후엔 대부분 0으로 비고, 기관 순매수는 애초에 제공하지 않는다.
+#       inquire-investor 는 한 번 호출로 외국인·기관·개인 순매수(수량)를 모두 반환하며
+#       output[0] 이 최신 거래일 → market_data 수급의 신뢰 소스.
+#       (get_investor_trend / get_investor_trend_cumulative 가 이미 쓰는 검증된 경로)
+# ══════════════════════════════════════════════════════════
+
+def fetch_investor_one(code: str) -> Optional[dict]:
+    """단일 종목 최신 거래일 투자자 순매수(수량) 조회.
+    반환: {'code','base_date','foreign','institution','personal'} 또는 None
+    """
+    try:
+        data = kis_auth.call_api(
+            tr_id="FHKST01010900",
+            path="quotations/inquire-investor",
+            code=code,
+        )
+        if not data or not data.get('output'):
+            return None
+        out  = data['output'][0]                         # 최신 거래일
+        bsop = (out.get('stck_bsop_date') or '').strip()
+        base_date = f"{bsop[:4]}-{bsop[4:6]}-{bsop[6:8]}" if len(bsop) == 8 else None
+        return {
+            'code':        code,
+            'base_date':   base_date,
+            'foreign':     safe_int(out.get('frgn_ntby_qty')),
+            'institution': safe_int(out.get('orgn_ntby_qty')),
+            'personal':    safe_int(out.get('prsn_ntby_qty')),
+        }
+    except Exception as e:
+        log.debug(f"[투자자수급] {code} 조회 실패: {e}")
+        return None
+
+
+def collect_investor_trend(all_listed: bool = False, max_workers: int = 5) -> tuple:
+    """종목별 외국인·기관 순매수(수량)를 inquire-investor 로 확정 수집 →
+    market_data.foreign_net_buy / institution_net_buy 갱신.
+
+    - all_listed=False(기본): 모니터링 종목만(is_monitored). 산업별 수급동향·
+      sector_daily_summary 가 모니터링 종목 기준이라 충분하고, 전체 상장사(2600+)는
+      호출량이 커서 기본 제외.
+    - 갱신 대상 거래일은 KIS 가 반환한 stck_bsop_date 로 매칭 → 호출 시점(장중/마감직후)에
+      관계없이 올바른 행만 갱신(해당 행 없으면 스킵).
+    반환: (updated, failed)
+    """
+    sb = get_supabase_client()
+
+    filter_col, filter_val = ("active", True) if all_listed else ("is_monitored", True)
+    raw = _fetch_all_pages(
+        sb.table("companies").select("code").eq(filter_col, filter_val)
+    )
+    seen, codes = set(), []
+    for r in raw:
+        c = (r.get("code") or "").split(".")[0]
+        if c and c not in seen:
+            seen.add(c)
+            codes.append(c)
+
+    if not codes:
+        log.info("[투자자수급] 대상 종목 없음 — 스킵")
+        return 0, 0
+
+    log.info(f"[투자자수급] {len(codes)}개 종목 외국인·기관 순매수 수집 시작")
+
+    results, failed = [], 0
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(fetch_investor_one, c): c for c in codes}
+        for fut in as_completed(futures):
+            r = fut.result()
+            if r and r.get('base_date'):
+                results.append(r)
+            else:
+                failed += 1
+            time.sleep(0.1)   # KIS rate limit 완화
+
+    updated = 0
+    for r in results:
+        try:
+            res = sb.table("market_data").update({
+                "foreign_net_buy":     r['foreign'],
+                "institution_net_buy": r['institution'],
+            }).eq("stock_code", r['code']).eq("base_date", r['base_date']).execute()
+            if res.data:
+                updated += 1
+        except Exception as e:
+            log.warning(f"[투자자수급] {r['code']} 업데이트 실패: {e}")
+
+    log.info(f"[투자자수급] 완료: {updated}개 갱신 / 조회·미매칭 {failed}개")
+    return updated, failed
 
 
 # ══════════════════════════════════════════════════════════

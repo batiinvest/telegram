@@ -1125,6 +1125,23 @@ def job_short_surge():
 
 
 @_job(holiday=True)
+def job_collect_investor_trend():
+    """평일 장 마감 후 (16:45) — 종목별 외국인·기관 순매수 확정 수집 (모니터링 종목).
+    inquire-investor(FHKST01010900)로 market_data.foreign_net_buy/institution_net_buy 갱신.
+    일별 quote 수집(frgn_ntby_qty)이 장중 추정치라 마감 후 0으로 비는 문제를 근본 해결.
+    sector_daily_summary(17:15) 집계 전에 실행해 같은 날 수급이 반영되도록 한다."""
+    if not _COLLECTOR_OK:
+        logging.warning("[투자자수급] 수집 모듈 없음 — 스킵")
+        return
+    try:
+        import collect_market
+        updated, failed = collect_market.collect_investor_trend(all_listed=False)
+        logging.info(f"=== [투자자수급] 완료: {updated}개 갱신 / 미수집 {failed} ===")
+    except Exception as e:
+        logging.error(f"❌ [투자자수급] 오류: {e}")
+
+
+@_job(holiday=True)
 def job_sector_summary():
     """평일 장 마감 후 (17:15) — 산업별 일별 요약 집계 (sector_daily_summary)"""
     try:
@@ -1387,6 +1404,7 @@ def run_scheduler():
     schedule.every().day.at("16:10").do(job_collect_macro)             # 장 마감 후 매크로 수집
     schedule.every().day.at("16:20").do(job_collect_us_etf)            # US ETF 수집 (미장 전일 종가)
     schedule.every().day.at("16:30").do(job_collect_new_high)          # 신고가 종목 수집
+    schedule.every().day.at("16:45").do(job_collect_investor_trend)    # 종목별 외국인·기관 순매수 확정 (sector_summary 전)
     schedule.every().day.at("17:00").do(job_collect_market_closing)    # 장 마감 확정치 수집 (외국인 집계 완료 후)
     schedule.every().day.at("17:05").do(job_short_surge)               # 공매도 수집 + 5일 평균 대비 2배 급증 알림
     schedule.every().day.at("17:15").do(job_sector_summary)            # 산업별 일별 요약 집계
@@ -1661,9 +1679,10 @@ def _run_watchdog_flags(threads: dict):
             _sb_fl      = _bridge._get_client()
             _fl_elapsed = _read_ts_flag(_sb_fl, 'run_flow_flag')
             if _fl_elapsed is not None and 0 < _fl_elapsed < 300:
-                logging.info("📡 [수급수집] 수동 트리거 감지 → job_collect_foreign_institution 실행")
+                logging.info("📡 [수급수집] 수동 트리거 감지 → 랭킹(top-N) + 종목별 투자자 순매수 실행")
                 _clear_ts_flag(_sb_fl, 'run_flow_flag')
                 _start_daemon(job_collect_foreign_institution, "Thread-ManualFlow")
+                _start_daemon(job_collect_investor_trend, "Thread-ManualInvestor")
         except Exception as _fle:
             logging.debug(f"run_flow_flag 체크 오류: {_fle}")
 
