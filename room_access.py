@@ -209,8 +209,10 @@ def request_room(uid: int, username: str, name: str, room_id) -> bool:
         return False
 
     _tg('sendMessage', chat_id=uid, parse_mode='HTML',
-        text=(f"✅ <b>{rname}</b> 입장 신청이 접수되었습니다.\n"
-              f"결제 확인 후 입장 링크를 보내드릴게요. 잠시만 기다려 주세요."))
+        text=(f"✅ <b>{rname}</b> 입장 신청이 접수되었습니다.\n\n"
+              f"후원 확인 후 <b>1회용 입장 링크</b>를 보내드립니다. 잠시만 기다려 주세요.\n\n"
+              f"※ 아직 후원 전이라면 litt.ly/batiinvest 에서 후원해 주세요.\n"
+              f"※ 후원 내역(응원 메시지의 @아이디)이 확인되지 않으면 입장이 거절될 수 있습니다."))
 
     _notify_admin(uid, username, name, room)
     log.info(f"[room] 입장 신청: {uid}(@{username}) → {room['name']}")
@@ -309,6 +311,6 @@ def reject_room(uid: int, room_id) -> bool:
 
     _tg('sendMessage', chat_id=uid, parse_mode='HTML',
         text=("입장 신청이 확인되지 않았습니다.\n"
-              "결제 내역의 @username과 일치하지 않을 수 있어요. 문의: @batiinvest"))
+              "후원 내역(응원 메시지의 @아이디)과 일치하지 않을 수 있어요. 문의: @batiinvest"))
     log.info(f"[room] 입장 거절: {uid} (room {room_id})")
     return True
