@@ -310,7 +310,10 @@ def reject_room(uid: int, room_id) -> bool:
             log.debug(f"[room] reject DB 업데이트 실패(무시): {e}")
 
     _tg('sendMessage', chat_id=uid, parse_mode='HTML',
-        text=("입장 신청이 확인되지 않았습니다.\n"
-              "후원 내역(응원 메시지의 @아이디)과 일치하지 않을 수 있어요. 문의: @batiinvest"))
+        text=("❌ 입장 신청이 거절되었습니다.\n\n"
+              "후원 내역이 없거나, 후원 시 적으신 @아이디가 일치하지 않습니다.\n"
+              "litt.ly/batiinvest 에서 후원 후, 응원 메시지(비밀)에 텔레그램 @아이디를 "
+              "정확히 적어 다시 신청해 주세요.\n\n"
+              "문의: @batiinvest"))
     log.info(f"[room] 입장 거절: {uid} (room {room_id})")
     return True
