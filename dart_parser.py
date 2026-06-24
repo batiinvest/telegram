@@ -2348,6 +2348,57 @@ def parse_tender_offer_result(kv: dict) -> list:
     return lines
 
 
+def parse_share_pledge(kv: dict) -> list:
+    """주식담보제공계약체결 — 담보제공자, 금액, 기간 핵심 요약."""
+    lines = []
+
+    # 담보제공자
+    provider = _get(kv,
+        '명칭(성명, 법인명, 조합명, 단체명)',
+        '성명(명칭)', '담보제공자', '명칭')
+    if provider:
+        lines.append(f'🏢 담보제공자: {provider}')
+
+    # 보유 지분
+    shares = _get(kv, '소유 주식 수(주)', '소유주식수(주)')
+    ratio  = _get(kv, '지분율(%)', '지분율')
+    if shares:
+        ratio_str = f' ({ratio}%)' if ratio else ''
+        lines.append(f'📊 보유지분: {int(shares.replace(",", "")):,}주{ratio_str}')
+
+    # 채무금액 / 담보설정금액
+    debt = _get(kv, '2. 채무(차입)금액 총액(원)', '채무(차입)금액 총액(원)', '채무금액')
+    coll = _get(kv, '3. 담보설정금액 총액(원)', '담보설정금액 총액(원)', '담보설정금액')
+    if debt:
+        lines.append(f'💸 채무금액: {_fmt_amount(debt)}원')
+    if coll:
+        lines.append(f'🔒 담보설정: {_fmt_amount(coll)}원')
+
+    # 담보제공 주식수 (누적)
+    pledge_sh = _get(kv, '누적 담보제공 주식 총수(주)', '담보제공주식수(주)')
+    if pledge_sh:
+        lines.append(f'📌 담보주식: {int(pledge_sh.replace(",", "")):,}주')
+
+    # 담보 종류
+    kind = _get(kv, '담보권 종류', '담보종류')
+    if kind:
+        lines.append(f'📋 담보종류: {kind}')
+
+    # 담보제공기간
+    start = _get(kv, '시작일', '담보제공기간시작일')
+    end   = _get(kv, '종료일', '담보제공기간종료일')
+    if start and end:
+        lines.append(f'📅 담보기간: {start} ~ {end}')
+    elif start or end:
+        lines.append(f'📅 담보기간: {start or end}')
+
+    # 계약 체결일
+    if v := _get(kv, '5. 담보권 설정계약 체결일(당해 건)', '담보권 설정계약 체결일'):
+        lines.append(f'📝 계약체결일: {v}')
+
+    return lines
+
+
 # 공시 제목 키워드 → 카테고리 파서 매핑
 # ※ 순서 중요: 구체적인 타입을 먼저, 일반적인 타입을 나중에
 _PARSER_MAP = [
@@ -2380,6 +2431,7 @@ _PARSER_MAP = [
     (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
     (['대량보유상황보고서'],                      parse_large_holding_report),
     (['공개매수결과보고서', '공개매수청약'],       parse_tender_offer_result),
+    (['주식담보제공'],                             parse_share_pledge),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
