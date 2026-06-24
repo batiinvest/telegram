@@ -377,14 +377,16 @@ class DartRoutingBot:
                                 if _cid:
                                     stock_api.send_telegram(_cid, msg)
 
-                            # ── AI 분석 (긴급/중요만) ──
-                            if level in ('urgent', 'major') and \
-                               any(k in report_nm for k in AI_TRIGGER_KEYWORDS):
-                                logging.info(f"🤖 AI 분석 큐: {corp_name}")
-                                ai_target = self._get_company_chat_id(corp_name, stock_code) or DEFAULT_CHAT_ID
-                                self.ai_executor.submit(
-                                    self.ai_worker, ai_target, corp_name, report_nm, rcept_no
-                                )
+                            # ── AI 분석 (긴급/중요만) ── [임시 중지: 업데이트 후 재적용]
+                            # Gemini 모델 폐기로 인해 분석 실패 → 임시 비활성화 (2026-06-25)
+                            # 복구 시 아래 블록 주석 해제
+                            # if level in ('urgent', 'major') and \
+                            #    any(k in report_nm for k in AI_TRIGGER_KEYWORDS):
+                            #     logging.info(f"🤖 AI 분석 큐: {corp_name}")
+                            #     ai_target = self._get_company_chat_id(corp_name, stock_code) or DEFAULT_CHAT_ID
+                            #     self.ai_executor.submit(
+                            #         self.ai_worker, ai_target, corp_name, report_nm, rcept_no
+                            #     )
 
                             # ── 발송 기록 ──
                             if _BRIDGE_OK:
