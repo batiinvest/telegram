@@ -1405,9 +1405,11 @@ def run_scheduler():
     schedule.every().day.at("16:20").do(job_collect_us_etf)            # US ETF 수집 (미장 전일 종가)
     schedule.every().day.at("16:30").do(job_collect_new_high)          # 신고가 종목 수집
     schedule.every().day.at("16:45").do(job_collect_investor_trend)    # 종목별 외국인·기관 순매수 확정 (sector_summary 전)
+    schedule.every().day.at("19:30").do(job_collect_investor_trend)    # 종목별 수급 확정 정산 (KRX 확정 후 — 당일 최종값 반영)
     schedule.every().day.at("17:00").do(job_collect_market_closing)    # 장 마감 확정치 수집 (외국인 집계 완료 후)
     schedule.every().day.at("17:05").do(job_short_surge)               # 공매도 수집 + 5일 평균 대비 2배 급증 알림
     schedule.every().day.at("17:15").do(job_sector_summary)            # 산업별 일별 요약 집계
+    schedule.every().day.at("19:45").do(job_sector_summary)            # 산업집계 재계산 (19:30 수급 확정 후 — 당일 최종 반영)
     schedule.every().day.at("17:30").do(job_leading_stocks)            # 주도주 탐색기 스코어 계산
     schedule.every().day.at("18:00").do(job_naver_report)
     schedule.every().day.at("18:10").do(job_kind_ir)             # KIND IR자료 오후 수집

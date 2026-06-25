@@ -11,7 +11,7 @@ from managers import global_session as _session
 # ==========================================
 # [설정] 모델 선택 (1.5 Flash 추천)
 # ==========================================
-AI_MODEL_ID = "gemini-1.5-flash"
+AI_MODEL_ID = "gemini-2.5-flash"
 
 # 초기화
 try:

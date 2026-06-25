@@ -182,28 +182,32 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
         body = r.json()
         log.debug(f"[KIS 지수 raw] iscd={iscd} keys={list(body.keys())} rt_cd={body.get('rt_cd')} msg={body.get('msg1','')}")
 
-        # output2 = 일별 리스트, output = 단일 / 키가 다를 수 있으므로 순서대로 시도
-        rows = body.get('output2') or body.get('output1') or []
-        if isinstance(rows, dict):
-            rows = [rows]
-        if not rows:
-            log.warning(f"[KIS 지수] 데이터 없음 (iscd={iscd}) rt_cd={body.get('rt_cd')} msg={body.get('msg1','')}")
-            return None, None
+        # output1 = 최신 요약(지수 현재가 + 전일대비율). output2(일별 차트행)에는
+        # 등락률(bstp_nmix_prdy_ctrt)이 없어 output2에서 읽으면 항상 0/None → output1 사용.
+        o1 = body.get('output1') or {}
+        if isinstance(o1, list):
+            o1 = o1[0] if o1 else {}
+        price = float(o1.get('bstp_nmix_prpr') or 0) or None
+        _rate = o1.get('bstp_nmix_prdy_ctrt')
+        chg = round(float(_rate), 2) if _rate not in (None, '') else None
 
-        # 실제 거래일 행 탐색: 등락률이 0이 아닌 첫 번째 행 (주말/휴장 행 스킵)
-        # KIS는 비거래일에도 전일 종가와 0% 등락률 행을 삽입하므로 필터 필요
-        trading_rows = [r for r in rows if float(r.get('bstp_nmix_prdy_ctrt') or 0) != 0.0]
-        if not trading_rows:
-            # 등락률이 모두 0이면 가장 최근 행의 가격만 반환 (개장 직전 등)
-            trading_rows = rows
-        latest = trading_rows[0]
-        price = float(latest.get('bstp_nmix_clpr') or latest.get('bstp_nmix_prpr') or 0) or None
-        rate  = float(latest.get('bstp_nmix_prdy_ctrt') or 0)
+        # 폴백: output1 비면 output2 일별행으로 가격·전일대비 계산
+        if price is None or chg is None:
+            o2 = body.get('output2') or []
+            if isinstance(o2, dict):
+                o2 = [o2]
+            if price is None and o2:
+                price = float(o2[0].get('bstp_nmix_prpr') or 0) or None
+            if chg is None and len(o2) >= 2:
+                _cur  = float(o2[0].get('bstp_nmix_prpr') or 0)
+                _prev = float(o2[1].get('bstp_nmix_prpr') or 0)
+                if _cur and _prev:
+                    chg = round((_cur - _prev) / _prev * 100, 2)
+
         if not price:
+            log.warning(f"[KIS 지수] 가격 없음 (iscd={iscd})")
             return None, None
-        chg = round(rate, 2) if rate else None
-        stck_bsop_date = latest.get('stck_bsop_date', '')
-        log.info(f"  [KIS 지수] iscd={iscd} → {price} ({chg}%) [{stck_bsop_date}]")
+        log.info(f"  [KIS 지수] iscd={iscd} → {price} ({chg}%)")
         return round(price, 2), chg
     except Exception as e:
         log.warning(f"[KIS 지수] 조회 실패 iscd={iscd}: {e}")

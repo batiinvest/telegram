@@ -618,7 +618,17 @@ def fetch_investor_one(code: str) -> Optional[dict]:
         )
         if not data or not data.get('output'):
             return None
-        out  = data['output'][0]                         # 최신 거래일
+        # output[0]은 저녁이면 다음 거래일(빈값)로 롤오버됨 → 값이 있는 최신 거래일 행 선택
+        #   (장중=당일 잠정치 / 저녁=당일 확정치 → 같은 거래일 행을 정산)
+        out = None
+        for _row in data['output']:
+            _f = (str(_row.get('frgn_ntby_qty') or '')).strip()
+            _o = (str(_row.get('orgn_ntby_qty') or '')).strip()
+            if _f != '' or _o != '':
+                out = _row
+                break
+        if out is None:
+            return None
         bsop = (out.get('stck_bsop_date') or '').strip()
         base_date = f"{bsop[:4]}-{bsop[4:6]}-{bsop[6:8]}" if len(bsop) == 8 else None
         return {
@@ -688,6 +698,77 @@ def collect_investor_trend(all_listed: bool = False, max_workers: int = 5) -> tu
 
     log.info(f"[투자자수급] 완료: {updated}개 갱신 / 조회·미매칭 {failed}개")
     return updated, failed
+
+def fetch_investor_history(code):
+    """단일 종목 inquire-investor 응답(최대 ~30거래일)을 {base_date:(foreign,institution)} 로 반환.
+    값 없는(빈) 행 제외. fetch_investor_one 과 같은 API, 전체 행 사용 (수급 백필용)."""
+    try:
+        data = kis_auth.call_api(
+            tr_id="FHKST01010900",
+            path="quotations/inquire-investor",
+            code=code,
+        )
+    except Exception as e:
+        log.debug(f"[수급백필] {code} 조회 실패: {e}")
+        return {}
+    if not data or not data.get('output'):
+        return {}
+    hist = {}
+    for row in data['output']:
+        bsop = (row.get('stck_bsop_date') or '').strip()
+        if len(bsop) != 8:
+            continue
+        f = (str(row.get('frgn_ntby_qty') or '')).strip()
+        o = (str(row.get('orgn_ntby_qty') or '')).strip()
+        if f == '' and o == '':
+            continue
+        bd = f"{bsop[:4]}-{bsop[4:6]}-{bsop[6:8]}"
+        hist[bd] = (safe_int(row.get('frgn_ntby_qty')), safe_int(row.get('orgn_ntby_qty')))
+    return hist
+
+
+def backfill_investor_trend(start_date, end_date=None, all_listed=False, max_workers=5):
+    """과거 외국인·기관 순매수를 inquire-investor 30일치 응답으로 일괄 백필.
+    [start_date, end_date] 범위 거래일만 market_data 갱신 (end_date None=상한없음).
+    반환: (updated_rows, stocks_done)."""
+    sb = get_supabase_client()
+    filter_col, filter_val = ("active", True) if all_listed else ("is_monitored", True)
+    raw = _fetch_all_pages(
+        sb.table("companies").select("code").eq(filter_col, filter_val)
+    )
+    seen, codes = set(), []
+    for r in raw:
+        c = (r.get("code") or "").split(".")[0]
+        if c and c not in seen:
+            seen.add(c); codes.append(c)
+    log.info(f"[수급백필] {len(codes)}개 종목 {start_date}~{end_date or 'inf'} 백필 시작")
+
+    def _work(code):
+        hist = fetch_investor_history(code)
+        n = 0
+        for bd, (f, i) in hist.items():
+            if bd < start_date:
+                continue
+            if end_date and bd > end_date:
+                continue
+            try:
+                res = sb.table("market_data").update({
+                    "foreign_net_buy": f, "institution_net_buy": i,
+                }).eq("stock_code", code).eq("base_date", bd).execute()
+                if res.data:
+                    n += 1
+            except Exception as e:
+                log.debug(f"[수급백필] {code} {bd} 실패: {e}")
+        return n
+
+    updated, done = 0, 0
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(_work, c): c for c in codes}
+        for fut in as_completed(futs):
+            updated += fut.result(); done += 1
+            time.sleep(0.05)
+    log.info(f"[수급백필] 완료: {updated}개 행 갱신 / {done}개 종목")
+    return updated, done
 
 
 # ══════════════════════════════════════════════════════════

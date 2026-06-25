@@ -152,13 +152,12 @@ def get_us_data(cutoff: str, base_date: str) -> list[dict]:
 # ── US ETF 누적 등락률 계산 ───────────────────────────────────────────────────
 def calc_us_chg(trading_days: list[str], us_rows: list[dict]) -> dict[str, dict[int, float | None]]:
     """
-    US ETF 산업별 기간별 누적 등락률.
-    trading_days[0] = 최신, day_idx 0 = 최신 → idx < period = 최근 period일.
+    US ETF 산업별 기간별 누적 등락률 — US 자체 세션 기준.
+    미국장은 KST 새벽에 마감되므로 us_market 날짜(US 세션일)는 KR 거래일보다 ~1일 빠르다.
+    KR 거래일(day_idx)에 맞추면 최신 US 세션이 period=1에서 누락되어 us_chg_1d가 항상 비므로,
+    US 자체 날짜를 최신순으로 재랭킹해 'US 최근 period 세션' 기준으로 집계한다.
     반환: {industry: {1: val, 5: val, 20: val}}
     """
-    day_idx = {d: i for i, d in enumerate(trading_days)}
-
-    # ind → date → [chg_pct, ...]
     ind_date: dict[str, dict[str, list]] = {}
     for r in us_rows:
         ind = r.get('industry')
@@ -170,16 +169,16 @@ def calc_us_chg(trading_days: list[str], us_rows: list[dict]) -> dict[str, dict[
 
     result: dict[str, dict[int, float | None]] = {}
     for ind, date_vals in ind_date.items():
+        us_days = sorted(date_vals.keys(), reverse=True)
+        us_idx  = {d: i for i, d in enumerate(us_days)}
         result[ind] = {}
         for period in PERIODS:
             total, count = 0.0, 0
             for d, vals in date_vals.items():
-                idx = day_idx.get(d)
-                if idx is not None and idx < period:
+                if us_idx[d] < period:
                     total += sum(vals) / len(vals)
                     count += 1
             result[ind][period] = round(total, 2) if count > 0 else None
-
     return result
 
 

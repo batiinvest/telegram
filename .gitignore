@@ -34,3 +34,11 @@ Thumbs.db
 # 테스트 아티팩트
 .pytest_cache/
 htmlcov/
+
+# 서버 시크릿 / 토큰 (로컬 추가)
+google_secret.json
+kis_token.dat
+kis_token.dat.lock
+*.dat
+sent_*.txt
+heartbeat.txt
