@@ -95,6 +95,7 @@ def _fetch_dart_majorstock(rcept_no: str) -> dict:
         log.debug(f'[DART API] majorstock 조회 실패 ({rcept_no}): {e}')
     return {}
 
+
 _DESKTOP_UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
     'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
@@ -597,13 +598,18 @@ def parse_rights_offering(kv: dict) -> list:
     while f'_allottee_{i}' in kv:
         name = kv[f'_allottee_{i}']
         cnt  = kv.get(f'_allot_cnt_{i}', '')
-        allottees.append(f'{name} ({cnt}주)' if cnt else name)
+        allottees.append((name, cnt))
         i += 1
     if allottees:
-        if len(allottees) == 1:
-            lines.append(f'🏢 배정대상: {allottees[0]}')
+        formatted = []
+        for name, cnt in allottees:
+            # 인코딩 깨짐 감지 → 이름 뒤에 경고 표시
+            suffix = ' ⚠️' if '?' in name else ''
+            formatted.append(f'{name}{suffix} ({cnt}주)' if cnt else f'{name}{suffix}')
+        if len(formatted) == 1:
+            lines.append(f'🏢 배정대상: {formatted[0]}')
         else:
-            lines.append('🏢 배정대상:\n' + '\n'.join(f'  • {a}' for a in allottees))
+            lines.append('🏢 배정대상:\n' + '\n'.join(f'  • {a}' for a in formatted))
 
     return lines
 
