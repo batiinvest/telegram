@@ -717,32 +717,54 @@ def parse_contract(kv: dict) -> list:
         region_str = f' ({_trunc(region, 30)})' if region and not _is_footnote(region) else ''
         lines.append(f'🏢 상대방: {party_clean}{region_str}')
 
-    # 계약금액 + 매출비중 — '- 계약금액: 숫자 - 매출액대비: 숫자' 복합값 처리
+    # 계약금액 + 매출비중 — '정정전/후' 복합값(금액 비율)에서 각각 분리
     amount = _get(kv, '계약금액(원)', '계약금액', '공급금액', '수주금액', '거래금액')
     ratio  = _get(kv, '매출액대비(%)', '최근매출액대비', '매출액 대비')
     if amount:
-        # 복합값에서 계약금액 숫자 추출
+        # 복합값 "523,270,000,000 6.02" → 앞부분(금액)만 추출
         m_amt = re.search(r'계약금액\s*[：:]\s*([\d,]+)', amount)
-        amt_clean = m_amt.group(1) if m_amt else amount
-        # 복합값에서 매출대비 비율 추출 (ratio 필드에도 같은 복합값이 올 수 있음)
-        ratio_src = ratio or amount
-        m_ratio = re.search(r'대비\s*[：:]\s*([\d.]+)', ratio_src)
-        ratio_clean = m_ratio.group(1) if m_ratio else (_clean_ratio(ratio) if ratio else '')
+        if m_amt:
+            amt_clean = m_amt.group(1)
+        else:
+            # 선행 숫자(콤마 포함) 추출 — 뒤의 소수 비율 제거
+            m_num = re.match(r'^([\d,]+)', amount.replace(' ', ''))
+            amt_clean = m_num.group(1) if m_num else amount
+        # 비율: 독립 키 우선, 없으면 복합값 끝부분에서 추출
+        if ratio:
+            ratio_clean = _clean_ratio(ratio)
+        else:
+            m_ratio = re.search(r'\s+([\d.]+)$', amount.strip())
+            ratio_clean = (m_ratio.group(1) + '%') if m_ratio else ''
         ratio_str = f' (매출대비 {ratio_clean.rstrip("%")}%)' if ratio_clean else ''
         lines.append(f'💰 계약금액: {_fmt_amount(amt_clean)}원{ratio_str}')
 
     # 계약기간 — 각주 필터링, 날짜만 추출
+    # 기재정정 복합값 "2025-04-15 2029-04-30" 대응: 날짜 두 개 모두 추출
     start = _get(kv, '시작일')
     end   = _get(kv, '종료일')
-    start_clean = _clean_date(start) if start and not _is_footnote(start) else None
-    end_clean   = _clean_date(end)   if end   and not _is_footnote(end)   else None
-    # 정정 섹션에서 종료일만 바뀐 경우 종료일은 kv에서 직접 탐색
+
+    def _extract_dates(v: str) -> list[str]:
+        """문자열에서 YYYY-MM-DD 형식 날짜 모두 추출."""
+        return re.findall(r'\d{4}-\d{2}-\d{2}', v) if v else []
+
+    # 시작일 키에 두 날짜가 함께 있는 경우(복합값) 분리
+    start_dates = _extract_dates(start) if start and not _is_footnote(start) else []
+    end_dates   = _extract_dates(end)   if end   and not _is_footnote(end)   else []
+
+    if len(start_dates) >= 2 and not end_dates:
+        # "2025-04-15 2029-04-30" 형태 → 시작/종료 분리
+        start_clean, end_clean = start_dates[0], start_dates[1]
+    else:
+        start_clean = start_dates[0] if start_dates else None
+        end_clean   = end_dates[0]   if end_dates   else None
+
+    # 정정 섹션에서 종료일만 바뀐 경우 KV 직접 탐색
     if not end_clean:
         for k, v in kv.items():
-            if '종료일' in k and v:
-                d = _clean_date(v)
-                if re.match(r'^\d{4}-\d{2}-\d{2}$', d):
-                    end_clean = d
+            if '종료일' in k and v and '정정전' not in k:
+                dates = _extract_dates(v)
+                if dates:
+                    end_clean = dates[-1]  # 복합값이면 마지막 날짜(종료일)
                     break
     if start_clean and end_clean:
         lines.append(f'📅 계약기간: {start_clean} ~ {end_clean}')
