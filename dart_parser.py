@@ -730,6 +730,10 @@ def parse_contract(kv: dict) -> list:
             m_num = re.match(r'^([\d,]+)', amount.replace(' ', ''))
             amt_clean = m_num.group(1) if m_num else amount
         # 비율: 독립 키 우선, 없으면 복합값 끝부분에서 추출
+        # 복합값 "523,270,000,000 6.02" 대응: 큰 숫자 포함 시 끝 소수만 추출
+        if ratio and re.search(r'[\d,]{6,}', ratio):
+            m_r = re.search(r'\s(\d{1,3}(?:\.\d+)?)$', ratio.strip())
+            ratio = m_r.group(1) if m_r else None
         if ratio:
             ratio_clean = _clean_ratio(ratio)
         else:
@@ -751,12 +755,13 @@ def parse_contract(kv: dict) -> list:
     start_dates = _extract_dates(start) if start and not _is_footnote(start) else []
     end_dates   = _extract_dates(end)   if end   and not _is_footnote(end)   else []
 
-    if len(start_dates) >= 2 and not end_dates:
-        # "2025-04-15 2029-04-30" 형태 → 시작/종료 분리
+    if len(start_dates) >= 2 and (not end_dates or start_dates == end_dates):
+        # "2025-04-15 2029-04-30" 복합값 → 시작/종료 분리
         start_clean, end_clean = start_dates[0], start_dates[1]
     else:
         start_clean = start_dates[0] if start_dates else None
-        end_clean   = end_dates[0]   if end_dates   else None
+        # 종료일 복합값에서는 마지막 날짜 사용
+        end_clean   = end_dates[-1]  if end_dates   else None
 
     # 정정 섹션에서 종료일만 바뀐 경우 KV 직접 탐색
     if not end_clean:
