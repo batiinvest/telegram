@@ -43,12 +43,8 @@ log = get_logger(__name__)
 
 # ── Supabase 클라이언트 ──────────────────────────────────────────────────────
 try:
-    from supabase import create_client, Client
-    SUPABASE_URL = os.environ.get('SB_URL', os.environ.get('SUPABASE_URL', ''))
-    SUPABASE_KEY = os.environ.get('SB_SERVICE_KEY', os.environ.get('SUPABASE_KEY', ''))
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise ValueError('SUPABASE_URL / SUPABASE_KEY 환경변수 미설정')
-    sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    from db_client import get_supabase_client
+    sb = get_supabase_client()
     log.info('Supabase 연결 완료')
 except Exception as e:
     log.error(f'Supabase 연결 실패: {e}')

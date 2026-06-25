@@ -28,22 +28,16 @@ from typing import Optional
 
 # ── Supabase 클라이언트 ──────────────────────────────────────────────────────
 try:
-    from supabase import create_client, Client
-    SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-    SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        # .env 파일 시도 (python-dotenv 설치 시)
-        try:
-            from dotenv import load_dotenv
-            load_dotenv()
-            SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-            SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-        except ImportError:
-            pass
-    sb: Optional[Client] = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
+    from dotenv import load_dotenv
+    load_dotenv()
 except ImportError:
+    pass
+try:
+    from db_client import get_supabase_client
+    sb = get_supabase_client()
+except Exception as e:
     sb = None
-    logging.warning("[SummaryGen] supabase-py 미설치. pip install supabase")
+    logging.warning(f"[SummaryGen] Supabase 연결 실패: {e}")
 
 
 

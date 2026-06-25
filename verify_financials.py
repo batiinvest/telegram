@@ -30,7 +30,7 @@ import argparse
 from datetime import datetime
 
 try:
-    from supabase import create_client
+    from db_client import get_supabase_client
 except ImportError:
     print("pip install supabase 필요")
     sys.exit(1)
@@ -562,7 +562,7 @@ def main():
         log.error("SB_URL, SB_SERVICE_KEY 환경변수 필요")
         sys.exit(1)
 
-    sb = create_client(SB_URL, SB_SERVICE_KEY)
+    sb = get_supabase_client()
 
     monitored_only = not args.all and not args.corp_name
 
