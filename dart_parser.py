@@ -225,7 +225,34 @@ def _detect_encoding(content: bytes, headers: dict) -> str:
 
 
 def _fetch_html(rcept_no: str) -> str | None:
-    """DART 공시 본문 HTML 가져오기."""
+    """
+    DART 공시 본문 HTML 가져오기.
+    1순위: DART OpenAPI document.xml (zip) — 인코딩 손상 없음
+    2순위: 웹 뷰어 스크래핑 + _fix_dart_utf8 복구 (API 키 없거나 실패 시)
+    """
+    # ── 1순위: DART document.xml API ────────────────────────────────────────
+    try:
+        from config import DART_API_KEY
+        if DART_API_KEY:
+            import zipfile, io as _io
+            api_resp = _session.get(
+                f'{_DART_API_BASE}/document.xml',
+                params={'crtfc_key': DART_API_KEY, 'rcept_no': rcept_no},
+                timeout=12,
+            )
+            if api_resp.status_code == 200:
+                try:
+                    z = zipfile.ZipFile(_io.BytesIO(api_resp.content))
+                    xml_bytes = z.read(z.namelist()[0])
+                    decoded = xml_bytes.decode('utf-8', errors='replace')
+                    log.debug(f'[DART 파서] document.xml API 사용 ({rcept_no})')
+                    return decoded
+                except Exception as e:
+                    log.debug(f'[DART 파서] document.xml zip 실패 ({rcept_no}): {e}')
+    except Exception as e:
+        log.debug(f'[DART 파서] document.xml API 접근 실패: {e}')
+
+    # ── 2순위: 웹 뷰어 스크래핑 ─────────────────────────────────────────────
     headers = {'User-Agent': _DESKTOP_UA}
     base    = 'http://dart.fss.or.kr'
     try:
