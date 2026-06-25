@@ -45,29 +45,10 @@ load_dotenv(Path(__file__).parent / '.env')
 from logger_config import get_logger
 log = get_logger(__name__)
 
-from supabase import create_client
 from db_utils import fetch_all_pages
+from db_client import get_supabase_client
 
-# 여러 환경변수 이름을 순서대로 시도 (supabase_bridge.py 등 기존 스크립트와 호환)
-_URL = (os.environ.get('SUPABASE_URL')
-     or os.environ.get('SB_URL')
-     or '')
-_KEY = (os.environ.get('SUPABASE_KEY')
-     or os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
-     or os.environ.get('SB_SERVICE_KEY')
-     or os.environ.get('SB_KEY')
-     or '')
-
-if not _URL or not _KEY:
-    log.error(
-        'Supabase 환경변수 미설정.\n'
-        '다음 중 하나를 .env 또는 shell export로 설정하세요:\n'
-        '  SUPABASE_URL  / SB_URL\n'
-        '  SUPABASE_KEY  / SUPABASE_SERVICE_ROLE_KEY / SB_SERVICE_KEY'
-    )
-    sys.exit(1)
-
-sb = create_client(_URL, _KEY)
+sb = get_supabase_client()
 
 # ── 기간 / 신호 상수 ──────────────────────────────────────────────────────────
 PERIODS  = [1, 5, 20]

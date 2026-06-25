@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
-    from supabase import create_client
+    from db_client import get_supabase_client
 except ImportError:
     print("pip install supabase 필요")
     sys.exit(1)
@@ -271,7 +271,7 @@ def run(trd_date: str = None) -> tuple[int, int]:
 
     log.info(f"📉 [공매도] 당일 수집 시작 — {trd_date}")
 
-    sb = create_client(SB_URL, SB_SERVICE_KEY)
+    sb = get_supabase_client()
     monitored = _get_monitored_codes(sb)
     if not monitored:
         log.warning("⚠️ [공매도] 모니터링 종목 없음")
@@ -320,7 +320,7 @@ def backfill(stock_codes: list[str], days: int = 252) -> int:
         return 0
 
     target_set = set(stock_codes)
-    sb = create_client(SB_URL, SB_SERVICE_KEY)
+    sb = get_supabase_client()
 
     # 이미 데이터가 있는 (stock_code, base_date) 제외
     existing = set()
@@ -478,7 +478,7 @@ def run_and_alert(trd_date: str = None, telegram_token: str = None,
         log.error("SB_URL, SB_SERVICE_KEY 환경변수 필요")
         return 0
 
-    sb = create_client(SB_URL, SB_SERVICE_KEY)
+    sb = get_supabase_client()
 
     # 1. 당일 데이터 수집
     run(trd_date)

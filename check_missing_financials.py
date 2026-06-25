@@ -20,18 +20,10 @@ load_dotenv(Path(__file__).parent / '.env')
 from logger_config import get_logger
 log = get_logger(__name__)
 
-from supabase import create_client
 from db_utils import fetch_all_pages
+from db_client import get_supabase_client
 
-_URL = (os.environ.get('SUPABASE_URL') or os.environ.get('SB_URL') or '')
-_KEY = (os.environ.get('SUPABASE_KEY') or os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
-     or os.environ.get('SB_SERVICE_KEY') or os.environ.get('SB_KEY') or '')
-
-if not _URL or not _KEY:
-    log.error('Supabase 환경변수 미설정 (SUPABASE_URL / SB_URL)')
-    sys.exit(1)
-
-sb = create_client(_URL, _KEY)
+sb = get_supabase_client()
 
 
 def get_companies(scope: str) -> list[dict]:
