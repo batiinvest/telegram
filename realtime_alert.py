@@ -525,6 +525,19 @@ class KisMyStockScanner:
             logging.error(f"Command Execution Error ({cmd}): {e}")
             stock_api.send_telegram(chat_id, f"❌ 명령 처리 중 오류 발생: {e}")
 
+    def _handle_my_chat_member(self, mcm: dict):
+        """봇 자신이 그룹 관리자로 추가되면 chat_id 자동 등록 (room_access 위임)."""
+        try:
+            chat = mcm.get("chat", {})
+            if chat.get("type") not in ("group", "supergroup"):
+                return
+            status = mcm.get("new_chat_member", {}).get("status", "")
+            if status in ("administrator", "member", "creator"):
+                import room_access as _ra
+                _ra.handle_bot_added_to_group(chat.get("id"), chat.get("title"))
+        except Exception as e:
+            logging.error(f"[my_chat_member] 오류: {e}")
+
     def _handle_chat_member(self, cm: dict):
         """프로 채널 멤버 입장/퇴장 감지 → in_channel DB 자동 동기화."""
         try:
@@ -824,7 +837,7 @@ class KisMyStockScanner:
                 params = {
                     "timeout": 10,
                     "offset": self.last_update_id + 1,
-                    "allowed_updates": ["message", "callback_query", "channel_post", "edited_message", "chat_member"]
+                    "allowed_updates": ["message", "callback_query", "channel_post", "edited_message", "chat_member", "my_chat_member"]
                 }
                 res = self.listener_session.post(url, json=params, timeout=30)
                 
@@ -839,6 +852,10 @@ class KisMyStockScanner:
 
                         if "chat_member" in update:
                             self._handle_chat_member(update["chat_member"])
+                            continue
+
+                        if "my_chat_member" in update:
+                            self._handle_my_chat_member(update["my_chat_member"])
                             continue
 
                         message = None

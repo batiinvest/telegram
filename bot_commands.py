@@ -211,6 +211,53 @@ def _handle(update: dict):
             f"🔢 내 텔레그램 ID: <code>{uid}</code>"
         )
 
+    # ── 관리자 채팅방 관리 (방목록 / 방상태 / 방연결) ──────────
+    elif cmd in ('/방목록', '/rooms', '/방상태', '/방연결'):
+        try:
+            import room_access as _ra
+            if not _ra.is_room_admin(uid):
+                _reply(chat_id, "⛔ 관리자 전용 명령입니다.")
+                return
+            args = text.split()[1:]
+            if cmd in ('/방목록', '/rooms'):
+                _reply_long(chat_id, _fmt_room_list(_ra.list_rooms()))
+            elif cmd == '/방상태':
+                if len(args) < 2:
+                    _reply(chat_id, "사용법: <code>/방상태 [종목명|id] [open|paid|full]</code>")
+                    return
+                st = args[-1].lower()
+                target = ' '.join(args[:-1])
+                if st not in _ra.ALL_STATUSES:
+                    _reply(chat_id, "상태는 open / paid / full 중 하나여야 합니다.")
+                    return
+                r = _ra.find_room(target)
+                if not r:
+                    _reply(chat_id, f"'{target}' 방을 찾을 수 없습니다.")
+                    return
+                if r.get('_multi'):
+                    _reply(chat_id, "여러 방이 일치합니다. 더 정확히:\n• " + "\n• ".join(r['_multi']))
+                    return
+                ok = _ra.set_room_status(r['id'], st)
+                _reply(chat_id, f"✅ <b>{r['name']}</b> 상태 → <b>{st}</b>" if ok else "⚠️ 변경 실패")
+            elif cmd == '/방연결':
+                if len(args) < 2:
+                    _reply(chat_id, "사용법: <code>/방연결 [종목명|id] [chat_id]</code>")
+                    return
+                new_cid = args[-1]
+                target = ' '.join(args[:-1])
+                r = _ra.find_room(target)
+                if not r:
+                    _reply(chat_id, f"'{target}' 방을 찾을 수 없습니다.")
+                    return
+                if r.get('_multi'):
+                    _reply(chat_id, "여러 방이 일치합니다. 더 정확히:\n• " + "\n• ".join(r['_multi']))
+                    return
+                ok = _ra.set_room_chat_id(r['id'], new_cid)
+                _reply(chat_id, f"✅ <b>{r['name']}</b> chat_id → <code>{new_cid}</code>" if ok else "⚠️ 변경 실패")
+        except Exception as e:
+            log.error(f"[cmd] 방관리 오류: {e}")
+            _reply(chat_id, "처리 중 오류가 발생했습니다.")
+
 
 def run_polling():
     """
@@ -261,3 +308,42 @@ def start_thread() -> threading.Thread:
 def stop():
     global _running
     _running = False
+
+
+def _reply_long(chat_id: int, text: str):
+    """4096자 제한 대응 — 줄 단위로 잘라 여러 메시지로 발송."""
+    LIMIT = 3800
+    buf = ""
+    for line in text.split("\n"):
+        if len(buf) + len(line) + 1 > LIMIT:
+            if buf:
+                _reply(chat_id, buf)
+            buf = line
+        else:
+            buf = (buf + "\n" + line) if buf else line
+    if buf:
+        _reply(chat_id, buf)
+
+
+def _fmt_room_list(rooms: list) -> str:
+    """관리자용 방 목록 텍스트."""
+    import html as _h
+    if not rooms:
+        return "등록된 방이 없습니다."
+    _ICON = {'paid': '🔒', 'full': '🚫', 'open': '🟢'}
+    lines = [f"📋 <b>채팅방 목록</b> ({len(rooms)}개)"]
+    cur = None
+    for r in rooms:
+        cat = r.get('cat') or '기타'
+        if cat != cur:
+            cur = cat
+            lines.append(f"\n<b>[{_h.escape(str(cat))}]</b>")
+        icon = _ICON.get(r.get('status'), '·')
+        nm = _h.escape(str(r.get('name') or ''))
+        cid = r.get('chat_id') or '—'
+        flag = '✅' if str(cid).lstrip('-').isdigit() else '⚠️'
+        mem = r.get('members') or 0
+        mx = r.get('max_members') or 1000
+        lines.append(f"{icon} <b>{nm}</b> <code>#{r.get('id')}</code> {mem}/{mx} {flag}<code>{_h.escape(str(cid))}</code>")
+    lines.append("\n명령: /방상태 [종목] [open|paid|full] · /방연결 [종목] [chat_id]")
+    return "\n".join(lines)

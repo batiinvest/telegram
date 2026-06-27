@@ -318,3 +318,118 @@ def reject_room(uid: int, room_id) -> bool:
               "문의: @batiinvest"))
     log.info(f"[room] 입장 거절: {uid} (room {room_id})")
     return True
+
+
+# ══════════════════════════════════════════════════════════════
+# 🛠️  관리자 채팅방 관리 (봇 명령 + chat_id 자동등록)  [2026-06-27]
+# ══════════════════════════════════════════════════════════════
+
+ALL_STATUSES = ('open', 'paid', 'full')
+
+
+def is_room_admin(uid) -> bool:
+    """uid가 관리자 그룹(pro_admin_chat_id, 숫자ID)의 멤버인지 확인."""
+    admin = _get_admin_chat()
+    if not admin or not str(admin).lstrip('-').isdigit():
+        return False
+    res = _tg('getChatMember', chat_id=admin, user_id=uid)
+    if not res.get('ok'):
+        return False
+    return res.get('result', {}).get('status') in ('creator', 'administrator', 'member')
+
+
+def list_rooms() -> list:
+    """전체 방 목록 (관리용)."""
+    sb = _sb()
+    if not sb:
+        return []
+    try:
+        res = sb.table('rooms') \
+                .select('id,name,chat_id,status,members,max_members,cat,room_type') \
+                .order('cat').order('name').execute()
+        return res.data or []
+    except Exception as e:
+        log.error(f"[room] 목록 조회 실패: {e}")
+        return []
+
+
+def find_room(query) -> Optional[dict]:
+    """id(숫자) 또는 종목명(부분일치)으로 방 검색. 다중일치 시 {'_multi':[names]}."""
+    sb = _sb()
+    if not sb:
+        return None
+    q = str(query).strip()
+    try:
+        if q.isdigit():
+            r = sb.table('rooms').select('id,name,chat_id,status').eq('id', int(q)).execute()
+            if r.data:
+                return r.data[0]
+        r = sb.table('rooms').select('id,name,chat_id,status').ilike('name', f'%{q}%').execute()
+        data = r.data or []
+        if len(data) == 1:
+            return data[0]
+        if len(data) > 1:
+            exact = [d for d in data if d['name'] == q]
+            if len(exact) == 1:
+                return exact[0]
+            return {'_multi': [d['name'] for d in data]}
+        return None
+    except Exception as e:
+        log.error(f"[room] 검색 실패: {e}")
+        return None
+
+
+def set_room_status(room_id, status) -> bool:
+    if status not in ALL_STATUSES:
+        return False
+    sb = _sb()
+    if not sb:
+        return False
+    try:
+        sb.table('rooms').update({'status': status}).eq('id', room_id).execute()
+        return True
+    except Exception as e:
+        log.error(f"[room] 상태변경 실패: {e}")
+        return False
+
+
+def set_room_chat_id(room_id, chat_id) -> bool:
+    sb = _sb()
+    if not sb:
+        return False
+    try:
+        sb.table('rooms').update({'chat_id': str(chat_id)}).eq('id', room_id).execute()
+        return True
+    except Exception as e:
+        log.error(f"[room] chat_id 설정 실패: {e}")
+        return False
+
+
+def handle_bot_added_to_group(chat_id, title) -> None:
+    """봇이 그룹 관리자로 추가될 때: 종목명 매칭 자동 chat_id 등록 + 관리자 알림."""
+    admin = _get_admin_chat()
+    rooms = list_rooms()
+    t = title or ''
+    matches = [r for r in rooms if r.get('name') and r['name'] in t]
+    if len(matches) == 1:
+        r = matches[0]
+        old = r.get('chat_id')
+        if str(old) == str(chat_id):
+            return
+        set_room_chat_id(r['id'], chat_id)
+        if admin:
+            _tg('sendMessage', chat_id=admin, parse_mode='HTML',
+                text=(f"🔗 <b>chat_id 자동 등록</b>\n\n"
+                      f"방: <b>{_esc(r['name'])}</b> (id={r['id']})\n"
+                      f"그룹: {_esc(title)}\n"
+                      f"chat_id: <code>{_esc(old)}</code> → <code>{chat_id}</code>"))
+        log.info(f"[room] chat_id 자동등록: {r['name']} → {chat_id}")
+    else:
+        if admin:
+            hint = "여러 방 매칭됨 — 수동 연결 필요" if len(matches) > 1 else "매칭되는 방 없음"
+            _tg('sendMessage', chat_id=admin, parse_mode='HTML',
+                text=(f"🆕 <b>봇이 그룹 관리자로 추가됨</b> ({hint})\n\n"
+                      f"그룹: {_esc(title)}\n"
+                      f"chat_id: <code>{chat_id}</code>\n\n"
+                      f"수동 연결: <code>/방연결 &lt;종목&gt; {chat_id}</code>"))
+        log.info(f"[room] 그룹 추가 감지(미매칭): {title} {chat_id}")
