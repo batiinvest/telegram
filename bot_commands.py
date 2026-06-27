@@ -258,6 +258,44 @@ def _handle(update: dict):
             log.error(f"[cmd] 방관리 오류: {e}")
             _reply(chat_id, "처리 중 오류가 발생했습니다.")
 
+    # ── 미접속 강퇴 메뉴 (관리자) ──────────────────────────────
+    elif cmd in ('/미접속', '/강퇴'):
+        try:
+            import room_access as _ra
+            if not _ra.is_room_admin(uid):
+                _reply(chat_id, "⛔ 관리자 전용 명령입니다.")
+                return
+            _reply(chat_id, "🔎 미접속 멤버 스캔 중입니다... (54개 방, 약 3분 소요)")
+            import threading
+            import inactive_kick as _ik
+            _NL = chr(10)
+            def _scan_worker(_cid):
+                try:
+                    rooms, total = _ik.scan_candidates()
+                    items = sorted([(rid, i) for rid, i in rooms.items() if i['cands']],
+                                   key=lambda x: -len(x[1]['cands']))
+                    if not items:
+                        _post('sendMessage', chat_id=_cid, text="✅ 미접속(7일+) 대상자가 없습니다.")
+                        return
+                    kb = []
+                    for rid, info in items:
+                        lock = '🔒' if info['status'] == 'paid' else '·'
+                        kb.append([{'text': lock + ' ' + info['name'] + ' (' + str(len(info['cands'])) + '명)',
+                                    'callback_data': 'IK|' + str(rid)}])
+                    kb.append([{'text': '⚠️ 전체 강퇴 (' + str(total) + '명)', 'callback_data': 'IK|all'}])
+                    head = ('🧹 <b>미접속(7일+) 강퇴 메뉴</b>' + _NL
+                            + '대상 ' + str(total) + '명 / ' + str(len(items)) + '개 방' + _NL
+                            + '방을 누르면 그 방만 즉시 강퇴, 전체는 확인 후 실행됩니다.')
+                    _post('sendMessage', chat_id=_cid, text=head, parse_mode='HTML',
+                          reply_markup={'inline_keyboard': kb})
+                except Exception as _se:
+                    log.error(f"[cmd] 미접속 스캔 오류: {_se}")
+                    _post('sendMessage', chat_id=_cid, text="스캔 중 오류가 발생했습니다.")
+            threading.Thread(target=_scan_worker, args=(chat_id,), daemon=True).start()
+        except Exception as e:
+            log.error(f"[cmd] 미접속 오류: {e}")
+            _reply(chat_id, "처리 중 오류가 발생했습니다.")
+
 
 def run_polling():
     """

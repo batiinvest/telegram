@@ -758,6 +758,62 @@ class KisMyStockScanner:
             answer("❌ 오류 발생", alert=True)
             edit(f"❌ <b>[입장 처리 오류]</b>\n<code>{e}</code>")
 
+    def _handle_ik_callback(self, cb_id, chat_id, message_id, callback_q, parts):
+        base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+        def answer(text='', alert=False):
+            try:
+                self.listener_session.post(f"{base_url}/answerCallbackQuery",
+                    json={'callback_query_id': cb_id, 'text': text, 'show_alert': alert}, timeout=5)
+            except Exception:
+                pass
+        def edit(text, markup=None):
+            payload = {'chat_id': chat_id, 'message_id': message_id, 'text': text, 'parse_mode': 'HTML'}
+            if markup is not None:
+                payload['reply_markup'] = markup
+            try:
+                self.listener_session.post(f"{base_url}/editMessageText", json=payload, timeout=5)
+            except Exception:
+                pass
+        try:
+            import room_access as _ra
+            clicker = (callback_q.get('from') or {}).get('id')
+            if not _ra.is_room_admin(clicker):
+                answer('관리자 전용입니다.', alert=True)
+                return
+        except Exception:
+            answer('권한 확인 실패', alert=True)
+            return
+        import inactive_kick as _ik
+        import threading
+        target = parts[1] if len(parts) > 1 else ''
+        if target == 'all':
+            _, total, _ts = _ik.get_cache()
+            answer()
+            edit('⚠️ <b>전체 ' + str(total) + '명</b> 강퇴를 실행할까요?',
+                 markup={'inline_keyboard': [[
+                     {'text': '✅ 전체 강퇴 실행', 'callback_data': 'IK|allgo'},
+                     {'text': '취소', 'callback_data': 'IK|cancel'}]]})
+            return
+        if target == 'cancel':
+            answer('취소됨')
+            edit('❌ 강퇴가 취소되었습니다.')
+            return
+        sel = 'all' if target == 'allgo' else target
+        answer('강퇴를 시작합니다…')
+        edit('🧹 강퇴 진행 중… 완료되면 결과를 알려드립니다.')
+        def _kick_worker():
+            try:
+                done, total, name = _ik.kick_cached(sel)
+                self.listener_session.post(f"{base_url}/sendMessage",
+                    json={'chat_id': chat_id,
+                          'text': '✅ [' + str(name) + '] 강퇴 완료: ' + str(done) + '/' + str(total) + '명'},
+                    timeout=10)
+            except Exception as e:
+                logging.error(f"[IK callback] 강퇴 오류: {e}")
+                self.listener_session.post(f"{base_url}/sendMessage",
+                    json={'chat_id': chat_id, 'text': '강퇴 중 오류: ' + str(e)}, timeout=10)
+        threading.Thread(target=_kick_worker, daemon=True).start()
+
     def handle_callback(self, callback_q):
         cb_id = callback_q['id']
         data = callback_q['data']
@@ -779,6 +835,11 @@ class KisMyStockScanner:
         # 유료방 입장 — 어드민 승인/거절 (ROOM|approve|uid|room_id)
         if parts[0] == 'ROOM':
             self._handle_room_callback(cb_id, chat_id, message_id, parts)
+            return
+
+        # 미접속 강퇴 메뉴 (IK|room_id / IK|all / IK|allgo / IK|cancel)
+        if parts[0] == 'IK':
+            self._handle_ik_callback(cb_id, chat_id, message_id, callback_q, parts)
             return
 
         if len(parts) != 3 or parts[0] != "REP": return
