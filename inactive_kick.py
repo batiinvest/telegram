@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """미접속(last-seen) 멤버 강퇴 (Telethon 유저 클라이언트).
 
-봇 메뉴(/미접속)에서 방 목록을 보고 특정 방 또는 전체를 선택해 강퇴한다.
+봇 메뉴(/미접속)에서 방 목록을 보고 방을 선택 → 명단 확인 → 강퇴한다.
 
 판정:
   - UserStatusOffline.was_online 이 (now - INACTIVE_DAYS) 이전        -> 대상
@@ -10,6 +10,7 @@
   - Recently / LastWeek / Online / 숨김(Empty/None)                   -> 유지(안전)
 제외: 관리자/봇/본인.
 방식: kick_participant(ban->unban) = 재입장 가능. FloodWait 자동 대기.
+강퇴 직전 last-seen 재확인(스캔 후 활동 재개자 제외).
 대상 방: rooms.chat_id 가 숫자(-100…)인 전체 방.
 """
 import os
@@ -33,6 +34,8 @@ load_dotenv("/home/kjhofone/.env")
 
 INACTIVE_DAYS = 7
 KICK_SLEEP = 1.5          # 강퇴 간 간격(초) — 계정 보호
+CACHE_TTL_MIN = 30        # 스캔 결과 재사용 시간(분)
+SAMPLE_N = 8              # 명단 미리보기 개수
 REPORT_PATH = "/home/kjhofone/logs/inactive_kick_report.txt"
 
 _API_ID = int(os.environ["TELETHON_API_ID"])
@@ -40,7 +43,7 @@ _API_HASH = os.environ["TELETHON_API_HASH"]
 _SESSION = os.environ["TELETHON_SESSION"]
 _BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
-# 마지막 스캔 후보 캐시 (메뉴 클릭 강퇴에 사용)
+# 마지막 스캔 후보 캐시 (메뉴 강퇴에 사용)
 _LAST = {"ts": None, "rooms": {}, "total": 0}
 _LOCK = threading.Lock()
 
@@ -72,8 +75,22 @@ def _should_kick(user, cutoff):
     return False, ""
 
 
+def _display_name(u):
+    if getattr(u, "deleted", False):
+        return "(삭제계정)"
+    nm = (u.first_name or "")
+    if u.last_name:
+        nm += " " + u.last_name
+    nm = nm.strip()
+    if nm:
+        return nm
+    if u.username:
+        return "@" + u.username
+    return str(u.id)
+
+
 def _scan_room(client, room, cutoff, me_id):
-    """단일 방 스캔 → (seen, [uid,...]). 권한없음/오류 시 예외."""
+    """단일 방 스캔 → (seen, [uid,...], [name 샘플]). 권한없음/오류 시 예외."""
     cid = int(room["chat_id"])
     perm = client.get_permissions(cid, "me")
     if not (perm.is_admin and perm.ban_users):
@@ -81,6 +98,7 @@ def _scan_room(client, room, cutoff, me_id):
     admin_ids = {a.id for a in client.iter_participants(
         cid, filter=ChannelParticipantsAdmins)}
     cands = []
+    samples = []
     seen = 0
     for u in client.iter_participants(cid):
         seen += 1
@@ -89,7 +107,9 @@ def _scan_room(client, room, cutoff, me_id):
         ok, _ = _should_kick(u, cutoff)
         if ok:
             cands.append(u.id)
-    return seen, cands
+            if len(samples) < SAMPLE_N:
+                samples.append(_display_name(u))
+    return seen, cands, samples
 
 
 def scan_candidates():
@@ -102,12 +122,13 @@ def scan_candidates():
         me_id = client.get_me().id
         for r in rooms:
             try:
-                seen, cands = _scan_room(client, r, cutoff, me_id)
+                seen, cands, samples = _scan_room(client, r, cutoff, me_id)
             except Exception:
                 continue
             out[r["id"]] = {
                 "name": r["name"], "status": r["status"],
-                "chat_id": r["chat_id"], "cands": cands, "seen": seen,
+                "chat_id": r["chat_id"], "cands": cands,
+                "samples": samples, "seen": seen,
             }
             total += len(cands)
     with _LOCK:
@@ -122,8 +143,36 @@ def get_cache():
         return dict(_LAST["rooms"]), _LAST["total"], _LAST["ts"]
 
 
+def cache_age_min():
+    with _LOCK:
+        ts = _LAST["ts"]
+    if not ts:
+        return None
+    return (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
+
+
+def cache_fresh():
+    with _LOCK:
+        has = bool(_LAST["rooms"])
+    a = cache_age_min()
+    return has and a is not None and a < CACHE_TTL_MIN
+
+
+def room_brief(room_id):
+    """확인창용 (name, count, [samples], is_paid)."""
+    with _LOCK:
+        rooms = dict(_LAST["rooms"])
+    if room_id == "all":
+        total = sum(len(v["cands"]) for v in rooms.values())
+        return "전체", total, [], False
+    info = rooms.get(int(room_id)) if str(room_id).isdigit() else None
+    if not info:
+        return "", 0, [], False
+    return info["name"], len(info["cands"]), info.get("samples", []), (info.get("status") == "paid")
+
+
 def kick_cached(room_id):
-    """캐시된 후보를 실제 강퇴. room_id='all' 이면 전체. (done, total, name)."""
+    """캐시된 후보를 강퇴(강퇴 직전 last-seen 재확인). (done, total, name)."""
     with _LOCK:
         rooms = dict(_LAST["rooms"])
     if not rooms:
@@ -136,6 +185,7 @@ def kick_cached(room_id):
         info = rooms.get(rid)
         targets = [(rid, info)] if info else []
         name = info["name"] if info else ""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=INACTIVE_DAYS)
     done = total = 0
     with TelegramClient(StringSession(_SESSION), _API_ID, _API_HASH) as client:
         for rid, info in targets:
@@ -145,10 +195,12 @@ def kick_cached(room_id):
             cand_set = set(info["cands"])
             total += len(cand_set)
             if cand_set:
-                # 참가자를 순회해 entity(access_hash) 확보 후 강퇴
+                # 참가자 순회로 entity 확보 + 강퇴 직전 재확인
                 for u in client.iter_participants(cid):
                     if u.id not in cand_set:
                         continue
+                    if not _should_kick(u, cutoff)[0]:
+                        continue  # 스캔 후 활동 재개 → 제외
                     try:
                         client.kick_participant(cid, u)
                         done += 1
@@ -166,6 +218,7 @@ def kick_cached(room_id):
             with _LOCK:
                 if rid in _LAST["rooms"]:
                     _LAST["rooms"][rid]["cands"] = []
+                    _LAST["rooms"][rid]["samples"] = []
                 _LAST["total"] = sum(len(v["cands"]) for v in _LAST["rooms"].values())
     return done, total, name
 
@@ -182,7 +235,7 @@ def scan_and_kick(dry_run=True):
         for r in rooms:
             tag = f"{r['name']}({r['status']})"
             try:
-                seen, cands = _scan_room(client, r, cutoff, me_id)
+                seen, cands, _ = _scan_room(client, r, cutoff, me_id)
             except Exception as e:
                 lines.append(f"❌ {tag}: {type(e).__name__}")
                 continue
@@ -255,21 +308,3 @@ if __name__ == "__main__":
     print(rpt)
     if "--notify" in sys.argv:
         send_admin(rpt)
-
-
-CACHE_TTL_MIN = 30
-
-
-def cache_age_min():
-    with _LOCK:
-        ts = _LAST["ts"]
-    if not ts:
-        return None
-    return (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
-
-
-def cache_fresh():
-    with _LOCK:
-        has = bool(_LAST["rooms"])
-    a = cache_age_min()
-    return has and a is not None and a < CACHE_TTL_MIN

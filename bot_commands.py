@@ -395,20 +395,18 @@ def _send_inactive_menu(chat_id, rooms, total, age_min):
     if not items:
         _post('sendMessage', chat_id=chat_id, text="✅ 미접속(7일+) 대상자가 없습니다.")
         return
-    kb = []
+    btns = []
     for rid, info in items:
-        lock = '🔒' if info['status'] == 'paid' else '·'
-        kb.append([{'text': lock + ' ' + info['name'] + ' (' + str(len(info['cands'])) + '명)',
-                    'callback_data': 'IK|' + str(rid)}])
-    kb.append([{'text': '⚠️ 전체 강퇴 (' + str(total) + '명)', 'callback_data': 'IK|all'}])
+        lock = '🔒' if info['status'] == 'paid' else ''
+        btns.append({'text': lock + info['name'] + ' (' + str(len(info['cands'])) + ')',
+                     'callback_data': 'IK|sel|' + str(rid)})
+    kb = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    kb.append([{'text': '⚠️ 전체 강퇴 (' + str(total) + ')', 'callback_data': 'IK|sel|all'}])
     kb.append([{'text': '🔄 다시 스캔', 'callback_data': 'IK|rescan'}])
-    if age_min is None:
-        age_txt = '방금 스캔'
-    else:
-        age_txt = '🕒 ' + str(int(age_min)) + '분 전 스캔 결과'
-    head = ('🧹 <b>미접속(7일+) 강퇴 메뉴</b>' + _NL
-            + '대상 ' + str(total) + '명 / ' + str(len(items)) + '개 방 · ' + age_txt + _NL
-            + '방을 누르면 그 방만 즉시 강퇴, 전체는 확인 후 실행됩니다.')
+    age_txt = '방금 스캔' if age_min is None else ('🕒 ' + str(int(age_min)) + '분 전')
+    head = ('🧹 <b>미접속(7일+) 강퇴</b> · 대상 ' + str(total) + '명 / '
+            + str(len(items)) + '개 방 · ' + age_txt + _NL
+            + '방 선택 → 명단 확인 후 강퇴 (강퇴해도 이 메뉴는 유지됩니다)')
     _post('sendMessage', chat_id=chat_id, text=head, parse_mode='HTML',
           reply_markup={'inline_keyboard': kb})
 
