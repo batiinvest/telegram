@@ -42,6 +42,8 @@ _SENSITIVE_PATTERNS = [
                 re.IGNORECASE), r'\1=***'),
     # JWT 토큰 형식 (xxx.yyy.zzz)
     (re.compile(r'eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+'), '***JWT***'),
+    # 텔레그램 봇 토큰 (/bot<id>:<token>)
+    (re.compile(r'(bot)(\d{6,}):[A-Za-z0-9_-]{30,}', re.IGNORECASE), r'\1\2:***'),
 ]
 
 
