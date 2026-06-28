@@ -247,7 +247,7 @@ def _handle(update: dict):
                 return
             args = text.split()[1:]
             if cmd in ('/방목록', '/rooms'):
-                _reply_long(chat_id, _fmt_room_list(_ra.list_rooms()))
+                _run_room_list(chat_id, uid)
             elif cmd == '/방상태':
                 if len(args) < 2:
                     _reply(chat_id, "사용법: <code>/방상태 [종목명|id] [open|paid|full]</code>")
@@ -380,12 +380,66 @@ def _fmt_room_list(rooms: list) -> str:
     return "\n".join(lines)
 
 
+def _build_room_list(page=0):
+    import room_access as _ra
+    _NL = chr(10)
+    rooms = _ra.list_rooms()
+    PER = 8
+    pages = max(1, (len(rooms) + PER - 1) // PER)
+    page = max(0, min(page, pages - 1))
+    chunk = rooms[page * PER:(page + 1) * PER]
+    _IC = {'paid': '🔒', 'full': '🚫', 'open': '🟢'}
+    kb = []
+    for r in chunk:
+        ic = _IC.get(r.get('status'), '·')
+        flag = '' if str(r.get('chat_id') or '').lstrip('-').isdigit() else '⚠️'
+        kb.append([{'text': ic + flag + ' ' + r['name'] + ' (' + str(r.get('members') or 0) + ')',
+                    'callback_data': 'RM|room|' + str(r['id']) + '|' + str(page)}])
+    nav = []
+    if page > 0:
+        nav.append({'text': '◀ 이전', 'callback_data': 'RM|pg|' + str(page - 1)})
+    nav.append({'text': str(page + 1) + '/' + str(pages), 'callback_data': 'RM|nop'})
+    if page < pages - 1:
+        nav.append({'text': '다음 ▶', 'callback_data': 'RM|pg|' + str(page + 1)})
+    kb.append(nav)
+    text = ('📋 <b>채팅방 관리</b> (' + str(len(rooms)) + '개) · ' + str(page + 1) + '/' + str(pages) + 'p' + _NL
+            + '방을 선택해 상태를 변경하세요. ⚠️=chat_id 미연결')
+    return text, {'inline_keyboard': kb}
+
+
+def _build_room_detail(rid, page=0):
+    import room_access as _ra
+    import html as _h
+    _NL = chr(10)
+    r = _ra.room_detail(rid)
+    if not r:
+        return '방을 찾을 수 없습니다.', {'inline_keyboard': [[{'text': '◀ 목록', 'callback_data': 'RM|pg|' + str(page)}]]}
+    _IC = {'paid': '🔒', 'full': '🚫', 'open': '🟢'}
+    cid = r.get('chat_id') or '—'
+    if str(cid).lstrip('-').isdigit():
+        ok = '✅'
+    else:
+        ok = '⚠️ 미연결 (봇을 그룹 관리자로 추가하면 자동 등록)'
+    st = r.get('status')
+    text = ('🏠 <b>' + _h.escape(r['name']) + '</b>' + _NL
+            + '상태: ' + _IC.get(st, '') + ' <b>' + str(st) + '</b>' + _NL
+            + '정원: ' + str(r.get('members') or 0) + '/' + str(r.get('max_members') or 1000) + _NL
+            + 'chat_id: <code>' + _h.escape(str(cid)) + '</code> ' + ok)
+    def _b(label, val):
+        mark = '● ' if st == val else ''
+        return {'text': mark + label, 'callback_data': 'RM|st|' + str(rid) + '|' + val + '|' + str(page)}
+    kb = [[_b('🟢 일반', 'open'), _b('🔒 유료', 'paid'), _b('🚫 마감', 'full')],
+          [{'text': '◀ 목록', 'callback_data': 'RM|pg|' + str(page)}]]
+    return text, {'inline_keyboard': kb}
+
+
 def _run_room_list(chat_id, uid):
     import room_access as _ra
     if not _ra.is_room_admin(uid):
         _reply(chat_id, "⛔ 관리자 전용 기능입니다.")
         return
-    _reply_long(chat_id, _fmt_room_list(_ra.list_rooms()))
+    text, kb = _build_room_list(0)
+    _post('sendMessage', chat_id=chat_id, text=text, parse_mode='HTML', reply_markup=kb)
 
 
 def _send_inactive_menu(chat_id, rooms, total, age_min):

@@ -758,6 +758,59 @@ class KisMyStockScanner:
             answer("❌ 오류 발생", alert=True)
             edit(f"❌ <b>[입장 처리 오류]</b>\n<code>{e}</code>")
 
+    def _handle_rm_callback(self, cb_id, chat_id, message_id, callback_q, parts):
+        base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+        def answer(text='', alert=False):
+            try:
+                self.listener_session.post(f"{base_url}/answerCallbackQuery",
+                    json={'callback_query_id': cb_id, 'text': text, 'show_alert': alert}, timeout=5)
+            except Exception:
+                pass
+        def edit(text, markup=None):
+            payload = {'chat_id': chat_id, 'message_id': message_id, 'text': text, 'parse_mode': 'HTML'}
+            if markup is not None:
+                payload['reply_markup'] = markup
+            try:
+                self.listener_session.post(f"{base_url}/editMessageText", json=payload, timeout=5)
+            except Exception:
+                pass
+        try:
+            import room_access as _ra
+            clicker = (callback_q.get('from') or {}).get('id')
+            if not _ra.is_room_admin(clicker):
+                answer('관리자 전용입니다.', alert=True)
+                return
+        except Exception:
+            answer('권한 확인 실패', alert=True)
+            return
+        import bot_commands as _bc
+        action = parts[1] if len(parts) > 1 else ''
+        if action == 'nop':
+            answer()
+            return
+        if action == 'pg':
+            answer()
+            page = int(parts[2]) if len(parts) > 2 else 0
+            t, kb = _bc._build_room_list(page)
+            edit(t, kb)
+            return
+        if action == 'room':
+            answer()
+            rid = int(parts[2])
+            page = int(parts[3]) if len(parts) > 3 else 0
+            t, kb = _bc._build_room_detail(rid, page)
+            edit(t, kb)
+            return
+        if action == 'st':
+            rid = int(parts[2])
+            status = parts[3]
+            page = int(parts[4]) if len(parts) > 4 else 0
+            ok = _ra.set_room_status(rid, status)
+            answer('✅ 변경됨' if ok else '실패', alert=not ok)
+            t, kb = _bc._build_room_detail(rid, page)
+            edit(t, kb)
+            return
+
     def _handle_ik_callback(self, cb_id, chat_id, message_id, callback_q, parts):
         base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
         def answer(text='', alert=False):
@@ -875,6 +928,11 @@ class KisMyStockScanner:
         # 미접속 강퇴 메뉴 (IK|room_id / IK|all / IK|allgo / IK|cancel)
         if parts[0] == 'IK':
             self._handle_ik_callback(cb_id, chat_id, message_id, callback_q, parts)
+            return
+
+        # 방관리 (RM|pg/room/st)
+        if parts[0] == 'RM':
+            self._handle_rm_callback(cb_id, chat_id, message_id, callback_q, parts)
             return
 
         if len(parts) != 3 or parts[0] != "REP": return

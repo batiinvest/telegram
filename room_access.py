@@ -396,6 +396,20 @@ def set_room_status(room_id, status) -> bool:
         return False
 
 
+def room_detail(rid) -> Optional[dict]:
+    """단일 방 상세 (관리 UI용)."""
+    sb = _sb()
+    if not sb:
+        return None
+    try:
+        res = sb.table('rooms') \
+                .select('id,name,chat_id,status,members,max_members,cat') \
+                .eq('id', int(rid)).single().execute()
+        return res.data
+    except Exception:
+        return None
+
+
 def set_room_chat_id(room_id, chat_id) -> bool:
     sb = _sb()
     if not sb:
