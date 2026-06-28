@@ -255,3 +255,21 @@ if __name__ == "__main__":
     print(rpt)
     if "--notify" in sys.argv:
         send_admin(rpt)
+
+
+CACHE_TTL_MIN = 30
+
+
+def cache_age_min():
+    with _LOCK:
+        ts = _LAST["ts"]
+    if not ts:
+        return None
+    return (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
+
+
+def cache_fresh():
+    with _LOCK:
+        has = bool(_LAST["rooms"])
+    a = cache_age_min()
+    return has and a is not None and a < CACHE_TTL_MIN

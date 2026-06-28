@@ -388,34 +388,47 @@ def _run_room_list(chat_id, uid):
     _reply_long(chat_id, _fmt_room_list(_ra.list_rooms()))
 
 
-def _run_inactive_menu(chat_id, uid):
+def _send_inactive_menu(chat_id, rooms, total, age_min):
+    _NL = chr(10)
+    items = sorted([(rid, i) for rid, i in rooms.items() if i['cands']],
+                   key=lambda x: -len(x[1]['cands']))
+    if not items:
+        _post('sendMessage', chat_id=chat_id, text="✅ 미접속(7일+) 대상자가 없습니다.")
+        return
+    kb = []
+    for rid, info in items:
+        lock = '🔒' if info['status'] == 'paid' else '·'
+        kb.append([{'text': lock + ' ' + info['name'] + ' (' + str(len(info['cands'])) + '명)',
+                    'callback_data': 'IK|' + str(rid)}])
+    kb.append([{'text': '⚠️ 전체 강퇴 (' + str(total) + '명)', 'callback_data': 'IK|all'}])
+    kb.append([{'text': '🔄 다시 스캔', 'callback_data': 'IK|rescan'}])
+    if age_min is None:
+        age_txt = '방금 스캔'
+    else:
+        age_txt = '🕒 ' + str(int(age_min)) + '분 전 스캔 결과'
+    head = ('🧹 <b>미접속(7일+) 강퇴 메뉴</b>' + _NL
+            + '대상 ' + str(total) + '명 / ' + str(len(items)) + '개 방 · ' + age_txt + _NL
+            + '방을 누르면 그 방만 즉시 강퇴, 전체는 확인 후 실행됩니다.')
+    _post('sendMessage', chat_id=chat_id, text=head, parse_mode='HTML',
+          reply_markup={'inline_keyboard': kb})
+
+
+def _run_inactive_menu(chat_id, uid, force=False):
     import room_access as _ra
     if not _ra.is_room_admin(uid):
         _reply(chat_id, "⛔ 관리자 전용 기능입니다.")
         return
-    _reply(chat_id, "🔎 미접속 멤버 스캔 중입니다... (54개 방, 약 3분 소요)")
     import threading
     import inactive_kick as _ik
-    _NL = chr(10)
+    if not force and _ik.cache_fresh():
+        rooms, total, _ts = _ik.get_cache()
+        _send_inactive_menu(chat_id, rooms, total, _ik.cache_age_min())
+        return
+    _reply(chat_id, "🔎 미접속 멤버 스캔 중입니다... (54개 방, 약 3분 소요)")
     def _scan_worker(_cid):
         try:
             rooms, total = _ik.scan_candidates()
-            items = sorted([(rid, i) for rid, i in rooms.items() if i['cands']],
-                           key=lambda x: -len(x[1]['cands']))
-            if not items:
-                _post('sendMessage', chat_id=_cid, text="✅ 미접속(7일+) 대상자가 없습니다.")
-                return
-            kb = []
-            for rid, info in items:
-                lock = '🔒' if info['status'] == 'paid' else '·'
-                kb.append([{'text': lock + ' ' + info['name'] + ' (' + str(len(info['cands'])) + '명)',
-                            'callback_data': 'IK|' + str(rid)}])
-            kb.append([{'text': '⚠️ 전체 강퇴 (' + str(total) + '명)', 'callback_data': 'IK|all'}])
-            head = ('🧹 <b>미접속(7일+) 강퇴 메뉴</b>' + _NL
-                    + '대상 ' + str(total) + '명 / ' + str(len(items)) + '개 방' + _NL
-                    + '방을 누르면 그 방만 즉시 강퇴, 전체는 확인 후 실행됩니다.')
-            _post('sendMessage', chat_id=_cid, text=head, parse_mode='HTML',
-                  reply_markup={'inline_keyboard': kb})
+            _send_inactive_menu(_cid, rooms, total, None)
         except Exception as _se:
             log.error(f"[cmd] 미접속 스캔 오류: {_se}")
             _post('sendMessage', chat_id=_cid, text="스캔 중 오류가 발생했습니다.")

@@ -786,6 +786,14 @@ class KisMyStockScanner:
         import inactive_kick as _ik
         import threading
         target = parts[1] if len(parts) > 1 else ''
+        if target == 'rescan':
+            answer('다시 스캔합니다…')
+            try:
+                import bot_commands as _bc
+                _bc._run_inactive_menu(chat_id, clicker, force=True)
+            except Exception as _re:
+                logging.error(f"[IK rescan] {_re}")
+            return
         if target == 'all':
             _, total, _ts = _ik.get_cache()
             answer()
