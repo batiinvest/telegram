@@ -2304,7 +2304,7 @@ def parse_tender_offer_prospectus(kv: dict) -> list:
     if qty_raw:
         m = re.search(r'([\d,]+)\s*주.{0,20}?([\d.]+)\s*%', qty_raw)
         if m:
-            lines.append(f'📋 매수예정: {int(m.group(1).replace(",","​")):,}주 ({m.group(2)}%)')
+            lines.append(f'📋 매수예정: {int(m.group(1).replace(",", "")):,}주 ({m.group(2)}%)')
         else:
             lines.append(f'📋 매수예정: {_trunc(qty_raw, 50)}')
 
