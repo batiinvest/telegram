@@ -21,6 +21,7 @@ DB:
 """
 
 import time
+import os
 import html as _html
 import requests
 from typing import Optional
@@ -328,14 +329,16 @@ ALL_STATUSES = ('open', 'paid', 'full')
 
 
 def is_room_admin(uid) -> bool:
-    """uid가 관리자 그룹(pro_admin_chat_id, 숫자ID)의 멤버인지 확인."""
-    admin = _get_admin_chat()
-    if not admin or not str(admin).lstrip('-').isdigit():
+    """uid가 화이트리스트(ROOM_ADMIN_IDS, 기본 533725430)에 있는지 확인."""
+    raw = os.environ.get('ROOM_ADMIN_IDS', '533725430')
+    ids = set()
+    for x in raw.replace(' ', '').split(','):
+        if x.lstrip('-').isdigit():
+            ids.add(int(x))
+    try:
+        return int(uid) in ids
+    except (TypeError, ValueError):
         return False
-    res = _tg('getChatMember', chat_id=admin, user_id=uid)
-    if not res.get('ok'):
-        return False
-    return res.get('result', {}).get('status') in ('creator', 'administrator', 'member')
 
 
 def list_rooms() -> list:

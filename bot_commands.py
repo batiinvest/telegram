@@ -69,6 +69,16 @@ _MENU_KEYBOARD = {
     'is_persistent': True,
 }
 
+# 관리자 진입 시 보이는 버튼 메뉴 (화이트리스트 관리자만 노출)
+_ADMIN_KEYBOARD = {
+    'keyboard': [
+        [{'text': '🧹 미접속 강퇴'}, {'text': '📋 방 목록'}],
+        [{'text': '🎟 유료 채팅방 입장'}],
+    ],
+    'resize_keyboard': True,
+    'is_persistent': True,
+}
+
 def _ensure_menu():
     """봇 입력창 옆 ≡ 메뉴에 명령어 등록 (프로세스당 1회).
     사용자가 /start를 직접 치지 않아도 메뉴 버튼이 보이게 합니다."""
@@ -152,6 +162,23 @@ def _handle(update: dict):
             log.error(f"[cmd] 메뉴 입장 오류: {e}")
             _reply(chat_id, "처리 중 오류가 발생했습니다. 문의: @batiinvest")
         return
+    if text == '🧹 미접속 강퇴':
+        _run_inactive_menu(chat_id, uid)
+        return
+    if text == '📋 방 목록':
+        _run_room_list(chat_id, uid)
+        return
+    # ── 관리자: 진입 시 관리 버튼 메뉴 ──
+    if cmd == '/start' or not cmd:
+        try:
+            import room_access as _ra0
+            if _ra0.is_room_admin(uid):
+                _post('sendMessage', chat_id=uid, parse_mode='HTML',
+                      text='🛠 <b>바티 관리자 메뉴</b>' + chr(10) + '아래 버튼으로 관리하세요 👇',
+                      reply_markup=_ADMIN_KEYBOARD)
+                return
+        except Exception:
+            pass
     # ── /start (페이로드 무관) · 일반 메시지 → 고정 메뉴 노출 + 방 선택 ──
     if cmd == '/start' or not cmd:
         try:
@@ -260,41 +287,7 @@ def _handle(update: dict):
 
     # ── 미접속 강퇴 메뉴 (관리자) ──────────────────────────────
     elif cmd in ('/미접속', '/강퇴'):
-        try:
-            import room_access as _ra
-            if not _ra.is_room_admin(uid):
-                _reply(chat_id, "⛔ 관리자 전용 명령입니다.")
-                return
-            _reply(chat_id, "🔎 미접속 멤버 스캔 중입니다... (54개 방, 약 3분 소요)")
-            import threading
-            import inactive_kick as _ik
-            _NL = chr(10)
-            def _scan_worker(_cid):
-                try:
-                    rooms, total = _ik.scan_candidates()
-                    items = sorted([(rid, i) for rid, i in rooms.items() if i['cands']],
-                                   key=lambda x: -len(x[1]['cands']))
-                    if not items:
-                        _post('sendMessage', chat_id=_cid, text="✅ 미접속(7일+) 대상자가 없습니다.")
-                        return
-                    kb = []
-                    for rid, info in items:
-                        lock = '🔒' if info['status'] == 'paid' else '·'
-                        kb.append([{'text': lock + ' ' + info['name'] + ' (' + str(len(info['cands'])) + '명)',
-                                    'callback_data': 'IK|' + str(rid)}])
-                    kb.append([{'text': '⚠️ 전체 강퇴 (' + str(total) + '명)', 'callback_data': 'IK|all'}])
-                    head = ('🧹 <b>미접속(7일+) 강퇴 메뉴</b>' + _NL
-                            + '대상 ' + str(total) + '명 / ' + str(len(items)) + '개 방' + _NL
-                            + '방을 누르면 그 방만 즉시 강퇴, 전체는 확인 후 실행됩니다.')
-                    _post('sendMessage', chat_id=_cid, text=head, parse_mode='HTML',
-                          reply_markup={'inline_keyboard': kb})
-                except Exception as _se:
-                    log.error(f"[cmd] 미접속 스캔 오류: {_se}")
-                    _post('sendMessage', chat_id=_cid, text="스캔 중 오류가 발생했습니다.")
-            threading.Thread(target=_scan_worker, args=(chat_id,), daemon=True).start()
-        except Exception as e:
-            log.error(f"[cmd] 미접속 오류: {e}")
-            _reply(chat_id, "처리 중 오류가 발생했습니다.")
+        _run_inactive_menu(chat_id, uid)
 
 
 def run_polling():
@@ -385,3 +378,45 @@ def _fmt_room_list(rooms: list) -> str:
         lines.append(f"{icon} <b>{nm}</b> <code>#{r.get('id')}</code> {mem}/{mx} {flag}<code>{_h.escape(str(cid))}</code>")
     lines.append("\n명령: /방상태 [종목] [open|paid|full] · /방연결 [종목] [chat_id]")
     return "\n".join(lines)
+
+
+def _run_room_list(chat_id, uid):
+    import room_access as _ra
+    if not _ra.is_room_admin(uid):
+        _reply(chat_id, "⛔ 관리자 전용 기능입니다.")
+        return
+    _reply_long(chat_id, _fmt_room_list(_ra.list_rooms()))
+
+
+def _run_inactive_menu(chat_id, uid):
+    import room_access as _ra
+    if not _ra.is_room_admin(uid):
+        _reply(chat_id, "⛔ 관리자 전용 기능입니다.")
+        return
+    _reply(chat_id, "🔎 미접속 멤버 스캔 중입니다... (54개 방, 약 3분 소요)")
+    import threading
+    import inactive_kick as _ik
+    _NL = chr(10)
+    def _scan_worker(_cid):
+        try:
+            rooms, total = _ik.scan_candidates()
+            items = sorted([(rid, i) for rid, i in rooms.items() if i['cands']],
+                           key=lambda x: -len(x[1]['cands']))
+            if not items:
+                _post('sendMessage', chat_id=_cid, text="✅ 미접속(7일+) 대상자가 없습니다.")
+                return
+            kb = []
+            for rid, info in items:
+                lock = '🔒' if info['status'] == 'paid' else '·'
+                kb.append([{'text': lock + ' ' + info['name'] + ' (' + str(len(info['cands'])) + '명)',
+                            'callback_data': 'IK|' + str(rid)}])
+            kb.append([{'text': '⚠️ 전체 강퇴 (' + str(total) + '명)', 'callback_data': 'IK|all'}])
+            head = ('🧹 <b>미접속(7일+) 강퇴 메뉴</b>' + _NL
+                    + '대상 ' + str(total) + '명 / ' + str(len(items)) + '개 방' + _NL
+                    + '방을 누르면 그 방만 즉시 강퇴, 전체는 확인 후 실행됩니다.')
+            _post('sendMessage', chat_id=_cid, text=head, parse_mode='HTML',
+                  reply_markup={'inline_keyboard': kb})
+        except Exception as _se:
+            log.error(f"[cmd] 미접속 스캔 오류: {_se}")
+            _post('sendMessage', chat_id=_cid, text="스캔 중 오류가 발생했습니다.")
+    threading.Thread(target=_scan_worker, args=(chat_id,), daemon=True).start()
