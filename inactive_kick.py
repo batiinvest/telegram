@@ -142,21 +142,26 @@ def kick_cached(room_id):
             if not info:
                 continue
             cid = int(info["chat_id"])
-            for uid in list(info["cands"]):
-                total += 1
-                try:
-                    client.kick_participant(cid, uid)
-                    done += 1
-                    time.sleep(KICK_SLEEP)
-                except FloodWaitError as fw:
-                    time.sleep(fw.seconds + 2)
+            cand_set = set(info["cands"])
+            total += len(cand_set)
+            if cand_set:
+                # 참가자를 순회해 entity(access_hash) 확보 후 강퇴
+                for u in client.iter_participants(cid):
+                    if u.id not in cand_set:
+                        continue
                     try:
-                        client.kick_participant(cid, uid)
+                        client.kick_participant(cid, u)
                         done += 1
+                        time.sleep(KICK_SLEEP)
+                    except FloodWaitError as fw:
+                        time.sleep(fw.seconds + 2)
+                        try:
+                            client.kick_participant(cid, u)
+                            done += 1
+                        except Exception:
+                            pass
                     except Exception:
                         pass
-                except Exception:
-                    pass
             # 강퇴 끝난 방은 캐시 비워 재클릭 중복 방지
             with _LOCK:
                 if rid in _LAST["rooms"]:
