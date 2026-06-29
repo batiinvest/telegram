@@ -17,7 +17,7 @@ def fmt_change_pct(v: Optional[float], dec: int = 2) -> str:
     """등락률 문자열 (예: +2.34% / -1.50% / —)"""
     if v is None:
         return '—'
-    sign = '+' if v >= 0 else ''
+    sign = '+' if v > 0 else ''   # 0은 부호 없음(프론트 chgStr와 정합)
     return f'{sign}{v:.{dec}f}%'
 
 

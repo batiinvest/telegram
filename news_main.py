@@ -150,8 +150,9 @@ class NaverNewsBot:
         self.history  = HistoryManager("sent_news.txt", max_len=3000)
 
         # 중복 감지용 메모리: {정규화된_제목_해시: 발송시각}
-        self._title_cache: Dict[str, datetime.datetime] = {}
+        self._title_cache: Dict[str, tuple] = {}   # {hash: (정규화제목, 발송시각)}
         self._title_cache_ttl = datetime.timedelta(hours=24)  # 24시간 내 동일 제목 중복
+        self._title_sim_threshold = 0.75  # 제목 유사도 중복 임계 (SequenceMatcher ratio)
 
         # 이벤트 기반 중복: {종목명+이벤트키: 발송시각}
         self._event_cache: Dict[str, datetime.datetime] = {}
@@ -259,7 +260,7 @@ class NaverNewsBot:
         # 캐시 정리 (메모리 절약)
         self._title_cache = {
             k: v for k, v in self._title_cache.items()
-            if now - v < self._title_cache_ttl
+            if now - v[1] < self._title_cache_ttl
         }
         self._event_cache = {
             k: v for k, v in self._event_cache.items()
@@ -273,11 +274,13 @@ class NaverNewsBot:
             logging.debug(f"🔍 제목 해시 중복: {title}")
             return True
 
-        # (c) 제목 문자열 유사도 (0.75 이상 → 중복)
+        # (c) 제목 유사도 중복 (정규화 제목 vs 최근 200개, SequenceMatcher ≥ 임계)
         norm_new = self._normalize_title(title)
-        for cached_title in list(self._title_cache.keys()):
-            # hash key이므로 제목 원문은 따로 저장 필요 — 여기선 hash 비교로 충분
-            pass
+        if norm_new and len(norm_new.split()) >= 4:   # 짧은 제목은 유사도 오탐 방지(정확 해시만)
+            for _norm_cached, _ts in list(self._title_cache.values())[-200:]:
+                if _norm_cached and SequenceMatcher(None, norm_new, _norm_cached).ratio() >= self._title_sim_threshold:
+                    logging.debug(f"🔍 제목 유사도 중복(≥{self._title_sim_threshold}): {title}")
+                    return True
 
         # (d) 이벤트 키 중복 (같은 종목 + 같은 이벤트 타입 6시간 내)
         event_key = self._extract_event_key(company, title + " " + desc)
@@ -285,15 +288,13 @@ class NaverNewsBot:
             logging.debug(f"🔍 이벤트 중복 ({self._event_cache_ttl}): {event_key}")
             return True
 
-        # (e) 유사도 기반 중복 (SequenceMatcher, 최근 200개 제목과 비교)
-        # → title_cache의 값에 원문 제목도 저장하도록 구조 변경
         return False
 
     def _register_sent(self, title: str, desc: str, company: str):
         """발송 후 캐시에 등록"""
         now = datetime.datetime.now()
         t_hash = self._title_hash(title)
-        self._title_cache[t_hash] = now
+        self._title_cache[t_hash] = (self._normalize_title(title), now)
 
         event_key = self._extract_event_key(company, title + " " + desc)
         if event_key:

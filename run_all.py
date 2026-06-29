@@ -8,6 +8,8 @@ import json
 import re
 import functools
 from managers import market_timer, HistoryManager
+from format_utils import fmt_change_pct
+from db_utils import fetch_all_pages
 
 # ✅ 스케줄링 라이브러리
 import schedule
@@ -41,7 +43,7 @@ try:
     from grade                     import save_grade_history as _save_grade_history, save_trend_flags as _save_trend_flags
     from collect_insider           import collect_insider_trades as _collect_insider
     from collect_company_info      import collect_one as _collect_company_one
-    from collect_short             import run as run_short, check_surge as _check_short_surge
+    from collect_short             import run as run_short, check_surge as _check_short_surge, format_surge_msg as _format_surge_msg
     _COLLECTOR_OK = True
 except ImportError as _ie:
     _COLLECTOR_OK = False
@@ -266,16 +268,18 @@ def run_dart_bot():
 def job_lunch_briefing():
     logging.info("🍱 [점심 브리핑] 시작")
 
-    msg_open = "🍱 <b>[점심 시황]</b> 맛점하세요! 오전 장 요약입니다."
-    stock_api.send_telegram(DEFAULT_CHAT_ID, msg_open)
     _log_notice(DEFAULT_CHAT_ID, "[점심 브리핑] 시작")
 
-    stock_api.send_telegram(DEFAULT_CHAT_ID, stock_api.get_market_scoreboard())
-    time.sleep(1)
-    stock_api.send_telegram(DEFAULT_CHAT_ID, stock_api.get_universe_ranking())
+    # 관리종목 시세 1회 배치 조회 → 전광판·유니버스·테마 공유 (KIS 중복 호출 제거)
+    prices = stock_api.get_universe_price_map()
+
+    # 인사 + 시장 전광판 + 유니버스 랭킹을 한 메시지로 통합 (알림 3건 → 1건)
+    intro = "🍱 <b>[점심 시황]</b> 맛점하세요! 오전 장 요약입니다."
+    msg = f"{intro}\n\n{stock_api.get_market_scoreboard(shared_prices=prices)}\n\n{stock_api.get_universe_ranking(shared_prices=prices)}"
+    stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
 
     _broadcast_to_industries(
-        stock_api.get_industry_theme_ranking,
+        stock_api.get_industry_theme_ranking, prices,
         keyboard=COMMON_BUTTON, label="점심 브리핑"
     )
 
@@ -294,22 +298,50 @@ def job_naver_report():
 def job_daily_closing():
     logging.info("🏁 [마감 브리핑] 시작")
 
-    msg_close = "🏁 <b>[마감 시황]</b> 오늘 하루 고생 많으셨습니다."
-    stock_api.send_telegram(DEFAULT_CHAT_ID, msg_close)
     _log_notice(DEFAULT_CHAT_ID, "[마감 브리핑] 시작")
 
-    stock_api.send_telegram(DEFAULT_CHAT_ID, stock_api.get_market_scoreboard(), keyboard=COMMON_BUTTON)
-    time.sleep(1)
-    stock_api.send_telegram(DEFAULT_CHAT_ID, stock_api.get_universe_ranking(), keyboard=COMMON_BUTTON)
+    # 관리종목 시세 1회 배치 조회 → 전광판·유니버스·테마 공유 (KIS 중복 호출 제거)
+    prices = stock_api.get_universe_price_map()
+
+    # 마감 무버 촉매 태그 + 시장폭 계산 — 실패해도 브리핑은 진행
+    try:
+        _sbc = _bridge._get_client()
+        _tags = stock_api.get_catalyst_tags(_sbc)
+        _breadth = stock_api.get_market_breadth(_sbc)
+        _flow = stock_api.get_flow_map(_sbc)
+    except Exception as _te:
+        logging.error(f"[마감] 촉매태그/시장폭/수급 오류: {_te}")
+        _tags = None
+        _breadth = None
+        _flow = None
+
+    # 인사 + 시장 전광판(시장폭) + 유니버스(촉매태그) 랭킹을 한 메시지로 통합 (알림 1건)
+    intro = "🏁 <b>[마감 시황]</b> 오늘 하루 고생 많으셨습니다."
+    msg = f"{intro}\n\n{stock_api.get_market_scoreboard(shared_prices=prices, breadth=_breadth)}\n\n{stock_api.get_universe_ranking(shared_prices=prices, tag_map=_tags)}"
+    stock_api.send_telegram(DEFAULT_CHAT_ID, msg, keyboard=COMMON_BUTTON)
 
     _broadcast_to_industries(
-        stock_api.get_industry_theme_ranking,
+        stock_api.get_industry_theme_ranking, prices,
         keyboard=COMMON_BUTTON, label="마감 브리핑"
     )
     _broadcast_to_companies(
-        stock_api.get_stock_detail,
+        stock_api.get_stock_detail, _flow,
         keyboard=COMMON_BUTTON, label="마감 브리핑"
     )
+
+
+@_job(holiday=True)
+def job_daily_flow():
+    """평일 19:35 — 확정 외국인·기관 순매수/순매도 Top (19:30 확정 정산 후) 메인채널 발송."""
+    logging.info("💰 [확정 수급] 발송 시작")
+    try:
+        sb = _bridge._get_client()
+        msg = stock_api.get_daily_flow_summary(sb)  # 기본 status="확정"
+        if msg:
+            stock_api.send_telegram(DEFAULT_CHAT_ID, msg, keyboard=COMMON_BUTTON)
+            _log_notice(DEFAULT_CHAT_ID, "[확정 수급] 발송")
+    except Exception as e:
+        logging.error(f"❌ [확정 수급] 오류: {e}")
 
 
 def job_sync_listed_companies():
@@ -781,10 +813,10 @@ def job_save_grade_history(year: str = None, quarter: str = None):
             em = GRADE_EMOJI.get(g, '')
             rev_str = ''
             if r.get('rev_yoy') is not None:
-                rev_str = f" | YoY {'+' if r['rev_yoy'] > 0 else ''}{r['rev_yoy']:.1f}%"
+                rev_str = f" | YoY {fmt_change_pct(r['rev_yoy'], 1)}"
             op_str = ''
             if r.get('op_yoy') is not None:
-                op_str = f" / 영업익 {'+' if r['op_yoy'] > 0 else ''}{r['op_yoy']:.1f}%"
+                op_str = f" / 영업익 {fmt_change_pct(r['op_yoy'], 1)}"
             return f"{em} <b>{r['corp_name']}</b> {g}급 {change_label}{rev_str}{op_str}"
 
         sections = []
@@ -809,7 +841,7 @@ def job_save_grade_history(year: str = None, quarter: str = None):
 
         msg = (
             f"📊 <b>[실적 등급 변동] {year} {quarter}</b>\n"
-            f"{'─' * 20}\n"
+            f"════════════\n"
             + "\n\n".join(sections)
         )
 
@@ -907,6 +939,9 @@ def _alert_new_high(rows: list):
     if not rows:
         return
 
+    # 등락률 내림차순 정렬 (상한가/강한 돌파가 위로)
+    rows = sorted(rows, key=lambda x: (x.get('chg_pct') or 0), reverse=True)
+
     today = datetime.date.today().isoformat()
 
     # 모니터링 종목 코드 → 채팅방 ID 매핑 (CHAT_IDS_BY_CODE: {code: chat_id})
@@ -924,14 +959,14 @@ def _alert_new_high(rows: list):
         d52_high = r.get('d52_high', 0) or 0
         d52_low  = r.get('d52_low',  0) or 0
 
-        chg_str  = f"{'+' if chg_pct >= 0 else ''}{chg_pct:.2f}%"
-        chg_icon = '🔺' if chg_pct >= 0 else '🔻'
+        chg_str  = fmt_change_pct(chg_pct)
+        chg_icon = '🔺' if chg_pct > 0 else ('🔻' if chg_pct < 0 else '➖')
 
         # ① 종목 채팅방 개별 알림
         if code in monitored:
             msg = (
                 f"🏆 <b>[{name}] 52주 신고가 갱신!</b>\n"
-                f"{'─' * 20}\n"
+                f"════════════\n"
                 f"💰 현재가: {price:,}원 ({chg_icon}{chg_str})\n"
                 f"📈 52주 고가: {d52_high:,}원\n"
                 f"📉 52주 저가: {d52_low:,}원"
@@ -945,7 +980,7 @@ def _alert_new_high(rows: list):
     if main_lines:
         header = (
             f"🏆 <b>[52주 신고가 갱신] {today}</b>\n"
-            f"{'─' * 20}\n"
+            f"════════════\n"
         )
         stock_api.send_telegram(DEFAULT_CHAT_ID, header + "\n".join(main_lines))
         logging.info(f"🏆 [신고가 알림] 메인방 {len(main_lines)}개 발송")
@@ -987,28 +1022,38 @@ def _check_market_warnings():
     if not _BRIDGE_OK:
         return
     try:
-        today = datetime.date.today().isoformat()
         sb = _bridge._get_client()
 
-        # 오늘 수집된 모니터링 종목 중 경보 있는 것 조회
-        res = sb.table('market_data') \
-                .select('stock_code,corp_name,market_warn_code,is_caution,price,price_change_rate') \
-                .eq('base_date', today) \
-                .or_('is_caution.eq.true,market_warn_code.neq.00') \
-                .execute()
+        # 최근 2개 거래일 (주말/공휴일 무관 — market_data엔 거래일만 존재)
+        dres = sb.table('market_data').select('base_date') \
+                 .order('base_date', desc=True).limit(1).execute()
+        latest = (dres.data or [{}])[0].get('base_date')
+        if not latest:
+            return
+        pres = sb.table('market_data').select('base_date') \
+                 .lt('base_date', latest).order('base_date', desc=True).limit(1).execute()
+        prev = (pres.data or [{}])[0].get('base_date')
 
-        alerts = res.data or []
+        # 최신 거래일 경보 종목 (전체시장 — PostgREST 1000행 한도 회피)
+        alerts = fetch_all_pages(
+            sb.table('market_data')
+              .select('stock_code,corp_name,market_warn_code,is_caution,price,price_change_rate')
+              .eq('base_date', latest)
+              .or_('is_caution.eq.true,market_warn_code.neq.00')
+        )
         if not alerts:
             return
 
-        # 어제 경보 이력 조회 (신규 진입만 알림)
-        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-        prev_res = sb.table('market_data') \
-                     .select('stock_code,market_warn_code,is_caution') \
-                     .eq('base_date', yesterday) \
-                     .or_('is_caution.eq.true,market_warn_code.neq.00') \
-                     .execute()
-        prev_warn = {r['stock_code'] for r in (prev_res.data or [])}
+        # 직전 거래일 경보 이력 (신규 진입만 알림)
+        prev_warn = set()
+        if prev:
+            prev_rows = fetch_all_pages(
+                sb.table('market_data')
+                  .select('stock_code')
+                  .eq('base_date', prev)
+                  .or_('is_caution.eq.true,market_warn_code.neq.00')
+            )
+            prev_warn = {r['stock_code'] for r in prev_rows}
 
         # 신규 진입만 필터
         new_alerts = [a for a in alerts if a['stock_code'] not in prev_warn]
@@ -1019,7 +1064,7 @@ def _check_market_warnings():
 
         def _chg_str(a):
             r = a.get('price_change_rate') or 0
-            return f"{'+' if r >= 0 else ''}{r:.2f}%"
+            return fmt_change_pct(r)
 
         # 그룹별 분류
         GROUPS = [
@@ -1044,8 +1089,8 @@ def _check_market_warnings():
             return
 
         msg = (
-            f"📢 <b>[거래소 신규 지정 종목] {today}</b>\n"
-            f"{'─' * 20}\n\n"
+            f"📢 <b>[거래소 신규 지정 종목] {latest}</b>\n"
+            f"════════════\n\n"
             + "\n\n".join(sections)
         )
         stock_api.send_telegram(target, msg)
@@ -1108,16 +1153,8 @@ def job_short_surge():
             logging.info("📉 [공매도급증] 급증 종목 없음")
             return
 
-        # 3. 메인 채널 알림
-        lines = [f"📉 <b>[공매도 급증 알림]</b>\n"
-                 f"5거래일 평균 대비 2배↑ 종목 ({len(surges)}개)\n"]
-        for i, s in enumerate(surges[:10], 1):
-            lines.append(
-                f"{i}. <b>{s['corp_name']}</b>({s['stock_code']})\n"
-                f"   오늘 <b>{s['today_ratio']}%</b> / 5일평균 {s['avg_ratio']}% "
-                f"→ <b>{s['surge_ratio']}배</b>"
-            )
-        msg = "\n".join(lines)
+        # 3. 메인 채널 알림 (collect_short 공용 포매터)
+        msg = _format_surge_msg(surges, multiplier=2.0)
         stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
         logging.info(f"📉 [공매도급증] 알림 발송 완료 ({len(surges)}건)")
     except Exception as e:
@@ -1240,7 +1277,7 @@ def job_watchlist_alert():
 
             price = mkt['price']
             chg   = mkt.get('price_change_rate', 0) or 0
-            chg_str = f"{'+' if chg >= 0 else ''}{chg:.2f}%"
+            chg_str = fmt_change_pct(chg)
 
             # 관심가 도달: 현재가 ≤ 관심가
             watch_p = w.get('watch_price')
@@ -1406,6 +1443,7 @@ def run_scheduler():
     schedule.every().day.at("16:30").do(job_collect_new_high)          # 신고가 종목 수집
     schedule.every().day.at("16:45").do(job_collect_investor_trend)    # 종목별 외국인·기관 순매수 확정 (sector_summary 전)
     schedule.every().day.at("19:30").do(job_collect_investor_trend)    # 종목별 수급 확정 정산 (KRX 확정 후 — 당일 최종값 반영)
+    schedule.every().day.at("19:35").do(job_daily_flow)               # 확정 외국인·기관 순매수 발송 (19:30 정산 후)
     schedule.every().day.at("17:00").do(job_collect_market_closing)    # 장 마감 확정치 수집 (외국인 집계 완료 후)
     schedule.every().day.at("17:05").do(job_short_surge)               # 공매도 수집 + 5일 평균 대비 2배 급증 알림
     schedule.every().day.at("17:15").do(job_sector_summary)            # 산업별 일별 요약 집계

@@ -352,7 +352,7 @@ def get_stock_price(code: str) -> Optional[str]:
         cap_100m = safe_int(output.get('hts_avls'))
         cap_str = format_money(cap_100m)
         arrow = get_arrow(rate)
-        return f"{price:,}원 ({arrow}{rate}%) | 시총 {cap_str}"
+        return f"{price:,}원 ({arrow}{rate:.2f}%) | 시총 {cap_str}"
     except: return None
 
 def get_investor_trend_cumulative(code: str, name: str) -> Optional[str]:
@@ -442,7 +442,7 @@ def get_stock_fundamental(code: str, name: str) -> Optional[str]:
         logging.error(f"Fundamental Error: {e}")
         return None
 
-def get_stock_detail(code: str, name: str = None) -> Optional[str]:
+def get_stock_detail(code: str, name: str = None, flow_map: dict = None) -> Optional[str]:
     output = get_raw_price(code)
     if not output: return None
     returns = get_returns(code)
@@ -472,18 +472,21 @@ def get_stock_detail(code: str, name: str = None) -> Optional[str]:
             )
 
         header = f"<b>[{name}]</b>\n" if name else ""
+        _flow = flow_map.get(code) if flow_map else None
+        flow_line = f"💰 <b>오늘 수급:</b> {_flow} (잠정)\n" if _flow else ""
 
         return (
             f"{header}"
             f"════════════\n"
             f"<b>시총:</b> {cap_str}\n"
             f"<b>주식수:</b> {total_shares:,}주\n" 
-            f"<b>현재가:</b> {price:,}<b>원</b> ({arrow}{rate}%)\n"
-            f"<b>거래량:</b> {vol:,}주 ({vol_ratio:.0f}%)\n"
+            f"<b>현재가:</b> {price:,}<b>원</b> ({arrow}{rate:.2f}%)\n"
+            f"<b>거래량:</b> {vol:,}주 (전일比 {vol_ratio:.0f}%)\n"
             f"<b>거래대금:</b> {val // 100000000:,}억\n"
             f"<b>당일 고가/저가:</b> {high:,} / {low:,}\n"
             f"<b>52주 최고/최저:</b> {w52_high:,} / {w52_low:,}\n"       
-            f"<b>외인비중:</b> {frgn_rate}%\n"
+            f"<b>외인비중:</b> {frgn_rate:.2f}%\n"
+            f"{flow_line}"
             f"════════════"
             f"{returns_msg}"
         )
@@ -901,19 +904,26 @@ def fetch_prices_batch(codes: List[str], max_workers=BATCH_WORKERS) -> Dict[str,
         
     return results
 
-def get_market_scoreboard() -> str:
+def get_universe_price_map() -> dict:
+    """관리 종목 전체 시세 1회 배치 조회 — 브리핑에서 전광판·유니버스·테마가 공유 (KIS 중복 호출 제거)."""
+    if not COMPANY_CODES:
+        return {}
+    return fetch_prices_batch(list(COMPANY_CODES.values()), max_workers=BATCH_WORKERS)
+
+
+def get_market_scoreboard(shared_prices: dict = None, breadth: str = None) -> str:
     if not INDUSTRY_HIERARCHY: return "⚠️ 산업 분류 데이터가 없습니다."
 
     # 1. 지수 조회
     kospi = get_index_status("0001")
     kosdaq = get_index_status("1001")
     
+    from format_utils import fmt_change_pct
     def fmt_idx(data, name):
         if not data: return f"{name} (데이터 없음)"
         p, r = data['price'], data['rate']
-        icon = "🔺" if r > 0 else "🔹" if r < 0 else ""
-        rate_str = f"+{r}%" if r > 0 else f"{r}%"
-        return f"<b>{name}</b> {p:,.2f} ({icon}{rate_str})"
+        icon = "🔺" if r > 0 else "🔻" if r < 0 else "➖"
+        return f"<b>{name}</b> {p:,.2f} ({icon}{fmt_change_pct(r)})"
 
     market_summary = (
         f"📉 <b>[Market Summary]</b>\n"
@@ -936,23 +946,24 @@ def get_market_scoreboard() -> str:
         sector_map[ind_name] = codes_in_sector
 
     # 병렬 시세 조회 (Batch Fetch)
-    price_map = fetch_prices_batch(all_target_codes, max_workers=BATCH_WORKERS)
+    price_map = shared_prices if shared_prices is not None else fetch_prices_batch(all_target_codes, max_workers=BATCH_WORKERS)
     sector_data = []
     
     for ind_name, codes in sector_map.items():
         if not codes: continue
-        total_rate = 0.0
-        count = 0
+        wsum = 0.0   # Σ(등락률 × 시총)
+        csum = 0.0   # Σ(시총)
         for code in codes:
             if code in price_map:
                 data = price_map[code]
                 rate = safe_float(data.get('prdy_ctrt'))
-                total_rate += rate
-                count += 1
+                cap = safe_int(data.get('hts_avls')) or 0
+                if cap > 0:
+                    wsum += rate * cap
+                    csum += cap
         
-        if count > 0:
-            avg_rate = total_rate / count
-            sector_data.append({"name": ind_name, "rate": avg_rate})
+        if csum > 0:
+            sector_data.append({"name": ind_name, "rate": wsum / csum})
 
     if not sector_data: return "❌ 전광판 데이터를 집계하지 못했습니다."
 
@@ -961,11 +972,13 @@ def get_market_scoreboard() -> str:
     from managers import market_timer
     time_str = "장중 추정" if market_timer.is_market_open() else "마감 확정"
 
+    _breadth = f"{breadth}\n" if breadth else ""
     msg = (
         f"🔭 <b>[바티인베스트 시장 전광판]</b>\n"
         f"({datetime.now().strftime('%H:%M')} {time_str} 기준)\n"
         f"════════════\n"
         f"{market_summary}"
+        f"{_breadth}"
         f"════════════\n"
         f"🏭 <b>[섹터 랭킹]</b>\n"
     )
@@ -979,11 +992,11 @@ def get_market_scoreboard() -> str:
     msg += f"════════════\n💡 <b>Tip:</b> 상세 분석은 각 산업방에서 <i>/업황</i> 또는 <i>/자금</i>"
     return msg
 
-def get_universe_ranking() -> str:
+def get_universe_ranking(shared_prices: dict = None, tag_map: dict = None) -> str:
     if not COMPANY_CODES: return "⚠️ 관리 중인 종목 데이터가 없습니다."
 
     all_codes = list(COMPANY_CODES.values())
-    price_map = fetch_prices_batch(all_codes, max_workers=BATCH_WORKERS)
+    price_map = shared_prices if shared_prices is not None else fetch_prices_batch(all_codes, max_workers=BATCH_WORKERS)
     
     ranking_data = []
     code_to_name = {v: k for k, v in COMPANY_CODES.items()}
@@ -991,7 +1004,7 @@ def get_universe_ranking() -> str:
     for code, data in price_map.items():
         name = code_to_name.get(code, code)
         rate = safe_float(data.get('prdy_ctrt'))
-        ranking_data.append({"name": name, "rate": rate})
+        ranking_data.append({"name": name, "rate": rate, "code": code})
             
     if not ranking_data: return "❌ 랭킹 데이터를 집계하지 못했습니다."
 
@@ -1007,12 +1020,15 @@ def get_universe_ranking() -> str:
         f"🚀 <b>급등 Top 5</b>\n"
     )
     
+    from format_utils import fmt_change_pct
     for i, item in enumerate(top_5):
-        msg += f"{i+1}. <b>{item['name']}</b> (🔺{item['rate']}%) \n"
+        _tag = tag_map.get(item['code'], '') if tag_map else ''
+        msg += f"{i+1}. <b>{item['name']}</b> (🔺{fmt_change_pct(item['rate'])})" + (f"  {_tag}" if _tag else "") + "\n"
         
     msg += f"\n💧 <b>급락 Bottom 5</b>\n"
     for i, item in enumerate(bottom_5):
-        msg += f"{i+1}. {item['name']} (🔹{item['rate']}%) \n"
+        _tag = tag_map.get(item['code'], '') if tag_map else ''
+        msg += f"{i+1}. {item['name']} (🔻{fmt_change_pct(item['rate'])})" + (f"  {_tag}" if _tag else "") + "\n"
 
     msg += f"════════════\n(총 {len(ranking_data)}개 종목 분석)"
     return msg
@@ -1146,13 +1162,20 @@ def get_theme_analysis(theme_name: str) -> str:
     msg += f"════════════"
     return msg
 
-def get_industry_theme_ranking(industry_name: str) -> str:
+def get_industry_theme_ranking(industry_name: str, shared_prices: dict = None) -> str:
     _t = _get_industry_targets(industry_name)
     if isinstance(_t, str): return _t
     _, _, _ = _t  # names, codes_map 사용 안 함 — 아래서 INDUSTRY_HIERARCHY 직접 순회
 
     sub_sectors = INDUSTRY_HIERARCHY[industry_name]
     if not sub_sectors: return f"⚠️ <b>[{industry_name}]</b> 섹터에는 등록된 테마가 없습니다."
+
+    # 시세 일괄 조회 — 공유 맵 재사용, 없으면 병렬 배치 (순차 get_raw_price 제거)
+    if shared_prices is not None:
+        price_map = shared_prices
+    else:
+        _codes = [COMPANY_CODES[n] for subs in sub_sectors.values() for n in subs if n in COMPANY_CODES]
+        price_map = fetch_prices_batch(_codes, max_workers=BATCH_WORKERS)
 
     theme_stats = []
     for sub_name, company_list in sub_sectors.items():
@@ -1162,7 +1185,7 @@ def get_industry_theme_ranking(industry_name: str) -> str:
 
         for name in company_list:
             if name not in COMPANY_CODES: continue
-            data = get_raw_price(COMPANY_CODES[name])
+            data = price_map.get(COMPANY_CODES[name])
             if data:
                 rate = safe_float(data.get('prdy_ctrt'))
                 cap_100m = safe_int(data.get('hts_avls')) 
@@ -1185,22 +1208,21 @@ def get_industry_theme_ranking(industry_name: str) -> str:
         f"════════════\n"
     )
 
+    from format_utils import fmt_change_pct
     for i, item in enumerate(theme_stats):
         rank = i + 1
         t_name = item['theme']
         avg = item['avg']
         
-        icon = "🔥" if avg >= 1.0 else "🔺" if avg > 0 else "🔹"
-        avg_str = f"+{avg:.2f}" if avg > 0 else f"{avg:.2f}"
-        msg += f"<b>{rank}. {t_name}</b> {icon} {avg_str}%\n"
+        icon = "🔥" if avg >= 1.0 else "🔺" if avg > 0 else "➖" if avg == 0 else "🔻"
+        msg += f"<b>{rank}. {t_name}</b> {icon} {fmt_change_pct(avg)}\n"
         
         for stock in item['stocks']:
             s_name = stock['name']
             s_rate = stock['rate']
             cap_str = format_money(stock['cap'])
-            s_icon = "🔺" if s_rate > 0 else "🔹" if s_rate < 0 else ""
-            s_rate_txt = f"+{s_rate}%" if s_rate > 0 else f"{s_rate}%"
-            msg += f"  └ {s_name} {s_rate_txt} ({cap_str})\n"
+            s_icon = "🔺" if s_rate > 0 else "🔻" if s_rate < 0 else "➖"
+            msg += f"  └ {s_name} {s_icon}{fmt_change_pct(s_rate)} ({cap_str})\n"
             
         msg += "\n"
     msg += f"════════════"
@@ -1411,25 +1433,193 @@ def get_industry_weekly_ranking(industry_name: str) -> str:
     msg += f"════════════\n💡 괄호 안은 (1주 | 20일 | 60일) 수익률입니다."
     return msg
 
+def get_market_breadth(sb_client) -> str:
+    """전체시장 상승/하락/보합 종목수 + 거래대금 한 줄 — 마감 브리핑용 (market_data 최신 거래일)."""
+    from db_utils import fetch_all_pages
+    try:
+        dres = sb_client.table('market_data').select('base_date') \
+            .not_.is_('price_change_rate', 'null').order('base_date', desc=True).limit(1).execute()
+        if not dres.data:
+            return ""
+        latest = dres.data[0]['base_date']
+        rows = fetch_all_pages(sb_client.table('market_data')
+            .select('price_change_rate,trading_value')
+            .eq('base_date', latest).not_.is_('price_change_rate', 'null'))
+    except Exception as e:
+        logging.error(f"[시장폭] 조회 실패: {e}")
+        return ""
+    if not rows:
+        return ""
+    up = sum(1 for r in rows if (r['price_change_rate'] or 0) > 0)
+    dn = sum(1 for r in rows if (r['price_change_rate'] or 0) < 0)
+    fl = sum(1 for r in rows if (r['price_change_rate'] or 0) == 0)
+    tv = sum((r.get('trading_value') or 0) for r in rows)
+    return f"📊 상승 {up:,} · 하락 {dn:,} · 보합 {fl:,} · 거래대금 {tv / 1e12:.1f}조"
+
+
+def get_flow_map(sb_client) -> dict:
+    """관리종목 당일(최신) 외국인·기관 순매수 한 줄 {code: '외국인 +120억 · 기관 -80억'} — 종목상세용(잠정)."""
+    from db_utils import fetch_all_pages
+    try:
+        dres = sb_client.table('market_data').select('base_date') \
+            .not_.is_('foreign_net_buy', 'null').order('base_date', desc=True).limit(1).execute()
+        if not dres.data:
+            return {}
+        latest = dres.data[0]['base_date']
+        rows = fetch_all_pages(sb_client.table('market_data')
+            .select('stock_code,price,foreign_net_buy,institution_net_buy')
+            .eq('base_date', latest).not_.is_('foreign_net_buy', 'null'))
+    except Exception as e:
+        logging.error(f"[수급맵] 조회 실패: {e}")
+        return {}
+    out = {}
+    for r in rows:
+        price = r.get('price') or 0
+        f = (r.get('foreign_net_buy') or 0) * price // 100_000_000
+        i = (r.get('institution_net_buy') or 0) * price // 100_000_000
+        out[r['stock_code']] = f"외국인 {'+' if f >= 0 else ''}{f:,}억 · 기관 {'+' if i >= 0 else ''}{i:,}억"
+    return out
+
+
+def get_catalyst_tags(sb_client) -> dict:
+    """관리종목 촉매 태그 {code: '[공시 · 기관 +120억 · 거래량 3.2배]'} — 마감 유니버스용.
+    공시(당일 DART, corp_code→code 매핑) · 외국인/기관 순매수대금(잠정, ±10억↑) · 거래량 급증(2×평균).
+    """
+    from db_utils import fetch_all_pages
+    from collections import defaultdict
+    from datetime import date, timedelta
+    try:
+        dres = sb_client.table('market_data').select('base_date') \
+            .not_.is_('foreign_net_buy', 'null').order('base_date', desc=True).limit(1).execute()
+        if not dres.data:
+            return {}
+        latest = dres.data[0]['base_date']
+        rows = fetch_all_pages(sb_client.table('market_data')
+            .select('stock_code,price,foreign_net_buy,institution_net_buy,volume')
+            .eq('base_date', latest).not_.is_('foreign_net_buy', 'null'))
+        # 공시: daily_disclosures.corp_code → companies.code
+        disc = sb_client.table('daily_disclosures').select('corp_code').eq('base_date', latest).execute().data
+        disc_corp = {d['corp_code'] for d in (disc or []) if d.get('corp_code')}
+        comp = fetch_all_pages(sb_client.table('companies').select('code,corp_code').not_.is_('corp_code', 'null'))
+        corp2code = {c['corp_code']: c['code'].split('.')[0] for c in comp if c.get('code') and c.get('corp_code')}
+        disc_codes = {corp2code[cc] for cc in disc_corp if cc in corp2code}
+        # 거래량 평균 (직전 ~20거래일)
+        frm = (date.fromisoformat(latest) - timedelta(days=35)).isoformat()
+        vrows = fetch_all_pages(sb_client.table('market_data').select('stock_code,volume')
+            .lt('base_date', latest).gte('base_date', frm).not_.is_('volume', 'null'))
+        vmap = defaultdict(list)
+        for v in vrows:
+            if v.get('volume'):
+                vmap[v['stock_code']].append(v['volume'])
+        avgvol = {c: sum(vs) / len(vs) for c, vs in vmap.items() if vs}
+    except Exception as e:
+        logging.error(f"[촉매태그] 조회 실패: {e}")
+        return {}
+
+    TH = 1_000_000_000  # 10억
+    tags = {}
+    for r in rows:
+        code = r['stock_code']
+        price = r.get('price') or 0
+        parts = []
+        if code in disc_codes:
+            parts.append("공시")
+        f = (r.get('foreign_net_buy') or 0) * price
+        i = (r.get('institution_net_buy') or 0) * price
+        if abs(f) >= TH:
+            parts.append(f"외국인 {'+' if f >= 0 else ''}{f // 100_000_000:,}억")
+        if abs(i) >= TH:
+            parts.append(f"기관 {'+' if i >= 0 else ''}{i // 100_000_000:,}억")
+        av = avgvol.get(code)
+        if av and r.get('volume') and r['volume'] >= 2 * av:
+            parts.append(f"거래량 {r['volume'] / av:.1f}배")
+        if parts:
+            tags[code] = "[" + " · ".join(parts) + "]"
+    return tags
+
+
+def get_daily_flow_summary(sb_client, status: str = "확정") -> str:
+    """
+    오늘(최신 거래일) 외국인·기관 순매수/순매도 Top3 — 마감 브리핑용.
+    market_data.foreign_net_buy/institution_net_buy(주식수) × price = 순매수대금(원).
+    18:30 마감 시점은 16:45 잠정 수급 기준.
+    """
+    try:
+        from db_utils import fetch_all_pages
+    except Exception:
+        fetch_all_pages = None
+    try:
+        dres = sb_client.table('market_data').select('base_date') \
+            .not_.is_('foreign_net_buy', 'null') \
+            .order('base_date', desc=True).limit(1).execute()
+        if not dres.data:
+            return ""
+        latest = dres.data[0]['base_date']
+        qb = sb_client.table('market_data') \
+            .select('corp_name,foreign_net_buy,institution_net_buy,price') \
+            .eq('base_date', latest) \
+            .not_.is_('foreign_net_buy', 'null')
+        rows = fetch_all_pages(qb) if fetch_all_pages else (qb.execute().data or [])
+    except Exception as e:
+        logging.error(f"[오늘의수급] 조회 실패: {e}")
+        return ""
+    if not rows:
+        return ""
+
+    flows = []
+    for r in rows:
+        price = r.get('price') or 0
+        flows.append({
+            'name': r.get('corp_name', ''),
+            'f': (r.get('foreign_net_buy') or 0) * price,
+            'i': (r.get('institution_net_buy') or 0) * price,
+        })
+
+    def _amt(n: int) -> str:
+        sign = '+' if n >= 0 else ''
+        return f"{sign}{n // 100_000_000:,}억"
+
+    def _top(key, rev, n=3):
+        return sorted(flows, key=lambda x: x[key], reverse=rev)[:n]
+
+    def _line(items, key):
+        return " · ".join(f"{x['name']} {_amt(x[key])}" for x in items if x['name'])
+
+    return (
+        f"💰 <b>[오늘의 수급]</b> ({status})\n"
+        f"외국인 🔺 {_line(_top('f', True), 'f')}\n"
+        f"외국인 🔻 {_line(_top('f', False), 'f')}\n"
+        f"기관 🔺 {_line(_top('i', True), 'i')}\n"
+        f"기관 🔻 {_line(_top('i', False), 'i')}"
+    )
+
+
 def get_weekly_flow_summary(sb_client) -> str:
     """
     주간 외국인·기관 순매수 누적 Top/Bottom 5 — 토요일 메인채널 발송.
-    market_data 테이블에서 최근 5 거래일(월~금) 합산.
+    market_data 테이블에서 이번 주 거래일(월~금) 전 종목·전일 합산.
+    순매수대금 = Σ(일별 순매수 수량 × 일별 종가).
     """
     from datetime import date, timedelta
+    try:
+        from db_utils import fetch_all_pages
+    except Exception:
+        fetch_all_pages = None
 
-    # 최근 5 거래일 날짜 범위 (토요일 기준 → 월~금)
+    # 이번 주 월요일 ~ 오늘 (토요일 발송 기준 월~금 거래일 포함)
     today = date.today()
-    days_back = 7  # 주말 포함해서 7일 전부터 조회 후 최대 5 거래일만
-    from_date = (today - timedelta(days=days_back)).isoformat()
+    monday = today - timedelta(days=today.weekday())
+    from_date = monday.isoformat()
+    to_date = today.isoformat()
 
     try:
-        res = sb_client.table('market_data') \
+        qb = sb_client.table('market_data') \
             .select('stock_code,corp_name,foreign_net_buy,institution_net_buy,price,base_date') \
             .gte('base_date', from_date) \
-            .not_.is_('foreign_net_buy', 'null') \
-            .execute()
-        rows = res.data or []
+            .lte('base_date', to_date) \
+            .not_.is_('foreign_net_buy', 'null')
+        # ⚠️ PostgREST 기본 1000행 한도 → 반드시 페이지네이션(312종목×5거래일≈1.5천행)
+        rows = fetch_all_pages(qb) if fetch_all_pages else (qb.execute().data or [])
     except Exception as e:
         logging.error(f"[주간수급] 조회 실패: {e}")
         return "❌ 주간 수급 데이터 조회 실패"
@@ -1437,32 +1627,23 @@ def get_weekly_flow_summary(sb_client) -> str:
     if not rows:
         return "⚠️ 주간 수급 데이터 없음"
 
-    # 종목별 외국인·기관 순매수 합산 (주간 누적)
-    agg: dict = {}  # code → {name, foreign, institution, price}
+    # 종목별 순매수대금 누적 (일별 수량×일별 종가 합산)
+    agg: dict = {}  # code → {name, f_amt, i_amt}
+    dates: set = set()
     for r in rows:
         code = r['stock_code']
+        price = r.get('price') or 0
         if code not in agg:
-            agg[code] = {
-                'name':        r.get('corp_name', code),
-                'foreign':     0,
-                'institution': 0,
-                'price':       r.get('price') or 0,
-            }
-        agg[code]['foreign']     += r.get('foreign_net_buy')     or 0
-        agg[code]['institution'] += r.get('institution_net_buy') or 0
-        if r.get('price'):
-            agg[code]['price'] = r['price']  # 최신 가격으로 갱신
+            agg[code] = {'name': r.get('corp_name', code), 'f_amt': 0, 'i_amt': 0}
+        agg[code]['f_amt'] += (r.get('foreign_net_buy')     or 0) * price
+        agg[code]['i_amt'] += (r.get('institution_net_buy') or 0) * price
+        if r.get('base_date'):
+            dates.add(r['base_date'])
 
-    # 금액 환산 (순매수 수량 × 현재가 = 원 단위)
-    flow_list = []
-    for code, v in agg.items():
-        f_amt = v['foreign']     * v['price']
-        i_amt = v['institution'] * v['price']
-        flow_list.append({
-            'name':    v['name'],
-            'f_amt':   f_amt,
-            'i_amt':   i_amt,
-        })
+    flow_list = [
+        {'name': v['name'], 'f_amt': v['f_amt'], 'i_amt': v['i_amt']}
+        for v in agg.values()
+    ]
 
     def _fmt_amt(n: int) -> str:
         """억 단위 변환"""
@@ -1477,11 +1658,18 @@ def get_weekly_flow_summary(sb_client) -> str:
     i_buy  = _top5(flow_list, 'i_amt', reverse=True)
     i_sell = _top5(flow_list, 'i_amt', reverse=False)
 
-    week_str = f"{(today - timedelta(days=today.weekday())).strftime('%m/%d')} ~ {today.strftime('%m/%d')}"
+    # 기간 라벨 = 실제 거래일 최소~최대 (휴장 토/일 표기 방지)
+    if dates:
+        d0 = date.fromisoformat(min(dates)).strftime('%m/%d')
+        d1 = date.fromisoformat(max(dates)).strftime('%m/%d')
+        week_str = f"{d0} ~ {d1}"
+    else:
+        week_str = today.strftime('%m/%d')
+
     msg = (
         f"💰 <b>[주간 스마트머니 동향]</b>\n"
         f"({week_str} 누적)\n"
-        f"{'━'*20}\n"
+        f"════════════\n"
         f"🔺 <b>외국인 순매수 Top5</b>\n"
     )
     for i, r in enumerate(f_buy, 1):
@@ -1491,7 +1679,7 @@ def get_weekly_flow_summary(sb_client) -> str:
     for i, r in enumerate(f_sell, 1):
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['f_amt'])}\n"
 
-    msg += f"\n{'━'*20}\n🔺 <b>기관 순매수 Top5</b>\n"
+    msg += f"\n════════════\n🔺 <b>기관 순매수 Top5</b>\n"
     for i, r in enumerate(i_buy, 1):
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['i_amt'])}\n"
 
@@ -1500,6 +1688,7 @@ def get_weekly_flow_summary(sb_client) -> str:
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['i_amt'])}\n"
 
     return msg
+
 
 
 def get_industry_cap_ranking(industry_name: str) -> str:
@@ -1866,12 +2055,14 @@ def get_macro_briefing(data: dict) -> str | None:
     if not data:
         return None
 
+    from format_utils import fmt_change_pct
+
     def _chg(chg):
-        """등락률 포맷: ▲/▼ + 소수점 2자리. None이면 빈 문자열."""
+        """등락률 포맷: (🔺/🔻/➖ +x.xx%). None이면 빈 문자열."""
         if chg is None:
             return ''
-        arrow = '▲' if chg >= 0 else '▼'
-        return f"  {arrow}{abs(chg):.2f}%"
+        icon = '🔺' if chg > 0 else '🔻' if chg < 0 else '➖'
+        return f"  ({icon}{fmt_change_pct(chg)})"
 
     date_str = datetime.now().strftime('%m.%d')
     lines = [f"🌏 <b>글로벌 매크로</b>  {date_str}", ""]
@@ -1884,16 +2075,15 @@ def get_macro_briefing(data: dict) -> str | None:
 
     if any(v is not None for v in [sp, nq, dw, vx]):
         lines.append("🇺🇸 <b>미국 마감</b>")
-        if sp is not None: lines.append(f"S&amp;P500    {sp:>10,.0f}{_chg(sp_c)}")
-        if nq is not None: lines.append(f"나스닥    {nq:>10,.0f}{_chg(nq_c)}")
-        if dw is not None: lines.append(f"다우       {dw:>10,.0f}{_chg(dw_c)}")
+        if sp is not None: lines.append(f"S&amp;P500  {sp:,.0f}{_chg(sp_c)}")
+        if nq is not None: lines.append(f"나스닥  {nq:,.0f}{_chg(nq_c)}")
+        if dw is not None: lines.append(f"다우  {dw:,.0f}{_chg(dw_c)}")
         if vx is not None:
-            # VIX는 하락이 긍정적(공포 완화) — 방향에 맥락 추가
             vix_note = ''
             if vx_c is not None:
-                if vx_c <= -2.0:   vix_note = '  (공포 완화)'
-                elif vx_c >= 2.0:  vix_note = '  (공포 확산)'
-            lines.append(f"VIX         {vx:>10.2f}{_chg(vx_c)}{vix_note}")
+                if vx_c <= -2.0:   vix_note = '  공포 완화'
+                elif vx_c >= 2.0:  vix_note = '  공포 확산'
+            lines.append(f"VIX  {vx:.2f}{_chg(vx_c)}{vix_note}")
         lines.append("")
 
     # ── 야간 선물 ────────────────────────────────────────────────
@@ -1901,9 +2091,9 @@ def get_macro_briefing(data: dict) -> str | None:
     nf = data.get('nasdaq_fut'); nf_c = data.get('nasdaq_fut_chg')
 
     if sf is not None or nf is not None:
-        lines.append("📡 <b>야간 선물</b>")
-        if sf is not None: lines.append(f"S&amp;P500F   {sf:>10,.0f}{_chg(sf_c)}")
-        if nf is not None: lines.append(f"나스닥F   {nf:>10,.0f}{_chg(nf_c)}")
+        lines.append("📡 <b>선물</b>")
+        if sf is not None: lines.append(f"S&amp;P500F  {sf:,.0f}{_chg(sf_c)}")
+        if nf is not None: lines.append(f"나스닥F  {nf:,.0f}{_chg(nf_c)}")
         lines.append("")
 
     # ── 미 10년물 + 달러/원 (자금흐름 핵심 지표) ─────────────────
@@ -1911,9 +2101,9 @@ def get_macro_briefing(data: dict) -> str | None:
     usd = data.get('usd_krw');  usd_c = data.get('usd_krw_chg')
 
     if y10 is not None:
-        lines.append(f"🏦 미 10년물  <b>{y10:.2f}%</b>{_chg(y10_c)}")
+        lines.append(f"🏦 <b>미 10년물</b>  {y10:.2f}%{_chg(y10_c)}")
     if usd is not None:
-        lines.append(f"💵 달러/원   <b>{usd:,.0f}원</b>{_chg(usd_c)}")
+        lines.append(f"💵 <b>달러/원</b>  {usd:,.0f}원{_chg(usd_c)}")
     if y10 is not None or usd is not None:
         lines.append("")
 
@@ -1924,9 +2114,9 @@ def get_macro_briefing(data: dict) -> str | None:
 
     if any(v is not None for v in [jpy, eur, cny]):
         lines.append("💱 <b>기타 환율</b>")
-        if jpy is not None: lines.append(f"엔화    {jpy:,.1f}원/100엔{_chg(jpy_c)}")
-        if eur is not None: lines.append(f"유로    {eur:,.0f}원{_chg(eur_c)}")
-        if cny is not None: lines.append(f"위안    {cny:.1f}원{_chg(cny_c)}")
+        if jpy is not None: lines.append(f"엔화  {jpy:,.1f}원/100엔{_chg(jpy_c)}")
+        if eur is not None: lines.append(f"유로  {eur:,.0f}원{_chg(eur_c)}")
+        if cny is not None: lines.append(f"위안  {cny:.1f}원{_chg(cny_c)}")
         lines.append("")
 
     # ── 원자재 ──────────────────────────────────────────────────
@@ -1937,22 +2127,23 @@ def get_macro_briefing(data: dict) -> str | None:
 
     if any(v is not None for v in [wti, gld, gas, cop]):
         lines.append("🛢 <b>원자재</b>")
-        if wti is not None: lines.append(f"WTI        {wti:.1f}${_chg(wti_c)}")
-        if gld is not None: lines.append(f"금        {gld:,.0f}${_chg(gld_c)}")
-        if gas is not None: lines.append(f"천연가스   {gas:.3f}${_chg(gas_c)}")
-        if cop is not None: lines.append(f"구리       {cop:.3f}${_chg(cop_c)}")
+        if wti is not None: lines.append(f"WTI  {wti:.1f}${_chg(wti_c)}")
+        if gld is not None: lines.append(f"금  {gld:,.0f}${_chg(gld_c)}")
+        if gas is not None: lines.append(f"천연가스  {gas:.3f}${_chg(gas_c)}")
+        if cop is not None: lines.append(f"구리  {cop:.3f}${_chg(cop_c)}")
         lines.append("")
 
     # ── 비트코인 ────────────────────────────────────────────────
     btc = data.get('bitcoin'); btc_c = data.get('bitcoin_chg')
     if btc is not None:
-        lines.append(f"₿  <b>{btc:,.0f}$</b>{_chg(btc_c)}")
+        lines.append(f"₿ <b>비트코인</b>  {btc:,.0f}${_chg(btc_c)}")
 
     # 마지막 빈줄 정리
     while lines and lines[-1] == '':
         lines.pop()
 
     return '\n'.join(lines)
+
 
 
 def run_naver_report_job():
