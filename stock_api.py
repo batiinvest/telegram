@@ -2170,11 +2170,14 @@ def run_naver_report_job():
     [최종 수정] 네이버 리포트 수집/전송 (페이지네이션 복원 + 중복 방지 + 메시지 분할)
     """
     # DB에서 리포트 채널 ID 동적 로드 (app_config.report_chat_id)
+    # AI 요약 기능은 app_config.report_ai_summary 로 토글 (기본 OFF, 승인 후 'on')
     try:
         from supabase_bridge import bridge as _b
         _report_cid = _b.get_config('report_chat_id', NAVER_REPORT_CHAT_ID)
+        _ai_summary_on = str(_b.get_config('report_ai_summary', 'off')).lower() in ('on', 'true', '1', 'yes')
     except Exception:
         _report_cid = NAVER_REPORT_CHAT_ID
+        _ai_summary_on = False
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     logging.info(f"📑 네이버 리포트 수집 시작 ({today_str})")
@@ -2258,8 +2261,9 @@ def run_naver_report_job():
             hashtags = _report_hashtags(page_type, tag, file_name)
 
             # 모니터링 종목 기업분석 리포트는 AI 요약을 캡션에 첨부 (Gemini 무료 등급)
+            # report_ai_summary 플래그가 켜져 있을 때만 동작 (기본 OFF)
             summary = None
-            if page_type == "기업분석" and tag in COMPANY_CHAT_IDS and pdf_buf:
+            if _ai_summary_on and page_type == "기업분석" and tag in COMPANY_CHAT_IDS and pdf_buf:
                 try:
                     from ai_analyst import summarize_report_pdf
                     summary = summarize_report_pdf(pdf_buf.getvalue(), tag)
