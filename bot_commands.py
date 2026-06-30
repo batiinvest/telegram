@@ -73,11 +73,15 @@ _MENU_KEYBOARD = {
 _ADMIN_KEYBOARD = {
     'keyboard': [
         [{'text': '🧹 미접속 강퇴'}, {'text': '📋 방 목록'}],
+        [{'text': '🚫 아이디 차단'}, {'text': '♻️ 차단 해제'}],
         [{'text': '🎟 유료 채팅방 입장'}],
     ],
     'resize_keyboard': True,
     'is_persistent': True,
 }
+
+_pending_input = {}  # 관리자 id 입력 대기 (chat_id -> 'ban'/'unban')
+
 
 def _ensure_menu():
     """봇 입력창 옆 ≡ 메뉴에 명령어 등록 (프로세스당 1회).
@@ -152,6 +156,23 @@ def _handle(update: dict):
         cmd = _bits[0].split('@')[0].lower()
         payload = _bits[1] if len(_bits) > 1 else ''
 
+    # 관리자 id 입력 대기 (아이디 차단/해제)
+    if chat_id in _pending_input:
+        _act = _pending_input.get(chat_id)
+        _btns = ('🧹 미접속 강퇴', '📋 방 목록', '🚫 아이디 차단', '♻️ 차단 해제', '🎟 유료 채팅방 입장')
+        if text in _btns or text.startswith('/'):
+            _pending_input.pop(chat_id, None)
+            if text == '/취소':
+                _reply(chat_id, '취소되었습니다.')
+                return
+        else:
+            _pending_input.pop(chat_id, None)
+            if _act == 'ban':
+                _run_ban(chat_id, uid, text)
+            else:
+                _run_unban(chat_id, uid, text)
+            return
+
     # ── 하단 고정 메뉴(reply keyboard) 버튼 처리 ──
     if text == '🎟 유료 채팅방 입장':
         try:
@@ -167,6 +188,22 @@ def _handle(update: dict):
         return
     if text == '📋 방 목록':
         _run_room_list(chat_id, uid)
+        return
+    if text == '🚫 아이디 차단':
+        import room_access as _ra
+        if not _ra.is_room_admin(uid):
+            _reply(chat_id, "⛔ 관리자 전용 기능입니다.")
+            return
+        _pending_input[chat_id] = 'ban'
+        _reply(chat_id, '🚫 차단할 텔레그램 <b>id</b>(또는 @아이디)를 입력하세요.' + chr(10) + '(취소: /취소)')
+        return
+    if text == '♻️ 차단 해제':
+        import room_access as _ra
+        if not _ra.is_room_admin(uid):
+            _reply(chat_id, "⛔ 관리자 전용 기능입니다.")
+            return
+        _pending_input[chat_id] = 'unban'
+        _reply(chat_id, '♻️ 차단 해제할 텔레그램 <b>id</b>(또는 @아이디)를 입력하세요.' + chr(10) + '(취소: /취소)')
         return
     # ── 관리자: 진입 시 관리 버튼 메뉴 ──
     if cmd == '/start' or not cmd:
