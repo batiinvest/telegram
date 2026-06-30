@@ -2148,6 +2148,28 @@ def get_macro_briefing(data: dict) -> str | None:
 _REPORT_NUMS = ("①", "②", "③")
 
 
+def _norm_target_price(tp: str) -> str:
+    """목표주가 표기 정규화: 천단위 콤마 통일. '미제시'/예상밖 형식은 원본 유지."""
+    if not tp or tp == "미제시":
+        return "미제시"
+    m = re.search(r'([\d,]+)\s*원', tp)
+    if m:
+        return f"{int(m.group(1).replace(',', '')):,}원"
+    return tp
+
+
+def _norm_upside(up: str) -> str:
+    """상승여력 정규화: '현재가 대비' 군더더기 제거 + 부호·소수1자리 통일. 없으면 ''."""
+    if not up or up == "N/A":
+        return ""
+    up = up.replace("현재가 대비", "").strip()
+    m = re.search(r'([+-]?)\s*(\d+(?:\.\d+)?)\s*%', up)
+    if m:
+        sign = m.group(1) or "+"
+        return f"{sign}{float(m.group(2)):.1f}%"
+    return up
+
+
 def _build_report_caption(file_name: str, tag: str, hashtags: str, fields: dict = None) -> str:
     """
     리포트 PDF 캡션 생성. AI 구조화 요약(fields)이 있으면 투자노트 양식으로,
@@ -2167,10 +2189,10 @@ def _build_report_caption(file_name: str, tag: str, hashtags: str, fields: dict 
 
     # 콜: 투자의견 / 목표주가(+상승여력) — 없으면 '미제시' 명시
     lines.append(f"📈 투자의견  {fields.get('투자의견') or '미제시'}")
-    tp = fields.get("목표주가") or "미제시"
-    up = fields.get("상승여력", "")
+    tp = _norm_target_price(fields.get("목표주가"))
+    up = _norm_upside(fields.get("상승여력", ""))
     tp_line = f"🎯 목표주가  {tp}"
-    if tp != "미제시" and up and up != "N/A":
+    if tp != "미제시" and up:
         tp_line += f"  (상승여력 {up})"
     lines.append(tp_line)
 
