@@ -360,7 +360,7 @@ class DartRoutingBot:
                                 if _cid:
                                     stock_api.send_telegram(_cid, msg)
                                 # 시장 전체 중요 공시 + 공급계약/수주는 메인에도 (시총 1000억↑만)
-                                _to_main = is_market_wide or any(k in report_nm for k in ("공급계약", "수주"))
+                                _to_main = is_market_wide or ("기재정정" not in report_nm and any(k in report_nm for k in ("공급계약", "수주")))
                                 if _to_main and self._is_main_worthy(stock_code):
                                     stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
 
