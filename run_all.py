@@ -309,15 +309,19 @@ def job_daily_closing():
         _tags = stock_api.get_catalyst_tags(_sbc)
         _breadth = stock_api.get_market_breadth(_sbc)
         _flow = stock_api.get_flow_map(_sbc)
+        _daily_flow = stock_api.get_daily_flow_summary(_sbc)
     except Exception as _te:
         logging.error(f"[마감] 촉매태그/시장폭/수급 오류: {_te}")
         _tags = None
         _breadth = None
         _flow = None
+        _daily_flow = None
 
     # 인사 + 시장 전광판(시장폭) + 유니버스(촉매태그) 랭킹을 한 메시지로 통합 (알림 1건)
     intro = "🏁 <b>[마감 시황]</b> 오늘 하루 고생 많으셨습니다."
     msg = f"{intro}\n\n{stock_api.get_market_scoreboard(shared_prices=prices, breadth=_breadth)}\n\n{stock_api.get_universe_ranking(shared_prices=prices, tag_map=_tags)}"
+    if _daily_flow:
+        msg += f"\n\n{_daily_flow}"
     stock_api.send_telegram(DEFAULT_CHAT_ID, msg, keyboard=COMMON_BUTTON)
 
     _broadcast_to_industries(
@@ -328,20 +332,6 @@ def job_daily_closing():
         stock_api.get_stock_detail, _flow,
         keyboard=COMMON_BUTTON, label="마감 브리핑"
     )
-
-
-@_job(holiday=True)
-def job_daily_flow():
-    """평일 19:35 — 확정 외국인·기관 순매수/순매도 Top (19:30 확정 정산 후) 메인채널 발송."""
-    logging.info("💰 [확정 수급] 발송 시작")
-    try:
-        sb = _bridge._get_client()
-        msg = stock_api.get_daily_flow_summary(sb)  # 기본 status="확정"
-        if msg:
-            stock_api.send_telegram(DEFAULT_CHAT_ID, msg, keyboard=COMMON_BUTTON)
-            _log_notice(DEFAULT_CHAT_ID, "[확정 수급] 발송")
-    except Exception as e:
-        logging.error(f"❌ [확정 수급] 오류: {e}")
 
 
 def job_sync_listed_companies():
@@ -1442,8 +1432,7 @@ def run_scheduler():
     schedule.every().day.at("16:20").do(job_collect_us_etf)            # US ETF 수집 (미장 전일 종가)
     schedule.every().day.at("16:30").do(job_collect_new_high)          # 신고가 종목 수집
     schedule.every().day.at("16:45").do(job_collect_investor_trend)    # 종목별 외국인·기관 순매수 확정 (sector_summary 전)
-    schedule.every().day.at("19:30").do(job_collect_investor_trend)    # 종목별 수급 확정 정산 (KRX 확정 후 — 당일 최종값 반영)
-    schedule.every().day.at("19:35").do(job_daily_flow)               # 확정 외국인·기관 순매수 발송 (19:30 정산 후)
+    schedule.every().day.at("18:15").do(job_collect_investor_trend)    # 종목별 수급 확정 정산 (KRX 확정 후 — 당일 최종값 반영)
     schedule.every().day.at("17:00").do(job_collect_market_closing)    # 장 마감 확정치 수집 (외국인 집계 완료 후)
     schedule.every().day.at("17:05").do(job_short_surge)               # 공매도 수집 + 5일 평균 대비 2배 급증 알림
     schedule.every().day.at("17:15").do(job_sector_summary)            # 산업별 일별 요약 집계

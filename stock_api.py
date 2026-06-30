@@ -1538,7 +1538,7 @@ def get_catalyst_tags(sb_client) -> dict:
     return tags
 
 
-def get_daily_flow_summary(sb_client, status: str = "확정") -> str:
+def get_daily_flow_summary(sb_client) -> str:
     """
     오늘(최신 거래일) 외국인·기관 순매수/순매도 Top3 — 마감 브리핑용.
     market_data.foreign_net_buy/institution_net_buy(주식수) × price = 순매수대금(원).
@@ -1586,7 +1586,7 @@ def get_daily_flow_summary(sb_client, status: str = "확정") -> str:
         return " · ".join(f"{x['name']} {_amt(x[key])}" for x in items if x['name'])
 
     return (
-        f"💰 <b>[오늘의 수급]</b> ({status})\n"
+        f"💰 <b>[오늘의 수급]</b>\n"
         f"외국인 🔺 {_line(_top('f', True), 'f')}\n"
         f"외국인 🔻 {_line(_top('f', False), 'f')}\n"
         f"기관 🔺 {_line(_top('i', True), 'i')}\n"
