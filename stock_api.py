@@ -2145,24 +2145,56 @@ def get_macro_briefing(data: dict) -> str | None:
     return '\n'.join(lines)
 
 
-def _build_report_caption(file_name: str, hashtags: str, summary: str = None) -> str:
-    """
-    리포트 PDF 캡션 생성. 텔레그램 캡션 1024자 제한 내에서 AI 요약을 우선 보존.
-    요약이 없거나 넣을 공간이 부족하면 기존 형식(링크+파일명+해시태그)으로 발송.
-    """
-    head = (
-        f"📌 <a href='https://t.me/batiarchive'>바티아카이브</a> — 리포트·IR자료\n\n"
-        f"{_safe_caption(file_name)}"
-    )
-    tail = f"\n\n{hashtags}"
+_REPORT_NUMS = ("①", "②", "③")
 
-    if summary:
-        avail = 1024 - len(head) - len(tail) - len("\n\n🤖 ")
-        if avail > 40:  # 요약을 의미 있게 담을 공간이 있을 때만
-            body = summary if len(summary) <= avail else summary[:avail - 1] + "…"
-            return f"{head}\n\n🤖 {body}{tail}"
 
-    return f"{head}{tail}"[:1024]
+def _build_report_caption(file_name: str, tag: str, hashtags: str, fields: dict = None) -> str:
+    """
+    리포트 PDF 캡션 생성. AI 구조화 요약(fields)이 있으면 투자노트 양식으로,
+    없거나 추출 실패 시 기존 평문 형식(링크+파일명+해시태그)으로 발송.
+    텔레그램 캡션 1024자 제한 가드 포함.
+    """
+    # 폴백: AI 필드 없음/투자사유 없음 → 기존 평문 캡션
+    if not fields or not fields.get("포인트"):
+        head = (
+            f"📌 <a href='https://t.me/batiarchive'>바티아카이브</a> — 리포트·IR자료\n\n"
+            f"{_safe_caption(file_name)}"
+        )
+        return f"{head}\n\n{hashtags}"[:1024]
+
+    firm = _extract_firm(file_name)
+    lines = [f"📑 <b>{tag}</b> · {firm}", "━━━━━━━━━━━━"]
+
+    # 콜: 투자의견 / 목표주가(+상승여력) — 없으면 '미제시' 명시
+    lines.append(f"📈 투자의견  {fields.get('투자의견') or '미제시'}")
+    tp = fields.get("목표주가") or "미제시"
+    up = fields.get("상승여력", "")
+    tp_line = f"🎯 목표주가  {tp}"
+    if tp != "미제시" and up and up != "N/A":
+        tp_line += f"  (상승여력 {up})"
+    lines.append(tp_line)
+
+    # 실적·밸류 (있을 때만)
+    mv = fields.get("실적밸류", "")
+    if mv and mv != "N/A":
+        lines.append(f"📊 실적·밸류  {mv}")
+
+    # 투자사유
+    lines.append("")
+    lines.append("💡 <b>투자사유</b>")
+    for i, p in enumerate(fields["포인트"][:3]):
+        lines.append(f"{_REPORT_NUMS[i]} {p}")
+
+    # 리스크 (있을 때만)
+    rk = fields.get("리스크", "")
+    if rk and rk != "N/A":
+        lines.append(f"⚠️ 리스크  {rk}")
+
+    lines.append("")
+    lines.append(f"📎 <a href='https://t.me/batiarchive'>바티아카이브</a>")
+    lines.append(hashtags)
+
+    return "\n".join(lines)[:1024]
 
 
 def run_naver_report_job():
@@ -2262,15 +2294,15 @@ def run_naver_report_job():
 
             # 모니터링 종목 기업분석 리포트는 AI 요약을 캡션에 첨부 (Gemini 무료 등급)
             # report_ai_summary 플래그가 켜져 있을 때만 동작 (기본 OFF)
-            summary = None
+            ai_fields = None
             if _ai_summary_on and page_type == "기업분석" and tag in COMPANY_CHAT_IDS and pdf_buf:
                 try:
                     from ai_analyst import summarize_report_pdf
-                    summary = summarize_report_pdf(pdf_buf.getvalue(), tag)
+                    ai_fields = summarize_report_pdf(pdf_buf.getvalue(), tag)
                 except Exception as e:
                     logging.error(f"리포트 요약 호출 실패 ({file_name}): {e}")
 
-            caption = _build_report_caption(file_name, hashtags, summary)
+            caption = _build_report_caption(file_name, tag, hashtags, ai_fields)
 
             # 1. 리포트 채널 전송 (batiarchive)
             if _report_cid:

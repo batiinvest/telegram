@@ -136,11 +136,28 @@ def analyze_disclosure_gemini(corp_name, report_nm, rcept_no):
         return None
 
 
+def _parse_report_fields(raw):
+    """라벨 형식(키|값) 추출 결과를 dict로 파싱. 포인트는 리스트로 누적."""
+    fields = {"포인트": []}
+    for line in (raw or "").splitlines():
+        if "|" not in line:
+            continue
+        key, val = line.split("|", 1)
+        key, val = key.strip(), val.strip()
+        if key == "포인트":
+            if val and val != "N/A":
+                fields["포인트"].append(val)
+        elif key:
+            fields[key] = val
+    return fields
+
+
 def summarize_report_pdf(pdf_bytes, corp_name=""):
     """
-    증권사 기업분석 리포트 PDF를 Gemini로 요약 (텔레그램 캡션용 짧은 요약).
+    증권사 기업분석 리포트 PDF를 Gemini로 구조화 추출 (텔레그램 캡션용).
     PDF 바이트를 모델에 직접 전달(네이티브 PDF) → 텍스트 추출 라이브러리 불필요.
-    실패 시 None 반환 (호출부는 요약 없이 정상 발송).
+    반환: 필드 dict(투자의견/목표주가/상승여력/실적밸류/포인트[]/리스크) 또는 None.
+          투자사유(포인트)가 하나도 없으면 추출 실패로 보고 None (호출부는 평문 캡션 폴백).
     """
     if not client or not pdf_bytes:
         return None
@@ -149,14 +166,22 @@ def summarize_report_pdf(pdf_bytes, corp_name=""):
         from google.genai import types
 
         prompt = (
-            "당신은 주식 애널리스트입니다. 첨부된 증권사 기업분석 리포트를 "
-            "개인 투자자용으로 짧게 요약하세요.\n"
+            "당신은 주식 애널리스트입니다. 첨부된 증권사 기업분석 리포트에서 "
+            "아래 항목을 추출하세요.\n"
             f"기업명: {corp_name}\n\n"
-            "[지시사항]\n"
-            "1. 총 250자 이내, 4줄 이내로 핵심만.\n"
-            "2. 투자의견·목표주가가 있으면 첫 줄에 반드시 표시.\n"
-            "3. 실적·전망의 핵심 숫자(매출·영업이익 증감 등)를 포함.\n"
-            "4. 구어체(해요체)로, 마크다운·머리표 기호 없이 평문으로 작성."
+            "출력은 정확히 아래 형식으로, 각 항목을 한 줄씩, "
+            "마크다운·머리표 기호 없이 평문으로 작성하세요.\n"
+            "투자의견|<매수/중립/매도 + 괄호로 (상향/유지/하향). 리포트에 없으면 '미제시'>\n"
+            "목표주가|<숫자와 단위(원). 없으면 '미제시'>\n"
+            "상승여력|<현재가 대비 +XX% 또는 -XX%. 산출 불가 시 N/A>\n"
+            "실적밸류|<매출·영업이익 증감(YoY 등)과 PER/PBR 등 밸류 지표를 한 줄로. 없으면 N/A>\n"
+            "포인트|<핵심 투자사유 1>\n"
+            "포인트|<핵심 투자사유 2>\n"
+            "포인트|<핵심 투자사유 3>\n"
+            "리스크|<핵심 리스크 1개. 없으면 N/A>\n\n"
+            "[규칙]\n"
+            "- 포인트·리스크·실적밸류는 각 45자 이내, 촉매·숫자 중심의 간결한 개조식.\n"
+            "- 리포트에 근거 없는 내용은 절대 추가하지 말 것."
         )
         part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
 
@@ -166,9 +191,9 @@ def summarize_report_pdf(pdf_bytes, corp_name=""):
                 response = client.models.generate_content(
                     model=model_id, contents=[part, prompt]
                 )
-                text = (response.text or "").strip()
-                if text:
-                    return text
+                fields = _parse_report_fields(response.text)
+                if fields["포인트"]:  # 투자사유가 하나라도 잡혀야 유효
+                    return fields
             except Exception as e:
                 logging.warning(
                     f"리포트 요약 시도 실패 [{model_id}] ({corp_name}): {str(e)[:120]}"
