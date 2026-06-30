@@ -7,6 +7,7 @@ import uuid
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from managers import market_timer, HistoryManager
+from format_utils import fmt_change_pct
 # ✅ 통합 API 모듈 및 설정
 import stock_api  
 from config import (
@@ -194,17 +195,17 @@ class KisMyStockScanner:
             lower = int(data['stck_llam'])
 
             if status_code in ['58', '59']:
-                 self._send_once(f"{raw_code}_VI", chat_id, f"🧊 <b>[{name} VI 발동]</b>\n변동성 완화 장치 발동!\n💰 현재가: {price:,}원 ({rate}%)")
+                 self._send_once(f"{raw_code}_VI", chat_id, f"🧊 <b>[{name} VI 발동]</b>\n변동성 완화 장치 발동!\n💰 현재가: {price:,}원 ({fmt_change_pct(rate)})")
             elif price >= upper:
-                self._send_once(f"{raw_code}_UPPER", chat_id, f"🛑 <b>[{name} 상한가]</b>\n문 닫았습니다! (+{rate}%)\n💰 현재가: {price:,}원")
+                self._send_once(f"{raw_code}_UPPER", chat_id, f"🛑 <b>[{name} 상한가]</b>\n문 닫았습니다! ({fmt_change_pct(rate)})\n💰 현재가: {price:,}원")
             elif price <= lower:
-                self._send_once(f"{raw_code}_LOWER", chat_id, f"😱 <b>[{name} 하한가]</b>\n대응 확인! ({rate}%)\n💰 현재가: {price:,}원")
+                self._send_once(f"{raw_code}_LOWER", chat_id, f"😱 <b>[{name} 하한가]</b>\n대응 확인! ({fmt_change_pct(rate)})\n💰 현재가: {price:,}원")
             elif rate >= ALERT_SURGE_THRESHOLD:
-                self._send_once(f"{raw_code}_UP_15", chat_id, f"🚀 <b>[{name} 급등]</b>\n수급 유입 (+{rate}%)\n💰 현재가: {price:,}원")
+                self._send_once(f"{raw_code}_UP_15", chat_id, f"🚀 <b>[{name} 급등]</b>\n수급 유입 ({fmt_change_pct(rate)})\n💰 현재가: {price:,}원")
             elif rate >= ALERT_UP_THRESHOLD:
-                self._send_once(f"{raw_code}_UP_5", chat_id, f"📈 <b>[{name} 강세]</b>\n{ALERT_UP_THRESHOLD}% 이상 상승 중 (+{rate}%)\n💰 현재가: {price:,}원")
+                self._send_once(f"{raw_code}_UP_5", chat_id, f"📈 <b>[{name} 강세]</b>\n{ALERT_UP_THRESHOLD}% 이상 상승 중 ({fmt_change_pct(rate)})\n💰 현재가: {price:,}원")
             elif rate <= ALERT_DOWN_THRESHOLD:
-                self._send_once(f"{raw_code}_DOWN_5", chat_id, f"📉 <b>[{name} 약세]</b>\n{abs(ALERT_DOWN_THRESHOLD)}% 이상 하락 중 ({rate}%)\n💰 현재가: {price:,}원")
+                self._send_once(f"{raw_code}_DOWN_5", chat_id, f"📉 <b>[{name} 약세]</b>\n{abs(ALERT_DOWN_THRESHOLD)}% 이상 하락 중 ({fmt_change_pct(rate)})\n💰 현재가: {price:,}원")
                 
         except Exception as e:
             logging.error(f"Logic Error in {name}: {e}")

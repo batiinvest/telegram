@@ -25,6 +25,7 @@ import sys
 import time
 import logging
 from logger_config import get_logger
+from collect_utils import batch_upsert, fetch_all_pages
 log = get_logger(__name__)
 
 from datetime import date, timedelta
@@ -220,39 +221,16 @@ def _find_col(header: list, candidates: list) -> int | None:
 def _get_monitored_codes(sb) -> set:
     """companies.is_monitored=True 종목코드 세트 반환"""
     codes = set()
-    page = 0
-    while True:
-        res = sb.table("companies").select("code") \
-                .eq("is_monitored", True) \
-                .range(page * 1000, (page + 1) * 1000 - 1).execute()
-        if not res.data:
-            break
-        for r in res.data:
-            code = (r.get("code") or "").split(".")[0]
-            if code:
-                codes.add(code)
-        if len(res.data) < 1000:
-            break
-        page += 1
+    for r in fetch_all_pages(sb.table("companies").select("code").eq("is_monitored", True)):
+        code = (r.get("code") or "").split(".")[0]
+        if code:
+            codes.add(code)
     return codes
 
 
 def _upsert_batch(sb, records: list[dict]) -> int:
     """short_selling_history에 배치 upsert. 저장 건수 반환."""
-    if not records:
-        return 0
-    saved = 0
-    batch_size = 200
-    for i in range(0, len(records), batch_size):
-        batch = records[i:i + batch_size]
-        try:
-            sb.table("short_selling_history") \
-              .upsert(batch, on_conflict="stock_code,base_date") \
-              .execute()
-            saved += len(batch)
-        except Exception as e:
-            log.error(f"❌ [공매도] upsert 실패: {e}")
-    return saved
+    return batch_upsert(sb, "short_selling_history", records, "stock_code,base_date", chunk=200)
 
 
 def run(trd_date: str = None) -> tuple[int, int]:
@@ -427,10 +405,11 @@ def check_surge(sb, n_days: int = 5, multiplier: float = 2.0) -> list[dict]:
             by_code[code].sort(key=lambda x: x["base_date"], reverse=True)
 
         # 종목명 조회 (market_data 최신)
-        name_res = sb.table("market_data") \
-                     .select("stock_code,corp_name") \
-                     .eq("base_date", latest_date).execute()
-        name_map = {r["stock_code"]: r["corp_name"] for r in (name_res.data or [])}
+        # PostgREST 1000행 한도 -> 전체 상장종목(~2,600개) 페이지네이션
+        name_rows = fetch_all_pages(
+            sb.table("market_data").select("stock_code,corp_name").eq("base_date", latest_date)
+        )
+        name_map = {r["stock_code"]: r["corp_name"] for r in name_rows}
 
         surges = []
         for code, hist in by_code.items():
@@ -466,6 +445,21 @@ def check_surge(sb, n_days: int = 5, multiplier: float = 2.0) -> list[dict]:
         return []
 
 
+def format_surge_msg(surges: list[dict], trd_date: str = None, multiplier: float = 2.0) -> str:
+    """공매도 급증 알림 메시지 포맷 — run_all·CLI 공용 (템플릿 단일화)."""
+    lines = [
+        f"📉 <b>[공매도 급증 알림]</b> {trd_date or '오늘'}\n"
+        f"5거래일 평균 대비 {multiplier:.0f}배↑ 급증 종목 ({len(surges)}개)\n"
+    ]
+    for i, s in enumerate(surges[:10], 1):
+        lines.append(
+            f"{i}. <b>{s['corp_name']}</b>({s['stock_code']})\n"
+            f"   오늘 <b>{s['today_ratio']}%</b> / 5일평균 {s['avg_ratio']}% "
+            f"→ <b>{s['surge_ratio']}배</b>"
+        )
+    return "\n".join(lines)
+
+
 def run_and_alert(trd_date: str = None, telegram_token: str = None,
                   chat_id: str = None, n_days: int = 5, multiplier: float = 2.0) -> int:
     """
@@ -497,16 +491,8 @@ def run_and_alert(trd_date: str = None, telegram_token: str = None,
                      f"→ {s['surge_ratio']}배")
         return len(surges)
 
-    # 상위 10개 알림 포맷
-    lines = [f"📉 <b>[공매도 급증 알림]</b> {trd_date or '오늘'}\n"
-             f"5거래일 평균 대비 {multiplier:.0f}배 이상 급증 종목\n"]
-    for i, s in enumerate(surges[:10], 1):
-        lines.append(
-            f"{i}. <b>{s['corp_name']}</b>({s['stock_code']})\n"
-            f"   오늘 <b>{s['today_ratio']}%</b> / 5일평균 {s['avg_ratio']}% "
-            f"→ <b>{s['surge_ratio']}배</b>"
-        )
-    msg = "\n".join(lines)
+    # 상위 10개 알림 포맷 (run_all·CLI 공용 포매터)
+    msg = format_surge_msg(surges, trd_date, multiplier)
 
     try:
         import requests as _req

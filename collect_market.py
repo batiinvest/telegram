@@ -27,6 +27,7 @@ load_dotenv()
 
 from db_client import get_supabase_client
 from db_utils import fetch_all_pages as _fetch_all_pages
+from collect_utils import batch_upsert
 
 # 기존 managers, stock_api 활용
 try:
@@ -277,18 +278,7 @@ def run(all_listed: bool = False, max_workers: int = 5):
             time.sleep(0.2)
 
     # Supabase upsert
-    upserted = 0
-    batch_size = 50
-    for i in range(0, len(collected), batch_size):
-        batch = collected[i:i+batch_size]
-        try:
-            sb.table("market_data").upsert(
-                batch,
-                on_conflict="stock_code,base_date"
-            ).execute()
-            upserted += len(batch)
-        except Exception as e:
-            log.error(f"DB 저장 실패: {e}")
+    upserted = batch_upsert(sb, "market_data", collected, "stock_code,base_date", chunk=50)
 
     log.info(f"=== 완료: 저장 {upserted}개, 실패 {len(failed)}개 ===")
     return upserted, len(failed)
@@ -370,6 +360,7 @@ def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
                 near = None
             high  = int(float(row.get('new_hgpr', 0) or 0))
             low   = int(float(row.get('new_lwpr', 0) or 0))
+            vol   = int(float(row.get('acml_vol', 0) or 0))
 
             if not code:
                 continue
@@ -378,6 +369,9 @@ def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
             # near_raw가 빈 문자열인 경우도 0으로 처리 (신고가 갱신 당일 API 응답)
             if near is not None and near != 0.0:
                 continue   # 근접(미갱신) 포함하지 않음
+            # 거래량 0 = 당일 미거래(거래정지/관리종목 등) → 진짜 신고가 갱신 아님(오탐 제거)
+            if vol <= 0:
+                continue
             cls_label = '신고가'
             cls_code  = '1'
 
@@ -386,6 +380,7 @@ def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
                 'name':          name,
                 'price':         price,
                 'chg_pct':       chg,
+                'volume':        vol,
                 'new_hgpr_cls':  cls_label,
                 'new_hgpr_code': cls_code,
                 'd52_high':      high,
@@ -799,16 +794,7 @@ def backfill_market(days: int = 90, max_workers: int = 3,
         return
 
     # 수집 대상: 전체 상장사 (active=True)
-    all_res = []
-    page = 0
-    while True:
-        res = sb_client.table('companies').select('code,name')             .eq('active', True)             .range(page * 1000, (page + 1) * 1000 - 1).execute()
-        if not res.data:
-            break
-        all_res.extend(res.data)
-        if len(res.data) < 1000:
-            break
-        page += 1
+    all_res = _fetch_all_pages(sb_client.table('companies').select('code,name').eq('active', True))
     targets = [{'code': r['code'].split('.')[0], 'name': r['name']}
                for r in all_res if r.get('code')]
 
@@ -840,7 +826,7 @@ def backfill_market(days: int = 90, max_workers: int = 3,
             'FID_INPUT_DATE_1':       date_from,
             'FID_INPUT_DATE_2':       date_to,
             'FID_PERIOD_DIV_CODE':    'D',
-            'FID_ORG_ADJ_PRC':        '0',  # 수정주가
+            'FID_ORG_ADJ_PRC':        '1',  # 원주가 — market_data 원주가 관행 통일(일일·stock_api·backfill_market_90d)
         }
         try:
             res = req.get(
@@ -962,16 +948,7 @@ def backfill_market(days: int = 90, max_workers: int = 3,
 
     # DB upsert
     log.info(f"[백필] DB upsert 시작: {len(all_rows)}건")
-    upserted = 0
-    for i in range(0, len(all_rows), 100):
-        batch = all_rows[i:i+100]
-        try:
-            sb_client.table('market_data').upsert(
-                batch, on_conflict='stock_code,base_date'
-            ).execute()
-            upserted += len(batch)
-        except Exception as e:
-            log.error(f"[백필] upsert 오류: {e}")
+    upserted = batch_upsert(sb_client, 'market_data', all_rows, 'stock_code,base_date', chunk=100)
 
     log.info(f"[백필] 완료: {upserted}/{len(all_rows)}건 저장")
     return upserted
@@ -1100,16 +1077,7 @@ def collect_analyst_opinions(from_date: str = None, to_date: str = None) -> int:
         return 0
 
     # upsert (중복 방지)
-    saved = 0
-    for i in range(0, len(all_rows), 50):
-        batch = all_rows[i:i+50]
-        try:
-            sb_client.table('analyst_opinions').upsert(
-                batch, on_conflict='stock_code,opinion_date,firm_name'
-            ).execute()
-            saved += len(batch)
-        except Exception as e:
-            logging.error(f"[투자의견] upsert 오류: {e}")
+    saved = batch_upsert(sb_client, 'analyst_opinions', all_rows, 'stock_code,opinion_date,firm_name', chunk=50)
 
     logging.info(f"[투자의견] {saved}/{len(all_rows)}건 저장 완료")
 

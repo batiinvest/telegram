@@ -21,6 +21,10 @@ import sys
 import json
 import logging
 from logger_config import get_logger
+try:
+    from db_utils import fetch_all_pages  # PostgREST 1000행 한도 회피
+except Exception:
+    fetch_all_pages = None
 log = get_logger(__name__)
 
 from datetime import datetime, timedelta
@@ -92,11 +96,11 @@ def fetch_market_summary(target_date: str) -> list:
     if not sb:
         return []
     try:
-        res = sb.table("market_data") \
+        qb = sb.table("market_data") \
             .select("stock_code,corp_name,price_change_rate,market_cap,foreign_net_buy,volume,price,market,hgpr_cls_code") \
-            .eq("base_date", target_date) \
-            .execute()
-        return res.data or []
+            .eq("base_date", target_date)
+        # PostgREST 1000행 한도 -> 전체 상장종목(~2,600개/일) 페이지네이션
+        return fetch_all_pages(qb) if fetch_all_pages else (qb.execute().data or [])
     except Exception as e:
         log.warning(f"[fetch_market_summary] {e}")
         return []
@@ -157,12 +161,13 @@ def fetch_industry_trend(target_date: str, days: int = 5) -> dict:
         return {}
     try:
         from_date = (datetime.strptime(target_date, "%Y-%m-%d") - timedelta(days=days+3)).strftime("%Y-%m-%d")
-        res = sb.table("market_data") \
+        qb = sb.table("market_data") \
             .select("base_date,stock_code,price_change_rate") \
             .gte("base_date", from_date) \
             .lte("base_date", target_date) \
-            .not_.is_("price_change_rate", "null").execute()
-        rows = res.data or []
+            .not_.is_("price_change_rate", "null")
+        # PostgREST 1000행 한도 -> 다일x전체종목(~1.8만행) 페이지네이션
+        rows = fetch_all_pages(qb) if fetch_all_pages else (qb.execute().data or [])
         if not rows:
             return {}
 

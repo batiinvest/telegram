@@ -2267,72 +2267,6 @@ def parse_amendment(kv: dict) -> list:
     return lines
 
 
-def parse_tender_offer_prospectus(kv: dict) -> list:
-    """공개매수설명서 / 공개매수신고서 — 핵심 조건 요약."""
-    lines = []
-
-    # 공개매수자
-    buyer = _get(kv, '공개매수자', '보 고 자')
-    if buyer:
-        # "ㆍ성명 : 에스제이투자홀딩스 주식회사 ■ 회사 □ 개인..." 형태 정리
-        m = re.search(r'성\s*명\s*[：:]\s*([^\■□ㆍ\n]+)', buyer)
-        buyer_clean = m.group(1).strip() if m else buyer.split('■')[0].strip()
-        buyer_clean = re.sub(r'ㆍ|성\s*명\s*[：:]', '', buyer_clean).strip()
-        lines.append(f'🏢 공개매수자: {_trunc(buyer_clean, 40)}')
-
-    # 대상회사
-    target = _get(kv, '공개매수 대상회사명', '대상회사명')
-    if target:
-        lines.append(f'🎯 대상회사: {target}')
-
-    # 공개매수 목적
-    purpose = _get(kv, '공개매수 목적', '공개매수목적')
-    if purpose:
-        # "■ 상장폐지" 형태에서 체크된 항목만 추출
-        checked = re.findall(r'■\s*([^□■\n]+)', purpose)
-        if checked:
-            lines.append(f'📋 목적: {" / ".join(c.strip() for c in checked[:3])}')
-
-    # 매수가격 + 수량
-    price_raw = _get(kv, '매수 가격', '공개매수가격', '매수가격')
-    if price_raw:
-        m = re.search(r'([\d,]+)\s*원', price_raw)
-        if m:
-            lines.append(f'💰 매수가격: {m.group(1)}원/주')
-
-    qty_raw = _get(kv, '매수 예정 수량(비율)', '매수예정수량')
-    if qty_raw:
-        m = re.search(r'([\d,]+)\s*주.{0,20}?([\d.]+)\s*%', qty_raw)
-        if m:
-            lines.append(f'📋 매수예정: {int(m.group(1).replace(",", "")):,}주 ({m.group(2)}%)')
-        else:
-            lines.append(f'📋 매수예정: {_trunc(qty_raw, 50)}')
-
-    # 공개매수기간
-    period = _get(kv, '공개매수기간')
-    if period:
-        lines.append(f'📅 매수기간: {_trunc(period, 50)}')
-
-    # 현재 보유 현황
-    held_qty   = _get(kv, '보유 수량')
-    held_ratio = _get(kv, '보유 비율')
-    if held_qty or held_ratio:
-        held_qty_clean = re.search(r'([\d,]+)\s*주', held_qty).group(0) if held_qty and re.search(r'[\d,]+\s*주', held_qty) else held_qty or ''
-        ratio_clean = held_ratio.split('(')[0].strip() if held_ratio else ''
-        parts = [p for p in [held_qty_clean, ratio_clean] if p]
-        lines.append(f'📊 현재보유: {" / ".join(parts)}')
-
-    # 매수대리인
-    agent = _get(kv, '대 리 인', '사무취급자', '매수대리인')
-    if agent:
-        m = re.search(r'성\s*명\s*[：:]\s*([^\■□ㆍ\n,]+)', agent)
-        agent_clean = m.group(1).strip() if m else agent.split(',')[0].strip()
-        agent_clean = re.sub(r'성\s*명\s*[：:]', '', agent_clean).strip()
-        lines.append(f'🏦 매수대리인: {_trunc(agent_clean, 30)}')
-
-    return lines
-
-
 def parse_tender_offer_result(kv: dict) -> list:
     """공개매수결과보고서 — HTML 인코딩 깨짐이 심해 HTML 원문에서 직접 추출."""
     lines = []
@@ -2556,8 +2490,7 @@ _PARSER_MAP = [
     (['신탁계약해지결과'],                       parse_trust_termination),
     (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
     (['대량보유상황보고서'],                      parse_large_holding_report),
-    (['공개매수설명서', '공개매수신고서'],          parse_tender_offer_prospectus),
-    (['공개매수결과보고서', '공개매수청약'],        parse_tender_offer_result),
+    (['공개매수결과보고서', '공개매수청약'],       parse_tender_offer_result),
     (['주식담보제공'],                             parse_share_pledge),
 ]
 
@@ -2623,7 +2556,7 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
                 # 카테고리 파서 또는 범용 파서로 원문 내용 추가
                 sub = (parser(kv) if parser else None) or (parse_all_fields(kv) if not has_changes else None)
                 if sub:
-                    lines.append('─' * 12)
+                    lines.append('════════════')
                     lines.extend(sub)
                 return '\n'.join(lines)
 

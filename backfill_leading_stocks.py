@@ -19,6 +19,7 @@ sector_strength 컬럼 저장을 추가했으나, DB 테이블에 컬럼이 없�
 import argparse
 import time
 from db_client import get_supabase_client
+from db_utils import fetch_all_pages
 from logger_config import get_logger
 from leading_stocks_generator import run as run_leading
 
@@ -26,8 +27,8 @@ log = get_logger(__name__)
 
 
 def get_existing_dates(sb) -> set[str]:
-    res = sb.table('leading_stocks').select('base_date').execute()
-    return {r['base_date'] for r in (res.data or [])}
+    rows = fetch_all_pages(sb.table('leading_stocks').select('base_date'))
+    return {r['base_date'] for r in rows}
 
 
 def get_market_dates(sb, from_date: str | None, to_date: str | None) -> list[str]:
@@ -36,8 +37,8 @@ def get_market_dates(sb, from_date: str | None, to_date: str | None) -> list[str
         q = q.gte('base_date', from_date)
     if to_date:
         q = q.lte('base_date', to_date)
-    res = q.execute()
-    return sorted({r['base_date'] for r in (res.data or [])})
+    rows = fetch_all_pages(q)  # PostgREST 1000행 한도 -> 날짜 누락 방지
+    return sorted({r['base_date'] for r in rows})
 
 
 def main():
