@@ -881,8 +881,9 @@ def _parse_numbered_body(text: str, max_items: int = 7) -> list[str]:
     """
     '1) 항목명 - 내용' 또는 '1. 항목명: 내용' 형태 번호 목록을 줄별 bullet로 변환.
     """
-    # 번호 목록 분리: '1)' 또는 '1. ' 패턴 모두 지원
-    parts = re.split(r'\s*(?<!\w)(\d{1,2})[.)]\s+', text)
+    # 번호 목록 분리: '1)' / '1. ' / '1.임상'(공백없음) 모두 지원.
+    # (?!\d): '0.56'·날짜('06.30')·소수는 분리 안 함. (?<!\w): '제3상'·'GV1001' 보호.
+    parts = re.split(r'\s*(?<!\w)(\d{1,2})[.)](?!\d)\s*', text)
     # parts = ['prefix', '1', 'content1 ', '2', 'content2 ', ...]
     items = []
     i = 1
