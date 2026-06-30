@@ -759,6 +759,50 @@ class KisMyStockScanner:
             answer("❌ 오류 발생", alert=True)
             edit(f"❌ <b>[입장 처리 오류]</b>\n<code>{e}</code>")
 
+    def _handle_spam_callback(self, cb_id, chat_id, message_id, callback_q, parts):
+        base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+        def answer(text='', alert=False):
+            try:
+                self.listener_session.post(f"{base_url}/answerCallbackQuery",
+                    json={'callback_query_id': cb_id, 'text': text, 'show_alert': alert}, timeout=5)
+            except Exception:
+                pass
+        def edit_append(suffix):
+            base = (callback_q.get('message') or {}).get('text', '')
+            try:
+                self.listener_session.post(f"{base_url}/editMessageText",
+                    json={'chat_id': chat_id, 'message_id': message_id, 'text': base + suffix}, timeout=5)
+            except Exception:
+                pass
+        try:
+            import room_access as _ra
+            clicker = (callback_q.get('from') or {}).get('id')
+            if not _ra.is_room_admin(clicker):
+                answer('관리자 전용입니다.', alert=True)
+                return
+        except Exception:
+            answer('권한 확인 실패', alert=True)
+            return
+        import spam_guard as _sg
+        action = parts[1] if len(parts) > 1 else ''
+        if action == 'ok':
+            answer('정상 처리 — 차단 안 함')
+            edit_append(chr(10) + chr(10) + '✅ 정상 처리(차단 안 함)')
+            return
+        if action == 'ban':
+            uid = parts[2]
+            cid = parts[3]
+            ok = _sg.ban_in(cid, uid)
+            answer('🚫 차단됨' if ok else '차단 실패', alert=not ok)
+            edit_append((chr(10) + chr(10) + '🚫 이 방에서 차단됨') if ok else (chr(10) + chr(10) + '⚠️ 차단 실패'))
+            return
+        if action == 'banall':
+            uid = parts[2]
+            n = _sg.ban_all(uid)
+            answer('🚫 ' + str(n) + '개 방에서 차단')
+            edit_append(chr(10) + chr(10) + '🚫 전체 차단 완료(' + str(n) + '개 방)')
+            return
+
     def _handle_rm_callback(self, cb_id, chat_id, message_id, callback_q, parts):
         base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
         def answer(text='', alert=False):
@@ -936,6 +980,11 @@ class KisMyStockScanner:
             self._handle_rm_callback(cb_id, chat_id, message_id, callback_q, parts)
             return
 
+        # 광고 모더레이션 차단 (SPAM|ban/banall/ok)
+        if parts[0] == 'SPAM':
+            self._handle_spam_callback(cb_id, chat_id, message_id, callback_q, parts)
+            return
+
         if len(parts) != 3 or parts[0] != "REP": return
 
         action_type = parts[1]
@@ -1032,6 +1081,14 @@ class KisMyStockScanner:
                         if text.startswith("/제보"):
                             self.process_report(chat_id, message.get("message_id"), user_name, text)
                             continue
+
+                        # ── 광고/홍보 모더레이션 (그룹 메시지 검사, 흐름 유지) ──
+                        if message.get("chat", {}).get("type") in ("group", "supergroup"):
+                            try:
+                                import spam_guard as _sg
+                                _sg.check_message(self, message)
+                            except Exception as _sge:
+                                logging.debug(f"spam_guard 오류: {_sge}")
 
                         # 1:1 DM의 봇 명령어(/start, /status, /myid)는 admin 계정 포함 항상 bot_commands로
                         # (admin chat_id가 allowed_configs에 잡혀 _handle을 건너뛰는 문제 방지)
