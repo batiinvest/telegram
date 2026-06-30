@@ -289,6 +289,15 @@ def _handle(update: dict):
     elif cmd in ('/미접속', '/강퇴'):
         _run_inactive_menu(chat_id, uid)
 
+    # ── 아이디 차단 / 차단해제 (관리자) ──────────────────────
+    elif cmd in ('/차단', '/ban', '/차단해제', '/unban'):
+        _unban = cmd in ('/차단해제', '/unban')
+        if not payload:
+            _reply(chat_id, ('사용법: <code>/차단해제 [id 또는 @아이디]</code>' if _unban
+                             else '사용법: <code>/차단 [id 또는 @아이디]</code>'))
+        else:
+            (_run_unban if _unban else _run_ban)(chat_id, uid, payload)
+
 
 def run_polling():
     """
@@ -485,3 +494,41 @@ def _run_inactive_menu(chat_id, uid, force=False):
             log.error(f"[cmd] 미접속 스캔 오류: {_se}")
             _post('sendMessage', chat_id=_cid, text="스캔 중 오류가 발생했습니다.")
     threading.Thread(target=_scan_worker, args=(chat_id,), daemon=True).start()
+
+
+def _run_ban(chat_id, uid, query):
+    import room_access as _ra
+    if not _ra.is_room_admin(uid):
+        _reply(chat_id, "⛔ 관리자 전용 기능입니다.")
+        return
+    import threading, spam_guard as _sg, html as _h
+    def _w():
+        target, disp = _sg.resolve_user(query)
+        if not target:
+            _post('sendMessage', chat_id=chat_id, text='❌ ' + str(disp))
+            return
+        n = _sg.ban_all(target)
+        _post('sendMessage', chat_id=chat_id, parse_mode='HTML',
+              text='🚫 <b>' + _h.escape(str(disp)) + '</b> (id <code>' + str(target) + '</code>) — ' + str(n) + '개 방에서 차단',
+              reply_markup={'inline_keyboard': [[{'text': '♻️ 차단 해제', 'callback_data': 'SPAM|unban|' + str(target)}]]})
+    threading.Thread(target=_w, daemon=True).start()
+    _reply(chat_id, "🚫 차단 처리 중…")
+
+
+def _run_unban(chat_id, uid, query):
+    import room_access as _ra
+    if not _ra.is_room_admin(uid):
+        _reply(chat_id, "⛔ 관리자 전용 기능입니다.")
+        return
+    import threading, spam_guard as _sg, html as _h
+    def _w():
+        target, disp = _sg.resolve_user(query)
+        if not target:
+            _post('sendMessage', chat_id=chat_id, text='❌ ' + str(disp))
+            return
+        n = _sg.unban_all(target)
+        _post('sendMessage', chat_id=chat_id, parse_mode='HTML',
+              text='♻️ <b>' + _h.escape(str(disp)) + '</b> (id <code>' + str(target) + '</code>) — ' + str(n) + '개 방에서 차단 해제',
+              reply_markup={'inline_keyboard': [[{'text': '🚫 다시 차단', 'callback_data': 'SPAM|banall|' + str(target)}]]})
+    threading.Thread(target=_w, daemon=True).start()
+    _reply(chat_id, "♻️ 차단 해제 처리 중…")

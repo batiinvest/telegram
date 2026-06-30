@@ -802,6 +802,12 @@ class KisMyStockScanner:
             answer('🚫 ' + str(n) + '개 방에서 차단')
             edit_append(chr(10) + chr(10) + '🚫 전체 차단 완료(' + str(n) + '개 방)')
             return
+        if action == 'unban':
+            uid = parts[2]
+            n = _sg.unban_all(uid)
+            answer('♻️ ' + str(n) + '개 방 해제')
+            edit_append(chr(10) + chr(10) + '♻️ 차단 해제 완료(' + str(n) + '개 방)')
+            return
 
     def _handle_rm_callback(self, cb_id, chat_id, message_id, callback_q, parts):
         base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"

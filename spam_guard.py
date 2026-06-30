@@ -169,18 +169,59 @@ def ban_in(chat_id, uid):
     return _tg("banChatMember", chat_id=int(chat_id), user_id=int(uid)).get("ok", False)
 
 
-def ban_all(uid):
-    """모든 숫자 chat_id 방에서 차단. 차단 성공 방 수 반환."""
+def _sb_client():
     try:
         from db_client import get_client
-        sb = get_client()
+        return get_client()
     except Exception:
         from supabase import create_client
-        sb = create_client(os.environ["SB_URL"], os.environ["SB_SERVICE_KEY"])
-    rooms = [r for r in (sb.table("rooms").select("chat_id").execute().data or [])
-             if str(r.get("chat_id") or "").lstrip("-").isdigit()]
+        return create_client(os.environ["SB_URL"], os.environ["SB_SERVICE_KEY"])
+
+
+def _all_room_cids():
+    """모든 방 chat_id (숫자=int, @username=str). 산업방 포함 전체."""
+    sb = _sb_client()
+    out = []
+    for r in (sb.table("rooms").select("chat_id").execute().data or []):
+        c = (r.get("chat_id") or "").strip()
+        if not c:
+            continue
+        out.append(int(c) if c.lstrip("-").isdigit() else c)
+    return out
+
+
+def ban_all(uid):
+    """모든 방(산업 포함)에서 차단. 성공 방 수 반환."""
     n = 0
-    for r in rooms:
-        if _tg("banChatMember", chat_id=int(r["chat_id"]), user_id=int(uid)).get("ok"):
+    for cid in _all_room_cids():
+        if _tg("banChatMember", chat_id=cid, user_id=int(uid)).get("ok"):
             n += 1
     return n
+
+
+def unban_all(uid):
+    """모든 방에서 차단 해제(only_if_banned). 해제 방 수 반환."""
+    n = 0
+    for cid in _all_room_cids():
+        if _tg("unbanChatMember", chat_id=cid, user_id=int(uid), only_if_banned=True).get("ok"):
+            n += 1
+    return n
+
+
+def resolve_user(query):
+    """id(숫자) 또는 @username -> (uid, 표시이름). 실패 시 (None, 사유)."""
+    q = str(query).strip()
+    if q.lstrip("-").isdigit():
+        return int(q), q
+    if not q.startswith("@"):
+        q = "@" + q
+    res = _tg("getChat", chat_id=q)
+    if not res.get("ok"):
+        return None, res.get("description", "사용자를 찾을 수 없습니다")
+    d = res.get("result", {})
+    if d.get("type") != "private":
+        return None, "사용자 계정이 아닙니다"
+    name = (d.get("first_name") or "")
+    if d.get("last_name"):
+        name += " " + d["last_name"]
+    return d.get("id"), (name.strip() or q)
