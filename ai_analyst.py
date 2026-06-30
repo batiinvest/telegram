@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import logging
 import requests
 import re
+import time
 from config import DART_API_KEY, GOOGLE_API_KEY
 from managers import global_session as _session
 
@@ -12,6 +13,9 @@ from managers import global_session as _session
 # [설정] 모델 선택 (1.5 Flash 추천)
 # ==========================================
 AI_MODEL_ID = "gemini-2.5-flash"
+# 네이버 리포트 PDF 요약 전용
+REPORT_MODEL_ID = "gemini-3-flash-preview"   # 품질 우선 (무료 최상위, preview)
+REPORT_FALLBACK_MODEL_ID = "gemini-2.5-flash"  # preview 과부하(503) 시 안정 폴백
 
 # 초기화
 try:
@@ -129,4 +133,50 @@ def analyze_disclosure_gemini(corp_name, report_nm, rcept_no):
 
     except Exception as e:
         logging.error(f"❌ Analysis Error ({corp_name}): {e}")
+        return None
+
+
+def summarize_report_pdf(pdf_bytes, corp_name=""):
+    """
+    증권사 기업분석 리포트 PDF를 Gemini로 요약 (텔레그램 캡션용 짧은 요약).
+    PDF 바이트를 모델에 직접 전달(네이티브 PDF) → 텍스트 추출 라이브러리 불필요.
+    실패 시 None 반환 (호출부는 요약 없이 정상 발송).
+    """
+    if not client or not pdf_bytes:
+        return None
+
+    try:
+        from google.genai import types
+
+        prompt = (
+            "당신은 주식 애널리스트입니다. 첨부된 증권사 기업분석 리포트를 "
+            "개인 투자자용으로 짧게 요약하세요.\n"
+            f"기업명: {corp_name}\n\n"
+            "[지시사항]\n"
+            "1. 총 250자 이내, 4줄 이내로 핵심만.\n"
+            "2. 투자의견·목표주가가 있으면 첫 줄에 반드시 표시.\n"
+            "3. 실적·전망의 핵심 숫자(매출·영업이익 증감 등)를 포함.\n"
+            "4. 구어체(해요체)로, 마크다운·머리표 기호 없이 평문으로 작성."
+        )
+        part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+
+        # preview 모델은 일시적 503(과부하)이 잦음 → 2회 재시도 후 안정 모델로 폴백
+        for model_id in (REPORT_MODEL_ID, REPORT_MODEL_ID, REPORT_FALLBACK_MODEL_ID):
+            try:
+                response = client.models.generate_content(
+                    model=model_id, contents=[part, prompt]
+                )
+                text = (response.text or "").strip()
+                if text:
+                    return text
+            except Exception as e:
+                logging.warning(
+                    f"리포트 요약 시도 실패 [{model_id}] ({corp_name}): {str(e)[:120]}"
+                )
+                time.sleep(3)
+
+        return None
+
+    except Exception as e:
+        logging.error(f"❌ 리포트 요약 실패 ({corp_name}): {e}")
         return None

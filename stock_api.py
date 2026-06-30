@@ -1955,6 +1955,26 @@ def get_macro_briefing(data: dict) -> str | None:
     return '\n'.join(lines)
 
 
+def _build_report_caption(file_name: str, hashtags: str, summary: str = None) -> str:
+    """
+    리포트 PDF 캡션 생성. 텔레그램 캡션 1024자 제한 내에서 AI 요약을 우선 보존.
+    요약이 없거나 넣을 공간이 부족하면 기존 형식(링크+파일명+해시태그)으로 발송.
+    """
+    head = (
+        f"📌 <a href='https://t.me/batiarchive'>바티아카이브</a> — 리포트·IR자료\n\n"
+        f"{_safe_caption(file_name)}"
+    )
+    tail = f"\n\n{hashtags}"
+
+    if summary:
+        avail = 1024 - len(head) - len(tail) - len("\n\n🤖 ")
+        if avail > 40:  # 요약을 의미 있게 담을 공간이 있을 때만
+            body = summary if len(summary) <= avail else summary[:avail - 1] + "…"
+            return f"{head}\n\n🤖 {body}{tail}"
+
+    return f"{head}{tail}"[:1024]
+
+
 def run_naver_report_job():
     """
     [최종 수정] 네이버 리포트 수집/전송 (페이지네이션 복원 + 중복 방지 + 메시지 분할)
@@ -2046,10 +2066,17 @@ def run_naver_report_job():
             pdf_buf = _fetch_pdf_file(pdf_url)
             target_doc = pdf_buf if pdf_buf else pdf_url
             hashtags = _report_hashtags(page_type, tag, file_name)
-            caption  = (
-                f"📌 <a href='https://t.me/batiarchive'>바티아카이브</a> — 리포트·IR자료\n\n"
-                f"{_safe_caption(file_name)}\n\n{hashtags}"
-            )[:1024]
+
+            # 모니터링 종목 기업분석 리포트는 AI 요약을 캡션에 첨부 (Gemini 무료 등급)
+            summary = None
+            if page_type == "기업분석" and tag in COMPANY_CHAT_IDS and pdf_buf:
+                try:
+                    from ai_analyst import summarize_report_pdf
+                    summary = summarize_report_pdf(pdf_buf.getvalue(), tag)
+                except Exception as e:
+                    logging.error(f"리포트 요약 호출 실패 ({file_name}): {e}")
+
+            caption = _build_report_caption(file_name, hashtags, summary)
 
             # 1. 리포트 채널 전송 (batiarchive)
             if _report_cid:
