@@ -7,7 +7,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from collections import deque # ✅ deque 임포트 확인 (없으면 추가)
-from datetime import datetime, time, timedelta, timezone
+# time 모듈(line 6)을 datetime.time으로 덮지 않도록 별칭 사용 — time.sleep() 호출부 보호
+from datetime import datetime, time as dtime, timedelta, timezone
 
 # ✅ [추가 1] 스레드 풀 라이브러리 임포트
 from concurrent.futures import ThreadPoolExecutor
@@ -400,8 +401,8 @@ class MarketTimeManager:
         self.KST = timezone(timedelta(hours=9))
         
         # 장 운영 시간 설정 (08:50 ~ 15:30)
-        self.OPEN_TIME = time(8, 50)
-        self.CLOSE_TIME = time(15, 30)
+        self.OPEN_TIME = dtime(8, 50)
+        self.CLOSE_TIME = dtime(15, 30)
 
     def get_now(self) -> datetime:
         """현재 KST 시간 반환"""

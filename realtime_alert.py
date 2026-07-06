@@ -211,6 +211,8 @@ class KisMyStockScanner:
             logging.error(f"Logic Error in {name}: {e}")
 
     def _send_once(self, key, chat_id, msg):
+        # sent_alert.txt는 일자별 초기화가 없어 전일 키가 오늘 알림을 막음 → 날짜 접두 필수
+        key = f"{market_timer.get_now().strftime('%Y%m%d')}_{key}"
         with self._lock:
             if not self.sent_history.contains(key):
                 stock_api.send_telegram(chat_id, msg)

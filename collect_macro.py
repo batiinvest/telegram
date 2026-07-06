@@ -21,18 +21,20 @@ load_dotenv()
 
 
 
+# import 시점 sys.exit 금지 — run_all이 잡 안에서 import하므로 SystemExit가
+# except Exception을 뚫고 스케줄러 스레드를 죽인다. 실패는 None으로 두고 실행 시 검증.
 try:
     import yfinance as yf
 except ImportError:
+    yf = None
     log.error("yfinance 미설치 — pip install yfinance --break-system-packages")
-    sys.exit(1)
 
 try:
     from db_client import get_supabase_client
     sb = get_supabase_client()
 except Exception as e:
+    sb = None
     log.error(f"Supabase 연결 실패: {e}")
-    sys.exit(1)
 
 
 # ── 티커 정의 ──────────────────────────────────────────────────
@@ -216,6 +218,8 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
 
 def collect_all() -> dict:
     """모든 지표 수집"""
+    if yf is None:
+        raise RuntimeError("yfinance 미설치 — 매크로 수집 불가")
     result = {}
 
     log.info("매크로 데이터 수집 시작...")
@@ -304,6 +308,9 @@ def collect_all() -> dict:
 
 def save_to_db(data: dict, force: bool = False) -> bool:
     """Supabase macro_data 테이블에 upsert"""
+    if sb is None:
+        log.error("Supabase 미연결 — macro_data 저장 스킵")
+        return False
     import math
     today = date.today().isoformat()
     # None과 nan 모두 제거

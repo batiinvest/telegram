@@ -160,8 +160,8 @@ class NaverNewsBot:
 
         self.session     = get_session()
         self.key_index   = 0
-        self.api_keys    = NAVER_KEYS
-        self.current_key = self.api_keys[self.key_index]
+        self.api_keys    = NAVER_KEYS  # config에서 미설정 슬롯 필터링됨 — 빈 리스트 가능
+        self.current_key = self.api_keys[0] if self.api_keys else {"id": "", "secret": ""}
         self.consecutive_429 = 0
         self._update_session_headers()
 
@@ -337,6 +337,11 @@ class NaverNewsBot:
     #  7. 메인 루프
     # ──────────────────────────────────────────
     def run(self):
+        if not self.api_keys:
+            # 키 없이 돌면 401 무한 루프 + 워치독 재시작 반복 → 대기 모드로 고정
+            logging.critical("⛔ 네이버 API 키 없음 (NAVER_ID_1~10 미설정) — 뉴스봇 대기 모드")
+            while True:
+                time.sleep(3600)
         logging.info("🚀 News Bot Started with Optimized Filtering")
 
         while True:

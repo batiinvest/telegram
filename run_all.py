@@ -985,7 +985,7 @@ def _alert_new_high(rows: list):
         logging.info(f"🏆 [신고가 알림] 메인방 {len(main_lines)}개 발송")
 
 
-@_job("collect_macro")
+@_job("collect_us_etf")
 def job_collect_us_etf():
     """미국 산업별 ETF 수집 → us_market 테이블"""
     logging.info("=== US ETF 수집 시작 ===")

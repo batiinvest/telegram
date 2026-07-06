@@ -37,8 +37,10 @@ NAVER_KEYS = [
     {"id": os.getenv(f"NAVER_ID_{i}"), "secret": os.getenv(f"NAVER_SECRET_{i}")}
     for i in range(1, 11)
 ]
+# 미설정 슬롯 제거 — 키가 10개 미만일 때 rotation이 None 키로 도는 것 방지
+NAVER_KEYS = [k for k in NAVER_KEYS if k["id"] and k["secret"]]
 
-if NAVER_KEYS[0]["id"]:
+if NAVER_KEYS:
     NAVER_CLIENT_ID = NAVER_KEYS[0]["id"]
     NAVER_CLIENT_SECRET = NAVER_KEYS[0]["secret"]
 else:
@@ -233,6 +235,7 @@ def reload_company_data():
     """
     global _raw_data, COMPANY_CODES, COMPANY_KEYWORDS, COMPANY_CHAT_IDS
     global INDUSTRY_HIERARCHY, THEME_MAP, COMPANY_TO_INDUSTRY
+    global CHAT_IDS_BY_CODE, INDUSTRY_CHAT_IDS
 
     logging.info("🔄 [Reload] 종목 데이터 재로드 시작...")
 
@@ -282,7 +285,7 @@ def reload_company_data():
             'THEME_MAP':           THEME_MAP,
             'COMPANY_TO_INDUSTRY': COMPANY_TO_INDUSTRY,
         }
-        for mod_name in ('stock_api', 'news_main', 'main'):
+        for mod_name in ('stock_api', 'news_main', 'main', 'run_all', 'realtime_alert'):
             if mod_name in sys.modules:
                 mod = sys.modules[mod_name]
                 updated = []
