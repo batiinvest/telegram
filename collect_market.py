@@ -29,12 +29,12 @@ from db_client import get_supabase_client
 from db_utils import fetch_all_pages as _fetch_all_pages
 from collect_utils import batch_upsert, batch_update_existing
 
-# 기존 managers, stock_api 활용
+# 기존 managers 활용 + 시세는 kis_client (메시지 계층 stock_api 의존 제거)
 try:
     from managers import kis_auth, get_session, safe_float, safe_int
-    import stock_api
+    from kis_client import get_raw_price as _get_raw_price
 except ImportError:
-    print("managers.py, stock_api.py가 같은 폴더에 있어야 합니다.")
+    print("managers.py, kis_client.py가 같은 폴더에 있어야 합니다.")
     sys.exit(1)
 
 
@@ -50,7 +50,7 @@ def collect_market_one(code: str, name: str) -> Optional[dict]:
     clean_code = code.split(".")[0]
     try:
         # 현재가 + 기본 정보
-        raw = stock_api.get_raw_price(clean_code)
+        raw = _get_raw_price(clean_code)
         if not raw:
             return None
 

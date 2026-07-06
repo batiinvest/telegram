@@ -1,0 +1,189 @@
+"""
+job_infra.py — 스케줄 잡 공통 인프라
+────────────────────────────────────
+run_all.py 물리 분할 (2026-07): 잡 데코레이터(_job)·실행 결과 기록·실패 알림·
+브로드캐스트 헬퍼·Supabase 브릿지 접근을 jobs_collect / jobs_briefing /
+watchdog_flags 가 공유한다.
+"""
+import time
+import logging
+import datetime
+import threading
+import functools
+
+import stock_api
+from managers import market_timer
+from telegram_utils import get_admin_chat_id as _get_admin_chat_id
+from config import DEFAULT_CHAT_ID, INDUSTRY_CHAT_IDS, COMPANY_CHAT_IDS, COMPANY_CODES
+
+# ✅ Supabase 브릿지 (실패해도 스케줄러 동작에 영향 없음)
+try:
+    from supabase_bridge import bridge as _bridge
+    _BRIDGE_OK = True
+    logging.info("✅ [Bridge] Supabase 브릿지 연결 완료")
+    # 봇 시작 시 현재 모니터링 목록 스냅샷 (reload 비교용)
+    try:
+        _sb_init = _bridge._get_client()
+        _init_mon = _sb_init.table('companies').select('code').eq('is_monitored', True).execute()
+        _bridge._prev_mon_codes = {r['code'].split('.')[0] for r in (_init_mon.data or [])}
+        logging.info(f"📋 [Bridge] 모니터링 종목 {len(_bridge._prev_mon_codes)}개 초기화")
+    except Exception as _ie:
+        _bridge._prev_mon_codes = set()
+except Exception as _be:
+    _bridge = None
+    _BRIDGE_OK = False
+    logging.warning(f"⚠️ [Bridge] Supabase 브릿지 로드 실패 (스케줄 DB 제어 비활성화): {_be}")
+
+
+def _start_daemon(target, name: str, args: tuple = ()):
+    """daemon=True 스레드 생성 후 즉시 시작. threading.Thread 4줄 스폰 패턴 통일."""
+    threading.Thread(target=target, name=name, args=args, daemon=True).start()
+
+
+def _broadcast_to_industries(
+    api_func,
+    *args,
+    sleep: float = 0.5,
+    keyboard=None,
+    skip: tuple = ("바티인베스트",),
+    label: str = "산업",
+):
+    """
+    INDUSTRY_CHAT_IDS 전체를 순회해서 api_func(ind_name, *args) 결과를 발송.
+
+    Args:
+        api_func : stock_api의 산업별 메시지 생성 함수
+        *args    : api_func에 industry_name 뒤로 전달할 추가 인자
+        sleep    : 채널 간 대기 시간 (초)
+        keyboard : 텔레그램 키보드 버튼
+        skip     : 제외할 채널명 튜플
+        label    : 로그용 레이블
+
+    Example:
+        _broadcast_to_industries(stock_api.get_industry_theme_ranking,
+                                  keyboard=COMMON_BUTTON, label="점심 브리핑")
+    """
+    for ind_name, chat_id in INDUSTRY_CHAT_IDS.items():
+        if ind_name in skip:
+            continue
+        try:
+            msg = api_func(ind_name, *args)
+            if msg:
+                stock_api.send_telegram(chat_id, msg, keyboard=keyboard)
+            time.sleep(sleep)
+        except Exception as e:
+            logging.error(f"❌ [{label}] 산업 발송 오류 ({ind_name}): {e}")
+
+
+def _broadcast_to_companies(
+    api_func,
+    *args,
+    sleep: float = 0.5,
+    keyboard=None,
+    label: str = "종목",
+):
+    """
+    COMPANY_CHAT_IDS 전체를 순회해서 api_func(stock_code, comp_name, *args) 결과를 발송.
+    COMPANY_CODES에 없는 종목(코드 미등록)은 자동 스킵.
+
+    Args:
+        api_func  : stock_api의 종목별 메시지 생성 함수
+                    시그니처: f(code, name, *args) → str | None
+        sleep     : 채널 간 대기 시간 (초)
+        keyboard  : 텔레그램 키보드 버튼
+        label     : 로그용 레이블
+
+    Example:
+        _broadcast_to_companies(stock_api.get_stock_detail,
+                                 keyboard=COMMON_BUTTON, label="마감 브리핑")
+    """
+    for comp_name, chat_id in COMPANY_CHAT_IDS.items():
+        code = COMPANY_CODES.get(comp_name)
+        if not code:
+            continue
+        try:
+            msg = api_func(code, comp_name, *args)
+            if msg:
+                stock_api.send_telegram(chat_id, msg, keyboard=keyboard)
+            time.sleep(sleep)
+        except Exception as e:
+            logging.error(f"❌ [{label}] 종목 발송 오류 ({comp_name}): {e}")
+
+
+def _is_enabled(job_key: str) -> bool:
+    """DB에서 스케줄 활성화 여부 확인. 브릿지 없으면 항상 True."""
+    if not _BRIDGE_OK:
+        return True
+    try:
+        return _bridge.is_schedule_enabled(job_key)
+    except Exception:
+        return True
+
+
+# ── 잡 실행 결과 기록 (일일 운영 요약·실패 알림용, 인메모리) ──────────────────
+_JOB_RESULTS: dict = {}    # fn 이름 → {'date','time','ok','error','elapsed'}
+_FAIL_ALERTED: set = set() # (date, fn 이름) — 동일 잡 실패 알림 하루 1회 제한
+
+
+def _record_job(fn_name: str, ok: bool, error=None, elapsed: float = 0.0):
+    _JOB_RESULTS[fn_name] = {
+        'date':    datetime.date.today().isoformat(),
+        'time':    datetime.datetime.now().strftime('%H:%M'),
+        'ok':      ok,
+        'error':   str(error)[:200] if error else None,
+        'elapsed': round(elapsed, 1),
+    }
+
+
+def _notify_job_failure(fn_name: str, error):
+    """잡 실패를 관리자 방으로 즉시 알림 (잡·일자당 1회)."""
+    key = (datetime.date.today().isoformat(), fn_name)
+    if key in _FAIL_ALERTED:
+        return
+    _FAIL_ALERTED.add(key)
+    try:
+        target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
+        stock_api.send_telegram(target, f"❌ <b>[잡 실패] {fn_name}</b>\n{str(error)[:300]}")
+    except Exception:
+        pass
+
+
+def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
+    """Job 함수 데코레이터: 휴장일/평일 체크 + DB 활성화 체크 + 결과 기록/실패 알림.
+
+    Args:
+        key:          DB 활성화 체크 키 (None이면 체크 안 함)
+        holiday:      True면 한국 휴장일(공휴일+주말) 스킵
+        weekday_only: True면 주말 스킵 (holiday보다 느슨한 조건)
+    """
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if weekday_only and datetime.datetime.now().weekday() >= 5:
+                return
+            if holiday and market_timer.is_kr_holiday():
+                return
+            if key is not None and not _is_enabled(key):
+                logging.info(f"⏸ [{key}] 비활성화 (DB 설정)")
+                return
+            start = time.time()
+            try:
+                result = fn(*args, **kwargs)
+                _record_job(fn.__name__, True, elapsed=time.time() - start)
+                return result
+            except Exception as e:
+                logging.error(f"❌ [{fn.__name__}] 잡 실행 실패: {e}", exc_info=True)
+                _record_job(fn.__name__, False, e, time.time() - start)
+                _notify_job_failure(fn.__name__, e)
+        return wrapper
+    return decorator
+
+
+def _log_notice(target: str, content: str):
+    """발송 기록을 Supabase에 저장. 실패해도 무시."""
+    if not _BRIDGE_OK:
+        return
+    try:
+        _bridge.log_notice(target=target, content=content, sent_count=1, ok_count=1)
+    except Exception:
+        pass
