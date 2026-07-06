@@ -6,6 +6,7 @@ import math
 import time
 import re
 import html
+import threading as _threading
 from io import BytesIO
 from urllib.parse import urljoin, urlencode
 from datetime import datetime, timedelta
@@ -278,13 +279,34 @@ def get_company_chat_id(corp_name: str, stock_code: str = "") -> str | None:
     return None
 
 
-def send_telegram(chat_id: str, text: str, preview: bool = False, keyboard: Dict = None):
-    """매니저의 send_message로 위임"""
-    _telegram_bot.send_message(chat_id, text, preview, keyboard)
+def send_telegram(chat_id: str, text: str, preview: bool = False, keyboard: Dict = None) -> bool:
+    """매니저의 send_message로 위임. 발송 성공 여부 반환."""
+    return _telegram_bot.send_message(chat_id, text, preview, keyboard)
 
-def get_raw_price(code: str) -> Optional[Dict[str, Any]]:
-    data = _call_kis_api(tr_id="FHKST01010100", path="quotations/inquire-price", code=code)
-    return data['output'] if data else None
+
+# ── 시세 메모리 캐시 ──────────────────────────────────────────
+# 스캐너(30초 주기)·뉴스봇·공시봇이 같은 종목 inquire-price를 각자 호출 → KIS 한도 낭비.
+# 스캐너가 채운 최신값을 TTL 내 재사용한다. 정밀 시세가 필요하면 max_age=0으로 우회.
+_PRICE_CACHE: Dict[str, tuple] = {}      # clean_code → (output, monotonic_ts)
+_PRICE_CACHE_TTL = 45.0
+_price_cache_lock = _threading.Lock()
+
+def get_raw_price(code: str, max_age: float = _PRICE_CACHE_TTL) -> Optional[Dict[str, Any]]:
+    clean = str(code).split('.')[0]
+    now = time.monotonic()
+    if max_age:
+        with _price_cache_lock:
+            hit = _PRICE_CACHE.get(clean)
+            if hit and now - hit[1] < max_age:
+                return hit[0]
+    data = _call_kis_api(tr_id="FHKST01010100", path="quotations/inquire-price", code=clean)
+    out = data['output'] if data else None
+    if out:
+        with _price_cache_lock:
+            if len(_PRICE_CACHE) > 4000:   # 전체 상장사 수집 시 무한 증식 방지
+                _PRICE_CACHE.clear()
+            _PRICE_CACHE[clean] = (out, now)
+    return out
 
 def get_investor_trend(code: str) -> Dict[str, str]:
     data = _call_kis_api(tr_id="FHKST01010900", path="quotations/inquire-investor", code=code)

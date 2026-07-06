@@ -4,6 +4,7 @@ import os
 import logging
 import requests
 import time
+import threading
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from collections import deque # ✅ deque 임포트 확인 (없으면 추가)
@@ -173,6 +174,38 @@ class ExecutionManager:
         self.executor.shutdown(wait=True)
 
 # ==========================================
+# 🚦 [Infrastructure] KIS 전역 호출량 제한기
+#   스캐너(30초 주기 전 종목)·수집기·봇 조회가 동시에 돌면
+#   KIS 개인앱 초당 한도(20건/s)를 넘겨 조용히 실패한다.
+#   모든 KIS 호출 직전에 acquire()로 슬라이딩 윈도우 통과를 보장.
+# ==========================================
+class RateLimiter:
+    """스레드 안전 슬라이딩 윈도우 리미터."""
+    def __init__(self, max_calls: int = 15, per_seconds: float = 1.0):
+        self.max_calls = max_calls
+        self.per = per_seconds
+        self._calls = deque()
+        self._lock = threading.Lock()
+
+    def acquire(self):
+        """호출 슬롯 확보까지 블로킹."""
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                while self._calls and now - self._calls[0] >= self.per:
+                    self._calls.popleft()
+                if len(self._calls) < self.max_calls:
+                    self._calls.append(now)
+                    return
+                wait = self.per - (now - self._calls[0])
+            time.sleep(max(wait, 0.01))
+
+
+# 한도 20/s 대비 보수적 15/s (토큰 발급 등 비계측 호출 여유분)
+kis_rate_limiter = RateLimiter(max_calls=15, per_seconds=1.0)
+
+
+# ==========================================
 # 🔐 [Manager] 토큰 및 API 관리자 (KIS)
 # ==========================================
 class KisAuthManager:
@@ -273,10 +306,12 @@ class KisAuthManager:
             params.update(extra_params)
 
         try:
+            kis_rate_limiter.acquire()
             res = global_session.get(url, headers=headers, params=params, timeout=timeout)
             data = res.json()
-            
+
             if data['rt_cd'] != '0':
+                logging.debug(f"KIS rt_cd!=0 ({path}, {clean_code}): {data.get('msg_cd')} {data.get('msg1')}")
                 return None
             return data
         except Exception as e:
@@ -287,45 +322,99 @@ class KisAuthManager:
 # 🤖 [Manager] 텔레그램 봇 관리자
 # ==========================================
 class TelegramBotManager:
+    MAX_LEN = 4000   # 텔레그램 한도 4096 — HTML 태그 여유분 감안한 보수적 분할 기준
+
     def __init__(self):
         self.token = TELEGRAM_BOT_TOKEN
 
-    # ✅ [Phase 2] stock_api.py에서 이관된 전송 로직
-    def send_message(self, chat_id: str, text: str, preview: bool = False, keyboard: Dict = None):
-        if not self.token: return
+    @staticmethod
+    def _split_text(text: str, limit: int = 4000) -> list:
+        """4096자 초과 메시지를 줄 경계에서 분할 (태그 절단 최소화)."""
+        if len(text) <= limit:
+            return [text]
+        chunks, cur = [], ""
+        for line in text.split("\n"):
+            while len(line) > limit:          # 한 줄 자체가 한도 초과 → 강제 절단
+                chunks.append(line[:limit])
+                line = line[limit:]
+            if len(cur) + len(line) + 1 > limit:
+                chunks.append(cur)
+                cur = line
+            else:
+                cur = f"{cur}\n{line}" if cur else line
+        if cur:
+            chunks.append(cur)
+        return chunks
 
+    def send_message(self, chat_id: str, text: str, preview: bool = False, keyboard: Dict = None) -> bool:
+        """모든 청크 발송 성공 시 True. DRY_RUN 환경변수 설정 시 발송 없이 True."""
+        if not self.token or not chat_id or not text:
+            return False
+        if os.getenv("DRY_RUN"):
+            logging.info(f"[DRY-RUN] → {chat_id}: {text[:100]!r} ({len(text)}자)")
+            return True
+
+        chunks = self._split_text(text, self.MAX_LEN)
+        if len(chunks) > 1:
+            logging.info(f"✂️ 텔레그램 장문 분할: {len(text)}자 → {len(chunks)}건 ({chat_id})")
+        all_ok = True
+        for i, chunk in enumerate(chunks):
+            # inline 키보드는 마지막 청크에만 부착
+            kb = keyboard if i == len(chunks) - 1 else None
+            all_ok = self._send_one(chat_id, chunk, preview, kb) and all_ok
+        return all_ok
+
+    def _send_one(self, chat_id: str, text: str, preview: bool, keyboard: Dict) -> bool:
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-        
         payload = {
-            "chat_id": chat_id, 
-            "text": text, 
-            "parse_mode": "HTML", 
-            "disable_web_page_preview": not preview 
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": not preview,
         }
-
         if keyboard:
             payload["reply_markup"] = keyboard
-        
-        try:
-            res = global_session.post(url, json=payload, timeout=10)
-            
-            # 속도 제한 재시도
-            if res.status_code == 429:
-                logging.warning("⚠️ 텔레그램 속도 제한 (429). 3초 대기 후 재시도.")
-                time.sleep(3)
+
+        for attempt in range(3):
+            try:
                 res = global_session.post(url, json=payload, timeout=10)
+            except Exception as e:
+                # global_session이 연결 계층 재시도를 이미 수행한 뒤의 실패
+                logging.error(f"⚠️ 텔레그램 연결 에러 ({chat_id}): {e}")
+                return False
 
-            # HTML 파싱 에러 시 텍스트 전송
+            if res.status_code == 200:
+                return True
+
+            if res.status_code == 429:
+                retry_after = 3
+                try:
+                    retry_after = int(res.json().get("parameters", {}).get("retry_after", 3))
+                except Exception:
+                    pass
+                logging.warning(f"⚠️ 텔레그램 429 ({chat_id}) — {retry_after}초 대기 ({attempt + 1}/3)")
+                time.sleep(min(retry_after, 60))
+                continue
+
             if res.status_code == 400 and "parse" in res.text.lower():
-                logging.warning(f"⚠️ HTML 파싱 에러 발생. 일반 텍스트로 전환 전송. ({res.text})")
-                payload["parse_mode"] = None 
-                global_session.post(url, json=payload, timeout=10)
-                
-            elif res.status_code != 200:
-                logging.error(f"⚠️ 텔레그램 전송 실패: {res.text}")
+                logging.warning(f"⚠️ HTML 파싱 에러 → 평문 재전송 ({chat_id}): {res.text[:150]}")
+                payload["parse_mode"] = None
+                continue
 
-        except Exception as e:
-            logging.error(f"⚠️ 텔레그램 연결 에러: {e}")
+            if res.status_code in (400, 403):
+                # chat not found / bot kicked / user blocked 등 — 재시도 무의미
+                logging.error(f"❌ 텔레그램 영구 실패 ({chat_id}, {res.status_code}): {res.text[:200]}")
+                return False
+
+            if res.status_code == 401:
+                logging.critical("🚨 텔레그램 토큰 인증 실패(401) — TELEGRAM_BOT_TOKEN 확인 필요")
+                return False
+
+            logging.error(f"⚠️ 텔레그램 전송 실패 ({chat_id}, {res.status_code}): {res.text[:200]}")
+            return False
+
+        logging.error(f"❌ 텔레그램 발송 포기 ({chat_id}) — 재시도 초과")
+        return False
 
 # ==========================================
 # 📊 [Manager] 구글 시트 관리자

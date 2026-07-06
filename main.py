@@ -166,6 +166,7 @@ class DartRoutingBot:
         self.history  = HistoryManager("sent_list.txt", max_len=2000)
         self.ai_executor = ThreadPoolExecutor(max_workers=2)
         self.session = get_session()
+        self._retry_counts: dict = {}   # rcept_no → 발송 전채널 실패 재시도 횟수
 
         # 시총 캐시 (메인 채널 필터링용)
         self._cap_cache: dict = {}   # stock_code(숫자) → market_cap
@@ -339,44 +340,51 @@ class DartRoutingBot:
                             detail = get_disclosure_detail(rcept_no, report_nm)
                             msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
 
-                            # ── 채널 라우팅 ──
+                            # ── 채널 라우팅 — 대상 확정 후 일괄 발송 (성공 여부 추적) ──
                             industry = COMPANY_TO_INDUSTRY.get(corp_name)
+                            _ind_cid = INDUSTRY_CHAT_IDS.get(industry) if industry else None
+                            _cid     = self._get_company_chat_id(corp_name, stock_code)
 
+                            targets = []
                             if level == 'urgent':
                                 # 긴급: 메인(시총 1000억↑) + 산업 + 기업
                                 if self._is_main_worthy(stock_code):
-                                    stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
-                                if industry and industry in INDUSTRY_CHAT_IDS:
-                                    stock_api.send_telegram(INDUSTRY_CHAT_IDS[industry], msg)
-                                _cid = self._get_company_chat_id(corp_name, stock_code)
+                                    targets.append(DEFAULT_CHAT_ID)
+                                if _ind_cid:
+                                    targets.append(_ind_cid)
                                 if _cid:
-                                    stock_api.send_telegram(_cid, msg)
-
+                                    targets.append(_cid)
                             elif level == 'major':
-                                # 중요: 산업 + 기업 (메인 제외)
-                                if industry and industry in INDUSTRY_CHAT_IDS:
-                                    stock_api.send_telegram(INDUSTRY_CHAT_IDS[industry], msg)
-                                _cid = self._get_company_chat_id(corp_name, stock_code)
+                                # 중요: 산업 + 기업 (+ 시장속보/공급계약·수주는 메인, 시총 1000억↑만)
+                                if _ind_cid:
+                                    targets.append(_ind_cid)
                                 if _cid:
-                                    stock_api.send_telegram(_cid, msg)
-                                # 시장 전체 중요 공시 + 공급계약/수주는 메인에도 (시총 1000억↑만)
+                                    targets.append(_cid)
                                 _to_main = is_market_wide or ("기재정정" not in report_nm and any(k in report_nm for k in ("공급계약", "수주")))
                                 if _to_main and self._is_main_worthy(stock_code):
-                                    stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
-
+                                    targets.append(DEFAULT_CHAT_ID)
                             elif level == 'skip':
                                 # 잡공시: 기업채널만 (산업/메인 제외)
-                                _cid = self._get_company_chat_id(corp_name, stock_code)
                                 if _cid:
-                                    stock_api.send_telegram(_cid, msg)
-
+                                    targets.append(_cid)
                             else:  # normal
                                 # 일반: 산업 + 기업 (메인 제외)
-                                if industry and industry in INDUSTRY_CHAT_IDS:
-                                    stock_api.send_telegram(INDUSTRY_CHAT_IDS[industry], msg)
-                                _cid = self._get_company_chat_id(corp_name, stock_code)
+                                if _ind_cid:
+                                    targets.append(_ind_cid)
                                 if _cid:
-                                    stock_api.send_telegram(_cid, msg)
+                                    targets.append(_cid)
+
+                            results = [stock_api.send_telegram(t, msg) for t in targets]
+
+                            # 전 채널 발송 실패 → history 미기록으로 다음 폴링에서 재시도 (최대 3회)
+                            if targets and not any(results):
+                                _n = self._retry_counts.get(rcept_no, 0) + 1
+                                self._retry_counts[rcept_no] = _n
+                                if _n < 3:
+                                    logging.warning(f"⚠️ [공시] 전 채널 발송 실패 — 재시도 {_n}/3: {corp_name} {report_nm}")
+                                    continue
+                                logging.error(f"❌ [공시] 발송 3회 실패 — 포기: {corp_name} {report_nm}")
+                            self._retry_counts.pop(rcept_no, None)
 
                             # ── AI 분석 (긴급/중요만) ── [임시 중지: 업데이트 후 재적용]
                             # Gemini 모델 폐기로 인해 분석 실패 → 임시 비활성화 (2026-06-25)
@@ -395,7 +403,8 @@ class DartRoutingBot:
                                     _bridge.log_notice(
                                         target=corp_name,
                                         content=f"[공시/{level}] {report_nm}",
-                                        sent_count=1, ok_count=1
+                                        sent_count=len(targets),
+                                        ok_count=sum(1 for r in results if r),
                                     )
                                 except Exception:
                                     pass

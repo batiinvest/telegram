@@ -151,7 +151,7 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
     returns: (price, chg_pct) or (None, None)
     """
     try:
-        from managers import kis_auth, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
+        from managers import kis_auth, kis_rate_limiter, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
         from datetime import datetime, timedelta, timezone
         import requests as req
 
@@ -179,6 +179,7 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
             "fid_input_date_2":        end_date,
             "fid_period_div_code":     "D",
         }
+        kis_rate_limiter.acquire()
         r = req.get(url, headers=headers, params=params, timeout=10)
         r.raise_for_status()
         body = r.json()

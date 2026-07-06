@@ -54,6 +54,48 @@ def batch_upsert(sb, table: str, records: list,
     return total
 
 
+# ── 부분 컬럼 배치 갱신 ────────────────────────────────────────────────────────
+
+def batch_update_existing(sb, table: str, records: list,
+                          key_cols: tuple = ('stock_code', 'base_date'),
+                          conflict_col: str = 'stock_code,base_date',
+                          chunk: int = 500) -> int:
+    """
+    존재하는 행만 부분 컬럼 upsert (행 단위 update 루프의 배치 대체).
+
+    upsert는 미존재 키에 스켈레톤 행(나머지 컬럼 null)을 만들어 버리므로,
+    존재 키를 먼저 조회해 걸러낸 뒤 upsert 한다. records의 각 dict는
+    key_cols를 포함하고 컬럼 구성이 동일해야 한다(PostgREST 벌크 제약).
+
+    Returns:
+        갱신(upsert) 건수 — 미존재로 스킵된 행은 제외
+    """
+    if not records:
+        return 0
+    k_code, k_date = key_cols
+    by_date: dict = {}
+    for r in records:
+        by_date.setdefault(r[k_date], []).append(r)
+
+    updatable = []
+    for d, rows in by_date.items():
+        codes = [r[k_code] for r in rows]
+        existing = set()
+        for i in range(0, len(codes), 500):
+            try:
+                res = sb.table(table).select(k_code) \
+                        .eq(k_date, d).in_(k_code, codes[i:i + 500]).execute()
+                existing.update(x[k_code] for x in (res.data or []))
+            except Exception as e:
+                log.error(f"[collect_utils] batch_update_existing 존재조회 오류 ({table} {d}): {e}")
+        updatable.extend(r for r in rows if r[k_code] in existing)
+
+    skipped = len(records) - len(updatable)
+    if skipped:
+        log.info(f"[collect_utils] {table} 미존재 {skipped}건 스킵 (스켈레톤 행 생성 방지)")
+    return batch_upsert(sb, table, updatable, conflict_col, chunk)
+
+
 # ── 환경변수 검증 ─────────────────────────────────────────────────────────────
 
 def require_env(*names: str) -> dict:

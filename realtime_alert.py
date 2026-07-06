@@ -184,7 +184,8 @@ class KisMyStockScanner:
         raw_code = COMPANY_CODES[name]
         chat_id = COMPANY_CHAT_IDS[name]
         
-        data = stock_api.get_raw_price(raw_code)
+        # max_age=0: 감시봇은 항상 신선값 (캐시를 채우는 공급자 — 뉴스/공시봇이 재사용)
+        data = stock_api.get_raw_price(raw_code, max_age=0)
         if not data: return
         
         try:

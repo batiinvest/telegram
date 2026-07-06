@@ -207,8 +207,36 @@ def _is_enabled(job_key: str) -> bool:
         return True
 
 
+# ── 잡 실행 결과 기록 (일일 운영 요약·실패 알림용, 인메모리) ──────────────────
+_JOB_RESULTS: dict = {}    # fn 이름 → {'date','time','ok','error','elapsed'}
+_FAIL_ALERTED: set = set() # (date, fn 이름) — 동일 잡 실패 알림 하루 1회 제한
+
+
+def _record_job(fn_name: str, ok: bool, error=None, elapsed: float = 0.0):
+    _JOB_RESULTS[fn_name] = {
+        'date':    datetime.date.today().isoformat(),
+        'time':    datetime.datetime.now().strftime('%H:%M'),
+        'ok':      ok,
+        'error':   str(error)[:200] if error else None,
+        'elapsed': round(elapsed, 1),
+    }
+
+
+def _notify_job_failure(fn_name: str, error):
+    """잡 실패를 관리자 방으로 즉시 알림 (잡·일자당 1회)."""
+    key = (datetime.date.today().isoformat(), fn_name)
+    if key in _FAIL_ALERTED:
+        return
+    _FAIL_ALERTED.add(key)
+    try:
+        target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
+        stock_api.send_telegram(target, f"❌ <b>[잡 실패] {fn_name}</b>\n{str(error)[:300]}")
+    except Exception:
+        pass
+
+
 def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
-    """Job 함수 데코레이터: 휴장일/평일 체크 + DB 활성화 체크를 한곳에서 처리.
+    """Job 함수 데코레이터: 휴장일/평일 체크 + DB 활성화 체크 + 결과 기록/실패 알림.
 
     Args:
         key:          DB 활성화 체크 키 (None이면 체크 안 함)
@@ -225,7 +253,15 @@ def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
             if key is not None and not _is_enabled(key):
                 logging.info(f"⏸ [{key}] 비활성화 (DB 설정)")
                 return
-            return fn(*args, **kwargs)
+            start = time.time()
+            try:
+                result = fn(*args, **kwargs)
+                _record_job(fn.__name__, True, elapsed=time.time() - start)
+                return result
+            except Exception as e:
+                logging.error(f"❌ [{fn.__name__}] 잡 실행 실패: {e}", exc_info=True)
+                _record_job(fn.__name__, False, e, time.time() - start)
+                _notify_job_failure(fn.__name__, e)
         return wrapper
     return decorator
 
@@ -343,6 +379,7 @@ def job_daily_closing():
     )
 
 
+@_job()
 def job_sync_listed_companies():
     """토요일 새벽 1시 — 코스피+코스닥 전체 상장사 동기화 (신규/사명변경/상폐)"""
     if not _COLLECTOR_OK:
@@ -357,6 +394,7 @@ def job_sync_listed_companies():
         logging.error(f"❌ [상장사동기화] 오류: {e}")
 
 
+@_job()
 def job_cleanup_market_data():
     """토요일 새벽 — market_data 정리
     - 모니터링 종목: 90일 보존
@@ -580,6 +618,7 @@ def _preprocess_disclosures(all_disc_records: list, sb) -> list:
     return filtered
 
 
+@_job()
 def job_collect_financials():
     """평일 18:30 — 오늘 DART 공시된 종목만 재무 수집"""
     if not _COLLECTOR_OK:
@@ -747,28 +786,37 @@ def job_collect_financials():
             # ── 2. 전체 공시 → daily_disclosures 테이블 (app_config JSON 탈출) ──
             _today_str = datetime.date.today().isoformat()
 
-            # 오늘 기존 데이터 삭제 후 재삽입 (전체 갱신)
+            # 행 구성을 먼저 끝낸 뒤 삭제→삽입 — 프론트에 빈 데이터가 노출되는 창 최소화
+            rows_to_insert = [{
+                'base_date':       _today_str,
+                'corp_code':       d.get('corp_code') or '',
+                'corp_name':       d.get('corp_name') or '',
+                'report_nm':       d.get('report_nm') or '',
+                'rcept_no':        d.get('rcept_no') or None,
+                'rcept_dt':        d.get('rcept_dt') or None,
+                'category':        d.get('category') or '기타',
+                'market_cap':      d.get('market_cap') or None,
+                'insider_summary': d.get('insider_summary') or None,
+            } for d in processed_disclosures]
+
             sb.table('daily_disclosures').delete().eq('base_date', _today_str).execute()
 
-            if processed_disclosures:
-                rows_to_insert = []
-                for d in processed_disclosures:
-                    rows_to_insert.append({
-                        'base_date':       _today_str,
-                        'corp_code':       d.get('corp_code') or '',
-                        'corp_name':       d.get('corp_name') or '',
-                        'report_nm':       d.get('report_nm') or '',
-                        'rcept_no':        d.get('rcept_no') or None,
-                        'rcept_dt':        d.get('rcept_dt') or None,
-                        'category':        d.get('category') or '기타',
-                        'market_cap':      d.get('market_cap') or None,
-                        'insider_summary': d.get('insider_summary') or None,
-                    })
-                # 100개 배치 삽입
-                for i in range(0, len(rows_to_insert), 100):
-                    sb.table('daily_disclosures') \
-                      .insert(rows_to_insert[i:i + 100]) \
-                      .execute()
+            # 청크별 2회 재시도 — 부분 저장(중간 실패로 일부 공시 유실) 감지·복구
+            _failed_chunks = 0
+            for i in range(0, len(rows_to_insert), 100):
+                _chunk_rows = rows_to_insert[i:i + 100]
+                for _attempt in (1, 2):
+                    try:
+                        sb.table('daily_disclosures').insert(_chunk_rows).execute()
+                        break
+                    except Exception as _ins_e:
+                        if _attempt == 2:
+                            _failed_chunks += 1
+                            logging.error(f"❌ [공시저장] 청크 {i // 100} 삽입 실패(2회): {_ins_e}")
+                        else:
+                            time.sleep(2)
+            if _failed_chunks:
+                logging.error(f"❌ [공시저장] {_failed_chunks}개 청크 유실 — daily_disclosures 부분 저장 상태")
 
             logging.info(
                 f"📊 [공시저장] 실적공시 {len(today_corps)}건 / "
@@ -870,6 +918,7 @@ def job_save_trend_flags(year: str = None, quarter: str = None):
         logging.error(f"❌ [추세신호] 오류: {e}")
 
 
+@_job()
 def job_collect_macro():
     """글로벌 매크로 데이터 수집 (지수/환율/원자재) — 06:30 아침 수집 시 메인 채널 발송 포함"""
     if not _is_enabled('collect_macro'):
@@ -997,6 +1046,7 @@ def job_collect_us_etf():
         logging.error(f"❌ US ETF 수집 실패: {e}")
 
 
+@_job()
 def job_collect_market():
     """평일 장중 — KIS 모니터링 종목(306개) 시장 데이터 수집"""
     if datetime.datetime.now().weekday() >= 5 or market_timer.is_kr_holiday():
@@ -1099,6 +1149,7 @@ def _check_market_warnings():
         logging.debug(f"시장경보 체크 오류: {e}")
 
 
+@_job()
 def job_collect_market_closing():
     """평일 장 마감 후 (15:40) — 전체 상장사 시장 데이터 수집"""
     if market_timer.is_kr_holiday():  # 주말/공휴일 스킵
@@ -1227,6 +1278,7 @@ def job_market_summary():
         logging.error(f"❌ [시장요약] 오류: {e}")
 
 
+@_job()
 def job_watchlist_alert():
     """
     장 마감 후 — watchlist 종목의 관심가/목표가 도달 여부 체크 & 개별 알림.
@@ -1374,6 +1426,7 @@ def job_kind_ir():
         logging.error(f"❌ [KIND IR] 오류: {e}")
 
 
+@_job()
 def job_pro_channel_check():
     """매일 09:00 — 프로 채널 구독 만료 멤버 퇴장 + D-3 예고 알림"""
     if not _PRO_OK:
@@ -1389,6 +1442,26 @@ def job_pro_channel_check():
         )
     except Exception as e:
         logging.error(f"❌ [프로채널] 만료 체크 오류: {e}")
+
+
+@_job()
+def job_daily_ops_summary():
+    """매일 19:50 — 오늘 잡 실행 결과 요약을 관리자 방으로 발송 (운영 가시성)."""
+    today = datetime.date.today().isoformat()
+    rows = [(k, v) for k, v in sorted(_JOB_RESULTS.items()) if v.get('date') == today]
+    if not rows:
+        return
+    fails = [(k, v) for k, v in rows if not v['ok']]
+    slows = [(k, v) for k, v in rows if v['ok'] and v['elapsed'] >= 300]
+    lines = [f"🗒 <b>[운영 요약] {today}</b> — 실행 {len(rows)}개 / 실패 {len(fails)}개"]
+    for k, v in fails:
+        lines.append(f"❌ {v['time']} {k}: {v['error']}")
+    for k, v in slows:
+        lines.append(f"🐢 {v['time']} {k}: {v['elapsed']:.0f}초 소요")
+    if not fails and not slows:
+        lines.append("✅ 전 잡 정상")
+    target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
+    stock_api.send_telegram(target, "\n".join(lines))
 
 
 @_job("saturday")
@@ -1486,6 +1559,7 @@ def run_scheduler():
     schedule.every().day.at("18:30").do(job_collect_financials)        # 장 마감 후 재무수집 (공시 기반)
     schedule.every().day.at("18:35").do(job_collect_analyst_opinions)  # 투자의견 (장후)
     schedule.every().day.at("18:40").do(job_collect_estimates)        # 종목추정실적 (미래 매출/영업이익 + 상향감지)
+    schedule.every().day.at("19:50").do(job_daily_ops_summary)        # 일일 운영 요약 (잡 성공/실패/소요시간) → 관리자 방
     schedule.every().saturday.at("10:00").do(job_saturday_main_ranking)
     schedule.every().saturday.at("10:30").do(job_saturday_industry_report)
     schedule.every().saturday.at("11:00").do(job_saturday_flow_summary)   # 주간 수급 요약
@@ -1558,6 +1632,58 @@ def restart_thread(target_func, name):
 def _start_daemon(target, name: str, args: tuple = ()):
     """daemon=True 스레드 생성 후 즉시 시작. threading.Thread 4줄 스폰 패턴 통일."""
     threading.Thread(target=target, name=name, args=args, daemon=True).start()
+
+
+# ══════════════════════════════════════════
+# 📡 수동 트리거 ts-flag 러너 + 스펙 테이블
+#   대시보드 버튼 → app_config 타임스탬프 플래그 → 백그라운드 실행.
+#   새 플래그 추가 시 러너 함수 + 테이블 한 줄이면 끝.
+# ══════════════════════════════════════════
+def _manual_market_all():
+    try:
+        ok, fail = run_market(all_listed=True)
+        logging.info(f"📡 [시장수집-전체] 완료: 성공 {ok}개, 실패 {fail}개")
+    except Exception as _me:
+        logging.error(f"❌ [시장수집-전체] 오류: {_me}")
+
+
+def _manual_etf_collect():
+    try:
+        import collect_us_etf
+        collect_us_etf.collect_and_save(days=90)
+        logging.info("✅ [US ETF] 수집 완료")
+    except Exception as _ee:
+        logging.error(f"❌ [US ETF] 수집 오류: {_ee}")
+
+
+def _manual_leading_stocks():
+    try:
+        from leading_stocks_generator import run as run_leading
+        run_leading()
+        logging.info("✅ [주도주] 수동 생성 완료")
+    except Exception as _le:
+        logging.error(f"❌ [주도주] 수동 생성 오류: {_le}")
+
+
+def _manual_sector_summary():
+    try:
+        from collect_sector_summary import run as run_ss
+        run_ss()
+        logging.info("✅ [섹터요약] 수동 집계 완료")
+    except Exception as _sse:
+        logging.error(f"❌ [섹터요약] 수동 집계 오류: {_sse}")
+
+
+# (플래그 키, 유효 윈도우초, 수집모듈 필요, 휴장일 스킵, [(스레드명, 실행함수), ...])
+_TS_FLAG_JOBS = [
+    ('run_market_all_flag',     300, True,  True,  [("Thread-ManualMarketAll", _manual_market_all)]),
+    ('run_macro_flag',          180, True,  False, [("Thread-ManualMacro",     lambda: job_collect_macro())]),
+    ('etf_collect_flag',        300, False, False, [("Thread-EtfCollect",      _manual_etf_collect)]),
+    ('run_flow_flag',           300, True,  False, [("Thread-ManualFlow",      lambda: job_collect_foreign_institution()),
+                                                    ("Thread-ManualInvestor",  lambda: job_collect_investor_trend())]),
+    ('run_leading_stocks_flag', 300, False, False, [("Thread-LeadingStocks",   _manual_leading_stocks)]),
+    ('run_sector_summary_flag', 300, False, False, [("Thread-SectorSummary",   _manual_sector_summary)]),
+]
 
 
 def _run_watchdog_flags(threads: dict):
@@ -1687,70 +1813,25 @@ def _run_watchdog_flags(threads: dict):
         except Exception as _ce:
             logging.debug(f"기업정보 수집 요청 체크 오류: {_ce}")
 
-    # ── run_market_all_flag — 전체 상장사 시장 데이터 수동 수집 ──
-    if _BRIDGE_OK and _COLLECTOR_OK:
-        try:
-            _sb_mkt      = _bridge._get_client()
-            _mkt_elapsed = _read_ts_flag(_sb_mkt, 'run_market_all_flag')
-            if _mkt_elapsed is not None and 0 < _mkt_elapsed < 300:
-                _clear_ts_flag(_sb_mkt, 'run_market_all_flag')
-                if market_timer.is_kr_holiday():
-                    logging.info("⏸ [시장수집-전체] 주말/공휴일 — 수동 트리거 무시")
-                else:
-                    logging.info("📡 [시장수집-전체] 수동 트리거 감지 → 전체 상장사 수집 시작")
-                    def _run_market_all():
-                        try:
-                            ok, fail = run_market(all_listed=True)
-                            logging.info(f"📡 [시장수집-전체] 완료: 성공 {ok}개, 실패 {fail}개")
-                        except Exception as _me:
-                            logging.error(f"❌ [시장수집-전체] 오류: {_me}")
-                    _start_daemon(_run_market_all, "Thread-ManualMarketAll")
-        except Exception as _mktfe:
-            logging.debug(f"market_all_flag 체크 오류: {_mktfe}")
-
-    # ── run_macro_flag — 매크로 즉시 수집 ──
-    if _BRIDGE_OK and _COLLECTOR_OK:
-        try:
-            _sb_m      = _bridge._get_client()
-            _m_elapsed = _read_ts_flag(_sb_m, 'run_macro_flag')
-            if _m_elapsed is not None and _m_elapsed < 180:
-                logging.info("📡 [매크로] 수동 수집 트리거 감지 → job_collect_macro 실행")
-                _clear_ts_flag(_sb_m, 'run_macro_flag')
-                _start_daemon(job_collect_macro, "Thread-ManualMacro")
-        except Exception as _mfe:
-            logging.debug(f"macro_flag 체크 오류: {_mfe}")
-
-    # ── etf_collect_flag — US ETF 수집 트리거 ──
+    # ── 수동 트리거 ts-flag 일괄 처리 (_TS_FLAG_JOBS 테이블 드리븐) ──
     if _BRIDGE_OK:
-        try:
-            _sb_etf      = _bridge._get_client()
-            _etf_elapsed = _read_ts_flag(_sb_etf, 'etf_collect_flag')
-            if _etf_elapsed is not None and 0 < _etf_elapsed < 300:
-                logging.info("📡 [US ETF] 수집 트리거 감지 → collect_us_etf 실행")
-                _clear_ts_flag(_sb_etf, 'etf_collect_flag')
-                def _run_etf_collect():
-                    try:
-                        import collect_us_etf
-                        collect_us_etf.collect_and_save(days=90)
-                        logging.info("✅ [US ETF] 수집 완료")
-                    except Exception as _ee:
-                        logging.error(f"❌ [US ETF] 수집 오류: {_ee}")
-                _start_daemon(_run_etf_collect, "Thread-EtfCollect")
-        except Exception as _etfe:
-            logging.debug(f"etf_collect_flag 체크 오류: {_etfe}")
-
-    # ── run_flow_flag — 기관/외국인 수급 즉시 수집 ──
-    if _BRIDGE_OK and _COLLECTOR_OK:
-        try:
-            _sb_fl      = _bridge._get_client()
-            _fl_elapsed = _read_ts_flag(_sb_fl, 'run_flow_flag')
-            if _fl_elapsed is not None and 0 < _fl_elapsed < 300:
-                logging.info("📡 [수급수집] 수동 트리거 감지 → 랭킹(top-N) + 종목별 투자자 순매수 실행")
-                _clear_ts_flag(_sb_fl, 'run_flow_flag')
-                _start_daemon(job_collect_foreign_institution, "Thread-ManualFlow")
-                _start_daemon(job_collect_investor_trend, "Thread-ManualInvestor")
-        except Exception as _fle:
-            logging.debug(f"run_flow_flag 체크 오류: {_fle}")
+        for _fkey, _fwin, _fneed_col, _fholiday, _factions in _TS_FLAG_JOBS:
+            if _fneed_col and not _COLLECTOR_OK:
+                continue
+            try:
+                _sb_f     = _bridge._get_client()
+                _felapsed = _read_ts_flag(_sb_f, _fkey)
+                if _felapsed is None or not (0 < _felapsed < _fwin):
+                    continue
+                _clear_ts_flag(_sb_f, _fkey)
+                if _fholiday and market_timer.is_kr_holiday():
+                    logging.info(f"⏸ [{_fkey}] 주말/공휴일 — 수동 트리거 무시")
+                    continue
+                logging.info(f"📡 [{_fkey}] 수동 트리거 감지")
+                for _tname, _tfn in _factions:
+                    _start_daemon(_tfn, _tname)
+            except Exception as _fe:
+                logging.debug(f"{_fkey} 체크 오류: {_fe}")
 
     # ── run_disclosure_flag — 공시수집 즉시 실행 ──
     if _BRIDGE_OK:
@@ -1767,44 +1848,6 @@ def _run_watchdog_flags(threads: dict):
                 _start_daemon(_run_disclosure, "Thread-ManualDisclosure")
         except Exception as _de:
             logging.debug(f"disclosure_flag 체크 오류: {_de}")
-
-    # ── run_leading_stocks_flag — 주도주 탐색기 수동 트리거 ──
-    if _BRIDGE_OK:
-        try:
-            _sb_ls      = _bridge._get_client()
-            _ls_elapsed = _read_ts_flag(_sb_ls, 'run_leading_stocks_flag')
-            if _ls_elapsed is not None and 0 < _ls_elapsed < 300:
-                _clear_ts_flag(_sb_ls, 'run_leading_stocks_flag')
-                logging.info("📡 [주도주] 수동 트리거 감지 → leading_stocks_generator 실행")
-                def _run_leading_stocks():
-                    try:
-                        from leading_stocks_generator import run as run_leading
-                        run_leading()
-                        logging.info("✅ [주도주] 수동 생성 완료")
-                    except Exception as _le:
-                        logging.error(f"❌ [주도주] 수동 생성 오류: {_le}")
-                _start_daemon(_run_leading_stocks, "Thread-LeadingStocks")
-        except Exception as _lse:
-            logging.error(f"❌ [주도주] 플래그 체크 오류: {_lse}")
-
-    # ── run_sector_summary_flag — 산업별 요약·신호 수동 트리거 ──
-    if _BRIDGE_OK:
-        try:
-            _sb_ss      = _bridge._get_client()
-            _ss_elapsed = _read_ts_flag(_sb_ss, 'run_sector_summary_flag')
-            if _ss_elapsed is not None and 0 < _ss_elapsed < 300:
-                _clear_ts_flag(_sb_ss, 'run_sector_summary_flag')
-                logging.info("📡 [섹터요약] 수동 트리거 감지 → collect_sector_summary 실행")
-                def _run_sector_summary():
-                    try:
-                        from collect_sector_summary import run as run_ss
-                        run_ss()
-                        logging.info("✅ [섹터요약] 수동 집계 완료")
-                    except Exception as _sse:
-                        logging.error(f"❌ [섹터요약] 수동 집계 오류: {_sse}")
-                _start_daemon(_run_sector_summary, "Thread-SectorSummary")
-        except Exception as _ssfe:
-            logging.debug(f"sector_summary_flag 체크 오류: {_ssfe}")
 
     # ── pro_action_flag — 프로 채널 초대/퇴장/연장 ──
     if _PRO_OK:

@@ -158,6 +158,8 @@ class NaverNewsBot:
         self._event_cache: Dict[str, datetime.datetime] = {}
         self._event_cache_ttl = datetime.timedelta(hours=6)  # 같은 이벤트 6시간 내 재발송 방지
 
+        self._send_retry: Dict[str, int] = {}  # link → 전채널 발송 실패 재시도 횟수
+
         self.session     = get_session()
         self.key_index   = 0
         self.api_keys    = NAVER_KEYS  # config에서 미설정 슬롯 필터링됨 — 빈 리스트 가능
@@ -423,26 +425,38 @@ class NaverNewsBot:
                     )
 
                     industry = COMPANY_TO_INDUSTRY.get(company_name)
+                    _results = []
                     if industry and industry in INDUSTRY_CHAT_IDS:
-                        stock_api.send_telegram(
+                        _results.append(stock_api.send_telegram(
                             INDUSTRY_CHAT_IDS[industry], msg,
                             preview=True, keyboard=COMMON_BUTTON
-                        )
+                        ))
                     # stock_api.get_company_chat_id()로 통일
                     # — 종목명 변경 시 stock_code fallback 포함
                     _cid = stock_api.get_company_chat_id(company_name)
                     if _cid:
-                        stock_api.send_telegram(
+                        _results.append(stock_api.send_telegram(
                             _cid, msg,
                             preview=True, keyboard=COMMON_BUTTON
-                        )
+                        ))
+
+                    # 전 채널 발송 실패 → 링크 미기록으로 다음 사이클 재시도 (최대 2회)
+                    if _results and not any(_results):
+                        _n = self._send_retry.get(link, 0) + 1
+                        self._send_retry[link] = _n
+                        if _n < 2:
+                            logging.warning(f"⚠️ [뉴스] 전 채널 발송 실패 — 재시도 예정: {title}")
+                            continue
+                        logging.error(f"❌ [뉴스] 발송 2회 실패 — 포기: {title}")
+                    self._send_retry.pop(link, None)
 
                     if _BRIDGE_OK:
                         try:
                             _bridge.log_notice(
                                 target=company_name,
                                 content=f"[뉴스] {title}",
-                                sent_count=1, ok_count=1
+                                sent_count=len(_results),
+                                ok_count=sum(1 for r in _results if r),
                             )
                         except Exception:
                             pass

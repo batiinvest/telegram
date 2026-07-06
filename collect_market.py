@@ -27,7 +27,7 @@ load_dotenv()
 
 from db_client import get_supabase_client
 from db_utils import fetch_all_pages as _fetch_all_pages
-from collect_utils import batch_upsert
+from collect_utils import batch_upsert, batch_update_existing
 
 # 기존 managers, stock_api 활용
 try:
@@ -198,28 +198,24 @@ def calculate_returns(sb, target_codes: list = None, target_date: str = None):
         for code, prices in hist.items():
             if len(prices) < 2:
                 continue
-            current_price = prices[-1][1]
-            if not current_price:
+            last_date, current_price = prices[-1]
+            # 오늘 행이 없는 종목은 스킵 — upsert가 스켈레톤 행을 만들지 않도록
+            if not current_price or last_date != today_str:
                 continue
-            row_update = {"stock_code": code, "base_date": today_str}
+            # PostgREST 벌크는 행마다 컬럼 구성이 같아야 함 → 미달 기간은 None
+            row_update = {"stock_code": code, "base_date": today_str,
+                          "week_return": None, "month_return": None,
+                          "quarter_return": None, "year_return": None}
             for col, days in PERIODS.items():
                 if len(prices) >= days + 1:
                     past_price = prices[-(days + 1)][1]
                     if past_price:
-                        ret = round((current_price - past_price) / past_price * 100, 2)
-                        row_update[f"{col}_return"] = ret
+                        row_update[f"{col}_return"] = round(
+                            (current_price - past_price) / past_price * 100, 2)
             updates.append(row_update)
 
-        for j in range(0, len(updates), 50):
-            for upd in updates[j:j+50]:
-                try:
-                    code = upd.pop('stock_code')
-                    date = upd.pop('base_date')
-                    sb.table("market_data").update(upd) \
-                        .eq("stock_code", code).eq("base_date", date).execute()
-                    updated += 1
-                except Exception as e:
-                    log.error(f"[수익률] update 오류: {e}")
+        # 오늘 행 존재가 위에서 보장되므로 부분 컬럼 upsert = update로 동작
+        updated += batch_upsert(sb, "market_data", updates, "stock_code,base_date", chunk=500)
 
     log.info(f"[수익률] 완료: {updated}개 종목 업데이트")
 
@@ -308,7 +304,7 @@ def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
     - hprc_near_rate < 0    → 신고가 근접 (미갱신)
     market_code: 0000=전체, 0001=거래소, 1001=코스닥
     """
-    from managers import kis_auth, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
+    from managers import kis_auth, kis_rate_limiter, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
     import requests as req
 
     token = kis_auth.get_token()
@@ -340,6 +336,7 @@ def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
     }
 
     try:
+        kis_rate_limiter.acquire()
         res = req.get(url, headers=headers, params=params, timeout=10)
         data = res.json()
         if data.get('rt_cd') != '0':
@@ -422,20 +419,18 @@ def save_new_high_to_db(rows: list[dict], base_date: str, sb_client=None):
     except Exception as e:
         logging.warning(f"[신고가] 초기화 실패 (이어서 진행): {e}")
 
-    # ② near-new-highlow API 결과만 재설정
-    updated = 0
+    # ② near-new-highlow API 결과만 재설정 (존재 행만 배치 upsert — 행 단위 update 제거)
+    records = []
     for r in rows:
-        code = r['code'].strip()
         cls_code  = r.get('new_hgpr_code', '')
-        cls_label = {'1':'신고가', '0':'신고가 근접'}.get(cls_code, cls_code)
-        upd = {'hgpr_cls_code': cls_label, 'hgpr_cls': cls_label}
-        try:
-            res = sb_client.table('market_data').update(upd) \
-                .eq('stock_code', code).eq('base_date', base_date).execute()
-            if res.data:
-                updated += len(res.data)
-        except Exception as e:
-            logging.debug(f"[신고가] {code} 업데이트 실패: {e}")
+        cls_label = {'1': '신고가', '0': '신고가 근접'}.get(cls_code, cls_code)
+        records.append({
+            'stock_code':    r['code'].strip(),
+            'base_date':     base_date,
+            'hgpr_cls_code': cls_label,
+            'hgpr_cls':      cls_label,
+        })
+    updated = batch_update_existing(sb_client, 'market_data', records)
     logging.info(f"[신고가] {updated}/{len(rows)}개 market_data 업데이트")
 
 
@@ -472,7 +467,7 @@ def fetch_foreign_institution(
     """기관/외국인 매매종목 가집계 조회
     장중 집계 시간: 외국인 09:30/11:20/13:20/14:30 / 기관 10:00/11:20/13:20/14:30
     """
-    from managers import kis_auth, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
+    from managers import kis_auth, kis_rate_limiter, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
     import requests as req
 
     token = kis_auth.get_token()
@@ -498,6 +493,7 @@ def fetch_foreign_institution(
     }
 
     try:
+        kis_rate_limiter.acquire()
         res = req.get(url, headers=headers, params=params, timeout=10)
         data = res.json()
         if data.get('rt_cd') != '0':
@@ -564,22 +560,24 @@ def collect_foreign_institution() -> dict:
             else:
                 all_rows[r['code']] = r
 
+        # foreign_net_buy: 외국인 기준 API(frgn)에 포함된 종목만 갱신.
+        # 기관 기준 API(orgn)의 frgn_ntby_qty는 부정확(0)할 수 있어 덮어쓰지 않음.
+        # PostgREST 벌크는 컬럼 구성이 같아야 하므로 두 그룹으로 나눠 배치.
+        rec_both, rec_orgn_only = [], []
         for code, r in all_rows.items():
-            try:
-                upd = {}
-                # foreign_net_buy: 외국인 기준 API(frgn)에 포함된 종목만 갱신.
-                # 기관 기준 API(orgn)에서 반환된 frgn_ntby_qty는 부정확(0)할 수 있어
-                # 기존 DB 값을 덮어쓰지 않음.
-                if code in frgn_codes_set and r.get('frgn_net_buy') is not None:
-                    upd['foreign_net_buy'] = r['frgn_net_buy']
-                if r.get('orgn_net_buy') is not None:
-                    upd['institution_net_buy'] = r['orgn_net_buy']
-                if upd:
-                    res = sb_client.table('market_data').update(upd)                         .eq('stock_code', code).eq('base_date', today).execute()
-                    if res.data:
-                        updated += 1
-            except Exception as e:
-                logging.warning(f"[수급] {code} 업데이트 실패: {e}")
+            if code in frgn_codes_set and r.get('frgn_net_buy') is not None:
+                rec_both.append({
+                    'stock_code': code, 'base_date': today,
+                    'foreign_net_buy':     r['frgn_net_buy'],
+                    'institution_net_buy': r.get('orgn_net_buy'),
+                })
+            elif r.get('orgn_net_buy') is not None:
+                rec_orgn_only.append({
+                    'stock_code': code, 'base_date': today,
+                    'institution_net_buy': r['orgn_net_buy'],
+                })
+        updated += batch_update_existing(sb_client, 'market_data', rec_both)
+        updated += batch_update_existing(sb_client, 'market_data', rec_orgn_only)
         logging.info(f"[수급] {updated}개 market_data 수급 업데이트")
 
     return {
@@ -679,17 +677,14 @@ def collect_investor_trend(all_listed: bool = False, max_workers: int = 5) -> tu
                 failed += 1
             time.sleep(0.1)   # KIS rate limit 완화
 
-    updated = 0
-    for r in results:
-        try:
-            res = sb.table("market_data").update({
-                "foreign_net_buy":     r['foreign'],
-                "institution_net_buy": r['institution'],
-            }).eq("stock_code", r['code']).eq("base_date", r['base_date']).execute()
-            if res.data:
-                updated += 1
-        except Exception as e:
-            log.warning(f"[투자자수급] {r['code']} 업데이트 실패: {e}")
+    records = [{
+        "stock_code":          r['code'],
+        "base_date":           r['base_date'],
+        "foreign_net_buy":     r['foreign'],
+        "institution_net_buy": r['institution'],
+    } for r in results]
+    # 존재 행만 배치 upsert — KIS 반환 거래일에 해당 행이 없으면 스킵 (기존 update no-op과 동일)
+    updated = batch_update_existing(sb, "market_data", records)
 
     log.info(f"[투자자수급] 완료: {updated}개 갱신 / 조회·미매칭 {failed}개")
     return updated, failed
@@ -779,7 +774,7 @@ def backfill_market(days: int = 90, max_workers: int = 3,
 
     from_date/to_date: 'YYYY-MM-DD' 형식으로 날짜 범위 지정 가능
     """
-    from managers import kis_auth, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
+    from managers import kis_auth, kis_rate_limiter, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
     import requests as req
     import datetime
 
@@ -829,6 +824,7 @@ def backfill_market(days: int = 90, max_workers: int = 3,
             'FID_ORG_ADJ_PRC':        '1',  # 원주가 — market_data 원주가 관행 통일(일일·stock_api·backfill_market_90d)
         }
         try:
+            kis_rate_limiter.acquire()
             res = req.get(
                 f'{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice',
                 headers=headers, params=params, timeout=10
@@ -980,7 +976,7 @@ def fetch_analyst_opinions(stock_code: str, corp_name: str,
     종목별 증권사 투자의견 조회
     from_date/to_date: 'YYYYMMDD' 형식, 기본값 오늘
     """
-    from managers import kis_auth, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
+    from managers import kis_auth, kis_rate_limiter, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
     import requests as req
 
     token = kis_auth.get_token()
@@ -1007,6 +1003,7 @@ def fetch_analyst_opinions(stock_code: str, corp_name: str,
     }
 
     try:
+        kis_rate_limiter.acquire()
         res = req.get(
             f'{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/invest-opinion',
             headers=headers, params=params, timeout=10
