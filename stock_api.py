@@ -926,7 +926,7 @@ def get_market_scoreboard(shared_prices: dict = None, breadth: str = None) -> st
         return f"<b>{name}</b> {p:,.2f} ({icon}{fmt_change_pct(r)})"
 
     market_summary = (
-        f"📉 <b>[Market Summary]</b>\n"
+        f"📊 <b>[지수]</b>\n"
         f"{fmt_idx(kospi, '1. 코스피')}\n"
         f"{fmt_idx(kosdaq, '2. 코스닥')}\n"
     )
@@ -985,9 +985,8 @@ def get_market_scoreboard(shared_prices: dict = None, breadth: str = None) -> st
 
     for i, sec in enumerate(sector_data):
         rank = i + 1
-        r_arrow = get_weather_icon(sec['rate'])
-        r_str = f"+{sec['rate']:.2f}" if sec['rate'] > 0 else f"{sec['rate']:.2f}"
-        msg += f"{rank}. <b>{sec['name']}</b> {r_arrow} {r_str}%\n"
+        r_icon = '🔺' if sec['rate'] > 0 else '🔻' if sec['rate'] < 0 else '➖'
+        msg += f"{rank}. <b>{sec['name']}</b> {r_icon} {fmt_change_pct(sec['rate'])}\n"
 
     msg += f"════════════\n💡 <b>Tip:</b> 상세 분석은 각 산업방에서 <i>/업황</i> 또는 <i>/자금</i>"
     return msg
@@ -1582,16 +1581,20 @@ def get_daily_flow_summary(sb_client) -> str:
     def _top(key, rev, n=3):
         return sorted(flows, key=lambda x: x[key], reverse=rev)[:n]
 
-    def _line(items, key):
-        return " · ".join(f"{x['name']} {_amt(x[key])}" for x in items if x['name'])
+    def _block(label, items, key):
+        lines = [label]
+        for x in items:
+            if x['name']:
+                lines.append(f"  {x['name']} {_amt(x[key])}")
+        return "\n".join(lines)
 
-    return (
-        f"💰 <b>[오늘의 수급]</b>\n"
-        f"외국인 🔺 {_line(_top('f', True), 'f')}\n"
-        f"외국인 🔻 {_line(_top('f', False), 'f')}\n"
-        f"기관 🔺 {_line(_top('i', True), 'i')}\n"
-        f"기관 🔻 {_line(_top('i', False), 'i')}"
-    )
+    return "\n".join([
+        "💰 <b>[오늘의 수급]</b>",
+        _block("🔺 <b>외국인 순매수</b>", _top('f', True), 'f'),
+        _block("🔻 <b>외국인 순매도</b>", _top('f', False), 'f'),
+        _block("🔺 <b>기관 순매수</b>", _top('i', True), 'i'),
+        _block("🔻 <b>기관 순매도</b>", _top('i', False), 'i'),
+    ])
 
 
 def get_weekly_flow_summary(sb_client) -> str:
