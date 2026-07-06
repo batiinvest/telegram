@@ -58,6 +58,15 @@ except ImportError as _pe:
     _PRO_OK = False
     logging.warning(f"⚠️ [Pro] pro_channel 모듈 없음 (무시): {_pe}")
 
+# ✅ [추가] 대시보드 봇 요청 큐 (멤버 동기화·공지 발송 위임 — bot_requests 테이블)
+try:
+    import bot_requests as _botreq
+    _BOTREQ_OK = True
+    logging.info("✅ [BotReq] 봇 요청 큐 모듈 로드 완료")
+except ImportError as _bqe:
+    _BOTREQ_OK = False
+    logging.warning(f"⚠️ [BotReq] bot_requests 모듈 없음 (무시): {_bqe}")
+
 # ✅ [추가] KIND IR자료 수집 모듈
 try:
     import kind_ir as _kind_ir
@@ -1181,6 +1190,19 @@ def job_sector_summary():
 
 
 @_job(holiday=True)
+def job_collect_estimates():
+    """평일 장 마감 후 (18:40) — KIS 종목추정실적(미래 매출/영업이익) 수집.
+    consensus_estimates 스냅샷 누적 + est_date 변경 시 estimate_revisions 기록."""
+    try:
+        logging.info("📈 [추정실적] collect_estimates 실행 시작")
+        import collect_estimates
+        covered, revisions = collect_estimates.run()
+        logging.info(f"=== [추정실적] 완료: 커버 {covered}종목 / 갱신감지 {revisions}건 ===")
+    except Exception as e:
+        logging.error(f"❌ [추정실적] 오류: {e}")
+
+
+@_job(holiday=True)
 def job_leading_stocks():
     """평일 장 마감 후 (17:30) — 주도주 탐색기 스코어 계산 및 저장"""
     try:
@@ -1190,6 +1212,19 @@ def job_leading_stocks():
         logging.info("✅ [주도주] 생성 완료")
     except Exception as e:
         logging.error(f"❌ [주도주] 생성 오류: {e}")
+
+
+@_job(holiday=True)
+def job_market_summary():
+    """평일 장 마감 후 (18:30) — 투자포인트 요약 생성 (market_investment_summary).
+    18:15 수급 확정 정산 이후 실행 — 프론트 '오늘의 시장 판단' Zone B의 DB 경로를 채운다."""
+    try:
+        logging.info("📝 [시장요약] market_summary_generator 실행")
+        from market_summary_generator import run as run_summary
+        run_summary()
+        logging.info("✅ [시장요약] 완료")
+    except Exception as e:
+        logging.error(f"❌ [시장요약] 오류: {e}")
 
 
 def job_watchlist_alert():
@@ -1438,6 +1473,7 @@ def run_scheduler():
     schedule.every().day.at("17:15").do(job_sector_summary)            # 산업별 일별 요약 집계
     schedule.every().day.at("19:45").do(job_sector_summary)            # 산업집계 재계산 (19:30 수급 확정 후 — 당일 최종 반영)
     schedule.every().day.at("17:30").do(job_leading_stocks)            # 주도주 탐색기 스코어 계산
+    schedule.every().day.at("18:30").do(job_market_summary)            # 투자포인트 요약 생성 (18:15 수급 확정 후)
     schedule.every().day.at("18:00").do(job_naver_report)
     schedule.every().day.at("18:10").do(job_kind_ir)             # KIND IR자료 오후 수집
     schedule.every().day.at("18:30").do(job_daily_closing)
@@ -1449,6 +1485,7 @@ def run_scheduler():
     schedule.every().saturday.at("01:00").do(job_sync_listed_companies) # 새벽 상장사 동기화
     schedule.every().day.at("18:30").do(job_collect_financials)        # 장 마감 후 재무수집 (공시 기반)
     schedule.every().day.at("18:35").do(job_collect_analyst_opinions)  # 투자의견 (장후)
+    schedule.every().day.at("18:40").do(job_collect_estimates)        # 종목추정실적 (미래 매출/영업이익 + 상향감지)
     schedule.every().saturday.at("10:00").do(job_saturday_main_ranking)
     schedule.every().saturday.at("10:30").do(job_saturday_industry_report)
     schedule.every().saturday.at("11:00").do(job_saturday_flow_summary)   # 주간 수급 요약
@@ -1775,6 +1812,13 @@ def _run_watchdog_flags(threads: dict):
             _pro.process_pro_action_flag()
         except Exception as _proe:
             logging.debug(f"pro_action_flag 체크 오류: {_proe}")
+
+    # ── bot_requests — 대시보드 봇 요청 큐 (멤버 동기화·공지 발송) ──
+    if _BOTREQ_OK:
+        try:
+            _botreq.process_bot_requests()
+        except Exception as _bqe2:
+            logging.debug(f"bot_requests 처리 오류: {_bqe2}")
 
     # ── 전체 봇 heartbeat 업데이트 ──
     if _BRIDGE_OK:
