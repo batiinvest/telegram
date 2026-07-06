@@ -2317,10 +2317,10 @@ def run_naver_report_job():
             target_doc = pdf_buf if pdf_buf else pdf_url
             hashtags = _report_hashtags(page_type, tag, file_name)
 
-            # 모니터링 종목 기업분석 리포트는 AI 요약을 캡션에 첨부 (Gemini 무료 등급)
+            # 전체 기업분석 리포트에 AI 요약을 캡션에 첨부 (Gemini 무료 등급, 리포트당 1회)
             # report_ai_summary 플래그가 켜져 있을 때만 동작 (기본 OFF)
             ai_fields = None
-            if _ai_summary_on and page_type == "기업분석" and tag in COMPANY_CHAT_IDS and pdf_buf:
+            if _ai_summary_on and page_type == "기업분석" and pdf_buf:
                 try:
                     from ai_analyst import summarize_report_pdf
                     ai_fields = summarize_report_pdf(pdf_buf.getvalue(), tag)

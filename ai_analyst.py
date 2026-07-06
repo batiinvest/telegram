@@ -13,9 +13,9 @@ from managers import global_session as _session
 # [설정] 모델 선택 (1.5 Flash 추천)
 # ==========================================
 AI_MODEL_ID = "gemini-2.5-flash"
-# 네이버 리포트 PDF 요약 전용
-REPORT_MODEL_ID = "gemini-3-flash-preview"   # 품질 우선 (무료 최상위, preview)
-REPORT_FALLBACK_MODEL_ID = "gemini-2.5-flash"  # preview 과부하(503) 시 안정 폴백
+# 네이버 리포트 PDF 요약 전용 — 무료 등급 호출 최소화(리포트당 1회) 위해 단일 모델 사용.
+# (preview는 503 상습·무료 쿼터 작아 제거. throughput 더 필요하면 gemini-2.5-flash-lite)
+REPORT_MODEL_ID = "gemini-2.5-flash"
 
 # 초기화
 try:
@@ -185,20 +185,24 @@ def summarize_report_pdf(pdf_bytes, corp_name=""):
         )
         part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
 
-        # preview 모델은 일시적 503(과부하)이 잦음 → 2회 재시도 후 안정 모델로 폴백
-        for model_id in (REPORT_MODEL_ID, REPORT_MODEL_ID, REPORT_FALLBACK_MODEL_ID):
+        # 무료 등급 호출 최소화: 기본 1회. 일시적 오류(503/네트워크)일 때만 1회 재시도.
+        # 429(쿼터소진)는 재시도 무의미 → 즉시 중단. 응답은 왔으나 추출 실패면 폴백(재호출 안 함).
+        for attempt in range(2):
             try:
                 response = client.models.generate_content(
-                    model=model_id, contents=[part, prompt]
+                    model=REPORT_MODEL_ID, contents=[part, prompt]
                 )
                 fields = _parse_report_fields(response.text)
-                if fields["포인트"]:  # 투자사유가 하나라도 잡혀야 유효
-                    return fields
+                return fields if fields["포인트"] else None
             except Exception as e:
+                msg = str(e)
                 logging.warning(
-                    f"리포트 요약 시도 실패 [{model_id}] ({corp_name}): {str(e)[:120]}"
+                    f"리포트 요약 시도 실패 ({corp_name}, {attempt+1}/2): {msg[:120]}"
                 )
-                time.sleep(3)
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    break  # 쿼터 소진 → 재시도해도 동일
+                if attempt == 0:
+                    time.sleep(4)
 
         return None
 
