@@ -100,16 +100,20 @@ def get_paid_rooms() -> list:
 
 
 def _get_room(room_id) -> Optional[dict]:
-    """단일 방 조회."""
+    """단일 방 조회. 일시 오류(네트워크 등)를 '방 없음'으로 오인하지 않도록 1회 재시도."""
     sb = _sb()
     if not sb:
         return None
-    try:
-        res = sb.table('rooms') \
-                .select('id,name,chat_id,status').eq('id', room_id).single().execute()
-        return res.data
-    except Exception:
-        return None
+    for attempt in range(2):
+        try:
+            res = sb.table('rooms') \
+                    .select('id,name,chat_id,status').eq('id', room_id).limit(1).execute()
+            data = res.data or []
+            return data[0] if data else None
+        except Exception as e:
+            log.warning(f"[room] _get_room({room_id}) 시도{attempt+1} 오류: {e}")
+            time.sleep(0.5)
+    return None
 
 
 # ══════════════════════════════════════════════════════════════
