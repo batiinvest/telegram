@@ -93,7 +93,21 @@ def batch_update_existing(sb, table: str, records: list,
     skipped = len(records) - len(updatable)
     if skipped:
         log.info(f"[collect_utils] {table} 미존재 {skipped}건 스킵 (스켈레톤 행 생성 방지)")
-    return batch_upsert(sb, table, updatable, conflict_col, chunk)
+    # 존재 행만 부분 컬럼 UPDATE.
+    # ⚠️ upsert(on_conflict)는 INSERT 후보의 NOT NULL(corp_name 등)을 충돌판정보다
+    #   먼저 검사해 부분 갱신이 23502로 실패하므로, 행 단위 실제 UPDATE로 처리.
+    updated = 0
+    for r in updatable:
+        vals = {c: v for c, v in r.items() if c not in (k_code, k_date)}
+        if not vals:
+            continue
+        try:
+            sb.table(table).update(vals) \
+                .eq(k_code, r[k_code]).eq(k_date, r[k_date]).execute()
+            updated += 1
+        except Exception as e:
+            log.error(f"[collect_utils] batch_update_existing UPDATE 오류 ({table} {r[k_code]} {r[k_date]}): {e}")
+    return updated
 
 
 # ── 환경변수 검증 ─────────────────────────────────────────────────────────────

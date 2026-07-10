@@ -51,7 +51,10 @@ THR_WEAK     = -0.5
 THR_VIX_HIGH =  25
 THR_VIX_FEAR =  20
 THR_US10Y    =  4.5
+THR_S5       =  1.5   # 5일 누적 강세/약세 임계 — 프론트 market-insight.js S5와 동일
 
+# ⚠️ 아래 두 상수는 DB 조회 실패 시 폴백 — 실제 값은 run() 시작 시
+# us_etf_map 테이블(단일 출처, 프론트 loadUskrMap과 동일)에서 갱신된다.
 KR_INDUSTRIES = ["반도체","바이오","테크","로봇","2차전지","조선","뷰티","엔터","신재생","소비재","우주"]
 
 USKR_MAP = {
@@ -67,6 +70,30 @@ USKR_MAP = {
     "뷰티":    ["RTH"],
     "신재생":  ["ICLN","QCLN","TAN"],
 }
+
+
+def refresh_industry_config():
+    """us_etf_map 테이블에서 USKR_MAP·KR_INDUSTRIES 갱신 — 하드코딩 드리프트 방지.
+
+    프론트(chart-uskr.js loadUskrMap)·collect_us_etf.py와 동일하게 테이블을
+    단일 출처로 사용. 조회 실패 시 모듈 폴백 상수 유지.
+    """
+    global USKR_MAP, KR_INDUSTRIES
+    if not sb:
+        return
+    try:
+        rows = sb.table("us_etf_map").select("industry,ticker").execute().data or []
+        m: dict = {}
+        for r in rows:
+            m.setdefault(r["industry"], [])
+            if r["ticker"] not in m[r["industry"]]:
+                m[r["industry"]].append(r["ticker"])
+        if m:
+            USKR_MAP = m
+            KR_INDUSTRIES = list(m.keys())
+            log.info(f"[refresh_industry_config] us_etf_map 로드: {len(m)}개 산업")
+    except Exception as e:
+        log.warning(f"[refresh_industry_config] 조회 실패 — 폴백 상수 사용: {e}")
 
 
 # ════════════════════════════════════════════════════════════
@@ -89,16 +116,21 @@ def fetch_macro(target_date: str) -> dict:
 
 def fetch_market_summary(target_date: str) -> list:
     """
-    market_data 테이블에서 해당 날짜 전체 조회.
+    market_data 테이블에서 target_date 이하 최신 거래일 전체 조회.
+    (eq 고정이면 당일 행이 없는 날 신고가·외국인·거래대금 섹션이 통째로 빔)
     필드: stock_code, corp_name, price_change_rate, market_cap,
           foreign_net_buy, volume, market, hgpr_cls_code
     """
     if not sb:
         return []
     try:
-        qb = sb.table("market_data") \
-            .select("stock_code,corp_name,price_change_rate,market_cap,foreign_net_buy,volume,price,market,hgpr_cls_code") \
-            .eq("base_date", target_date)
+        latest = sb.table("market_data").select("base_date")             .lte("base_date", target_date)             .order("base_date", desc=True).limit(1).execute()
+        if not latest.data:
+            return []
+        base = latest.data[0]["base_date"]
+        if base != target_date:
+            log.info(f"[fetch_market_summary] {target_date} 데이터 없음 → {base} 사용")
+        qb = sb.table("market_data")             .select("stock_code,corp_name,price_change_rate,market_cap,foreign_net_buy,volume,price,market,hgpr_cls_code")             .eq("base_date", base)
         # PostgREST 1000행 한도 -> 전체 상장종목(~2,600개/일) 페이지네이션
         return fetch_all_pages(qb) if fetch_all_pages else (qb.execute().data or [])
     except Exception as e:
@@ -108,30 +140,34 @@ def fetch_market_summary(target_date: str) -> list:
 
 def fetch_us_etf(target_date: str) -> dict:
     """
-    us_market 테이블에서 최신 날짜 US ETF 등락률 조회.
-    반환: { industry: avg_chg_pct }
+    us_market 테이블에서 최근 5거래일 US ETF 산업 평균 등락률 조회.
+    반환: { industry: { d1: 당일 평균, d5: 5일 복리 누적 } }
+    d5 = 일별 등가중 평균의 복리 누적 — 프론트 buildInsightData(market-insight.js)와 동일 기준.
     """
     if not sb:
         return {}
     try:
-        res = sb.table("us_market") \
-            .select("base_date,industry,ticker,chg_pct") \
-            .lte("base_date", target_date) \
-            .order("base_date", desc=True).limit(500).execute()
+        res = sb.table("us_market")             .select("base_date,industry,ticker,chg_pct")             .lte("base_date", target_date)             .order("base_date", desc=True).limit(600).execute()
         rows = res.data or []
         if not rows:
             return {}
-        latest_date = rows[0]["base_date"]
-        latest = [r for r in rows if r["base_date"] == latest_date]
+        last5 = sorted({r["base_date"] for r in rows})[-5:]
         result = {}
         for ind in KR_INDUSTRIES:
             tickers = USKR_MAP.get(ind, [])
-            vals = [r["chg_pct"] for r in latest
-                    if r.get("industry") == ind
-                    and r.get("ticker") in tickers
-                    and r.get("chg_pct") is not None]
-            if vals:
-                result[ind] = sum(vals) / len(vals)
+            day_vals = {}
+            for r in rows:
+                if r.get("industry") == ind and r.get("ticker") in tickers                         and r.get("chg_pct") is not None and r["base_date"] in last5:
+                    day_vals.setdefault(r["base_date"], []).append(r["chg_pct"])
+            if not day_vals:
+                continue
+            ds = sorted(day_vals.keys())
+            d1 = sum(day_vals[ds[-1]]) / len(day_vals[ds[-1]])
+            cum = 100.0
+            for dt in ds:
+                avg = sum(day_vals[dt]) / len(day_vals[dt])
+                cum *= (1 + avg / 100)
+            result[ind] = {"d1": round(d1, 2), "d5": round(cum - 100, 2)}
         return result
     except Exception as e:
         log.warning(f"[fetch_us_etf] {e}")
@@ -155,28 +191,27 @@ def fetch_disclosures(target_date: str) -> list:
 def fetch_industry_trend(target_date: str, days: int = 5) -> dict:
     """
     market_data에서 최근 N일간 산업별 평균 등락률 계산.
+    산업 매핑은 모니터링 종목(companies.is_monitored=True) 전체 기준 —
+    프론트(getIndustryMap -> market-overview 집계)와 동일 유니버스.
+    (구버전은 전체 상장 codes[:500] 절단으로 임의 부분집합 평균이 됐음)
     반환: { industry: { d1: float, d5: float } }
+    d5 = 일별 등가중 평균의 복리 누적 — 프론트 indCumReturn(config.js)과 동일 기준.
     """
     if not sb:
         return {}
     try:
+        # 회사별 산업 조회 — 모니터링 종목 전체(~312개, 단일 조회로 절단 없음)
+        ind_res = sb.table("companies")             .select("code,industry")             .eq("is_monitored", True).execute()
+        ind_map = {r["code"]: r["industry"] for r in (ind_res.data or []) if r.get("industry")}
+        if not ind_map:
+            return {}
+
         from_date = (datetime.strptime(target_date, "%Y-%m-%d") - timedelta(days=days+3)).strftime("%Y-%m-%d")
-        qb = sb.table("market_data") \
-            .select("base_date,stock_code,price_change_rate") \
-            .gte("base_date", from_date) \
-            .lte("base_date", target_date) \
-            .not_.is_("price_change_rate", "null")
-        # PostgREST 1000행 한도 -> 다일x전체종목(~1.8만행) 페이지네이션
+        qb = sb.table("market_data")             .select("base_date,stock_code,price_change_rate")             .gte("base_date", from_date)             .lte("base_date", target_date)             .in_("stock_code", list(ind_map.keys()))             .not_.is_("price_change_rate", "null")
+        # PostgREST 1000행 한도 -> 다일 x 모니터링 종목 페이지네이션
         rows = fetch_all_pages(qb) if fetch_all_pages else (qb.execute().data or [])
         if not rows:
             return {}
-
-        # 회사별 산업 조회 (companies 테이블)
-        codes = list({r["stock_code"] for r in rows})
-        ind_res = sb.table("companies") \
-            .select("code,industry") \
-            .in_("code", codes[:500]).execute()
-        ind_map = {r["code"]: r["industry"] for r in (ind_res.data or []) if r.get("industry")}
 
         # 날짜별 산업 평균 등락률 계산
         from collections import defaultdict
@@ -186,20 +221,23 @@ def fetch_industry_trend(target_date: str, days: int = 5) -> dict:
             if ind:
                 day_ind_chg[r["base_date"]][ind].append(r["price_change_rate"])
 
-        # 날짜 내림차순 정렬
-        all_dates = sorted(day_ind_chg.keys(), reverse=True)
+        # 최근 5거래일 (오래된 -> 최신) — 복리 누적 순서 보장
+        last5 = sorted(day_ind_chg.keys())[-5:]
         result = {}
         for ind in KR_INDUSTRIES:
             d1 = None
-            d5_vals = []
-            for i, dt in enumerate(all_dates[:5]):
+            cum = 100.0
+            has_any = False
+            for dt in last5:
                 vals = day_ind_chg[dt].get(ind, [])
-                avg = sum(vals) / len(vals) if vals else None
-                if i == 0:
+                if not vals:
+                    continue
+                avg = sum(vals) / len(vals)
+                cum *= (1 + avg / 100)
+                has_any = True
+                if dt == last5[-1]:
                     d1 = avg
-                if avg is not None:
-                    d5_vals.append(avg)
-            d5 = sum(d5_vals) / len(d5_vals) if d5_vals else None
+            d5 = round(cum - 100, 2) if has_any else None
             result[ind] = {"d1": d1, "d5": d5}
         return result
     except Exception as e:
@@ -239,8 +277,8 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
 
     defense_inds = ["뷰티","소비재"]
     growth_inds  = ["반도체","바이오","테크","로봇","우주"]
-    defense_avg  = sum(us_etf.get(i, 0) for i in defense_inds) / len(defense_inds)
-    growth_avg   = sum(us_etf.get(i, 0) for i in growth_inds) / len(growth_inds)
+    defense_avg  = sum((us_etf.get(i) or {}).get("d1") or 0 for i in defense_inds) / len(defense_inds)
+    growth_avg   = sum((us_etf.get(i) or {}).get("d1") or 0 for i in growth_inds) / len(growth_inds)
 
     if vix >= THR_VIX_HIGH:              market_regime = "risk-off"
     elif defense_avg > growth_avg + 0.5: market_regime = "방어주 장세"
@@ -250,12 +288,17 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
     else:                                market_regime = "혼조"
 
     # ── 산업 강약 정렬 ──
+    # 주도 업종(한줄요약)은 당일 d1, 강세/약세 업종은 5일 누적 d5 — 프론트 _buildLiveSections와 동일
     kr_sorted = sorted(
-        [(ind, ind_trend[ind]["d1"] or 0) for ind in KR_INDUSTRIES if ind in ind_trend and ind_trend[ind]["d1"] is not None],
+        [(ind, ind_trend[ind]["d1"]) for ind in KR_INDUSTRIES if ind in ind_trend and ind_trend[ind]["d1"] is not None],
         key=lambda x: x[1], reverse=True
     )
-    strong_inds = [ind for ind, chg in kr_sorted if chg > 0][:4]
-    weak_inds   = [ind for ind, chg in reversed(kr_sorted) if chg < 0][:4]
+    kr_sorted5 = sorted(
+        [(ind, ind_trend[ind]["d5"]) for ind in KR_INDUSTRIES if ind in ind_trend and ind_trend[ind]["d5"] is not None],
+        key=lambda x: x[1], reverse=True
+    )
+    strong_inds = [ind for ind, chg in kr_sorted5 if chg > 0][:4]
+    weak_inds   = [ind for ind, chg in reversed(kr_sorted5) if chg < 0][:4]
 
     # ── 52주 신고가 종목 ──
     HGPR_VALS = {"신고가", "52주 신고가", "1"}
@@ -278,21 +321,21 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
     )
     top_tv = [r["corp_name"] for r in tv_rows[:5]]
 
-    # ── US 크로스 신호 ──
+    # ── US 크로스 신호 — 5일 누적 기준(단일일 노이즈 제거, 프론트 S5와 동일) ──
     sync_up, lag_inds, decouple_risk, sync_down = [], [], [], []
     for ind in KR_INDUSTRIES:
-        us_chg = us_etf.get(ind)
-        kr_chg = ind_trend.get(ind, {}).get("d1")
-        if us_chg is None or kr_chg is None:
+        us5 = (us_etf.get(ind) or {}).get("d5")
+        kr5 = ind_trend.get(ind, {}).get("d5")
+        if us5 is None or kr5 is None:
             continue
-        if us_chg >= THR_STRONG and kr_chg <= THR_WEAK:
-            lag_inds.append({"ind": ind, "us": us_chg, "kr": kr_chg})
-        elif us_chg <= THR_WEAK and kr_chg >= THR_STRONG:
-            decouple_risk.append({"ind": ind, "us": us_chg, "kr": kr_chg})
-        elif us_chg >= THR_STRONG and kr_chg >= THR_STRONG:
-            sync_up.append({"ind": ind, "us": us_chg, "kr": kr_chg})
-        elif us_chg <= THR_WEAK and kr_chg <= THR_WEAK:
-            sync_down.append({"ind": ind, "us": us_chg, "kr": kr_chg})
+        if us5 >= THR_S5 and kr5 <= -THR_S5:
+            lag_inds.append({"ind": ind, "us": us5, "kr": kr5})
+        elif us5 <= -THR_S5 and kr5 >= THR_S5:
+            decouple_risk.append({"ind": ind, "us": us5, "kr": kr5})
+        elif us5 >= THR_S5 and kr5 >= THR_S5:
+            sync_up.append({"ind": ind, "us": us5, "kr": kr5})
+        elif us5 <= -THR_S5 and kr5 <= -THR_S5:
+            sync_down.append({"ind": ind, "us": us5, "kr": kr5})
 
     # ── 공시 분석 ──
     from collections import Counter
@@ -323,13 +366,21 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
     }
 
     # ② 주목할 투자포인트
+    # 순서 중요: 프론트 DB 경로(_loadSummaryFromDB)는 key_points[0]만 '기회' 배지로
+    # 표시한다 → 프론트 라이브 로직과 동일하게 후행 선점 → 동반 강세 → … 우선순위.
+    # 레짐 게이트: 방어 국면(당일 급락·VIX 공포)에선 '선점/진입' 대신 관망 조건부 —
+    # 환경(온도계)은 "지켜라", 전략은 "들어가라"가 공존하는 모순 방지 (프론트 게이트와 동일 기준).
+    defensive = kr_avg <= -2.0 or vix >= THR_VIX_HIGH
     key_points = []
+    if lag_inds:
+        inds = " / ".join(f"{x['ind']}(미국 5일 {_fmt(x['us'])}→한국 5일 {_fmt(x['kr'])})" for x in lag_inds[:2])
+        if defensive:
+            key_points.append(f"후행 관찰 후보: {inds} — 급락 진정·수급 유입 확인 후 진입 검토")
+        else:
+            key_points.append(f"후행 선점 후보: {inds} — 수급 유입 시 진입 검토")
     if len(sync_up) >= 2:
         inds = " · ".join(x["ind"] for x in sync_up[:3])
-        key_points.append(f"미·한 동반 강세: {inds}")
-    if lag_inds:
-        inds = " / ".join(f"{x['ind']}(미국 {_fmt(x['us'])}→한국 {_fmt(x['kr'])})" for x in lag_inds[:2])
-        key_points.append(f"후행 관찰 업종: {inds}")
+        key_points.append(f"미·한 5일 동반 강세: {inds} — " + ("반등 확인 후 재평가" if defensive else "추세 추종 검토"))
     if hgpr_count >= 3:
         nm = " · ".join(hgpr_names[:2])
         key_points.append(f"52주 신고가 {hgpr_count}개 — {nm}{'등' if hgpr_count > 2 else ''}")
@@ -341,17 +392,21 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
         key_points.append("뚜렷한 기회 신호 없음")
 
     # ③ 리스크 요인
+    # 순서 중요: 프론트 DB 경로는 risk_factors[0]만 '리스크' 배지로 표시 →
+    # 시장 급락(그 자체가 1순위 리스크)을 크로스 신호·매크로 레벨보다 앞에.
     risk_factors = []
+    if kr_avg <= -2.0:
+        risk_factors.append(f"🚨 코스피/닥 당일 평균 {_fmt(kr_avg)} 급락 — 후속 하락·반대매매 주의, 성급한 저가 매수 금지")
     if vix >= THR_VIX_HIGH:
         risk_factors.append(f"⚠️ VIX {vix:.0f} 공포 구간 — 변동성 확대 주의")
     elif vix >= THR_VIX_FEAR:
         risk_factors.append(f"⚠️ VIX {vix:.0f} 주의 구간")
     if decouple_risk:
         r = decouple_risk[0]
-        risk_factors.append(f"⚡ 디커플링: {r['ind']}(한국 {_fmt(r['kr'])} / 미국 {_fmt(r['us'])})")
+        risk_factors.append(f"⚡ 디커플링: {r['ind']}(한국 5일 {_fmt(r['kr'])} / 미국 5일 {_fmt(r['us'])})")
     if sync_down:
         inds = " · ".join(x["ind"] for x in sync_down[:3])
-        risk_factors.append(f"🔻 미·한 동반 약세: {inds}")
+        risk_factors.append(f"🔻 미·한 5일 동반 약세: {inds}")
     if us10y >= THR_US10Y:
         risk_factors.append(f"📊 미 10년 금리 {us10y:.3f}% — 고금리 부담")
     if usd_krw and usd_krw >= 1450:
@@ -372,8 +427,10 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
     if not watch_events:
         watch_events.append("확인 이벤트 없음")
 
-    # ⑤ 한 줄 요약
-    if vix >= THR_VIX_HIGH:
+    # ⑤ 한 줄 요약 — 급락일이 최우선 (레짐 게이트와 동일 모순 방지)
+    if kr_avg <= -2.0:
+        strategy = "당일 급락 — 저가 매수 자제, 후속 하락·반대매매 소화 확인 우선"
+    elif vix >= THR_VIX_HIGH:
         strategy = f"VIX {vix:.0f} 공포 구간 — 추격 금지, 현금 비중 점검"
     elif market_regime == "risk-off":
         strategy = "리스크오프 — 방어 포지션 유지, 낙폭 과대 관찰"
@@ -445,6 +502,8 @@ def run(target_date: Optional[str] = None):
     if not target_date:
         target_date = datetime.now().strftime("%Y-%m-%d")
     log.info(f"[SummaryGen] 시작 — {target_date}")
+
+    refresh_industry_config()   # us_etf_map 단일 출처 — USKR_MAP·KR_INDUSTRIES 갱신
 
     macro    = fetch_macro(target_date)
     if not macro:
