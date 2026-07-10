@@ -215,7 +215,7 @@ def calculate_returns(sb, target_codes: list = None, target_date: str = None):
             updates.append(row_update)
 
         # 오늘 행 존재가 위에서 보장되므로 부분 컬럼 upsert = update로 동작
-        updated += batch_upsert(sb, "market_data", updates, "stock_code,base_date", chunk=500)
+        updated += batch_update_existing(sb, "market_data", updates)
 
     log.info(f"[수익률] 완료: {updated}개 종목 업데이트")
 
@@ -413,7 +413,7 @@ def save_new_high_to_db(rows: list[dict], base_date: str, sb_client=None):
         sb_client.table('market_data') \
             .update({'hgpr_cls_code': None, 'hgpr_cls': None}) \
             .eq('base_date', base_date) \
-            .not_.is_('hgpr_cls_code', 'null') \
+            .in_('hgpr_cls_code', ['신고가', '52주 신고가', '1']) \
             .execute()
         logging.info(f"[신고가] {base_date} hgpr_cls_code 초기화 완료")
     except Exception as e:
@@ -435,23 +435,53 @@ def save_new_high_to_db(rows: list[dict], base_date: str, sb_client=None):
 
 
 def collect_new_high():
-    """KIS API로 코스피+코스닥 52주 신고가 수집 후 저장"""
+    """장 마감 확정 데이터(market_data) 기준으로 오늘 52주 신고가 갱신 종목 조회.
+
+    ⚠️ 반드시 장마감 확정 수집(job_collect_market_closing, 17:00) 이후 실행할 것.
+
+    구현 이력: 과거엔 KIS near-new-highlow 랭킹 API(FHPST01870000)를 소스로 썼으나,
+    이 API는 고정 소량 페이지(코스피 ~17·코스닥 ~30행)만 반환하고 그 페이지가 거래량 0
+    (거래정지·관리종목이 전일가에 멈춰 near_rate=0)인 가짜 종목으로 도배돼, 장중 신고가를
+    찍고 고가 아래로 마감한 실제 신고가 종목(KB금융·신한지주·티에스이 등)이 페이지에 아예
+    포함되지 못하고 대부분 누락됐다(2026-07-10: 실제 신고가 6종목 중 상한가급 2종목만 통과).
+    → market_data 소스로 교체: 전체 상장사(≈2,658) 커버 + 장마감 확정 종가 기준.
+
+    판정: base_date == 오늘 AND w52_high_date == 오늘(장중 52주 신고가 갱신)
+          AND volume > 0(실거래) AND price_change_rate > 0(상승 마감).
+    ※ 장중 신고가를 찍고 급반락 마감한 종목(예: -14%)은 '신고가 갱신'으로 보지 않아 제외.
+    """
     today = date.today().isoformat()
-    all_rows = []
-    for mkt in ['0001', '1001']:   # 코스피, 코스닥
-        all_rows.extend(fetch_new_high_stocks(mkt))
-        time.sleep(0.3)
-    # 중복 제거 (code 기준)
-    seen = set()
-    deduped = []
-    for r in all_rows:
-        if r['code'] not in seen:
-            seen.add(r['code'])
-            deduped.append(r)
-    logging.info(f"[신고가] 전체 {len(deduped)}개 (코스피+코스닥)")
     sb_client = get_supabase_client()
-    save_new_high_to_db(deduped, today, sb_client)
-    return deduped
+
+    res = sb_client.table('market_data') \
+        .select('stock_code,corp_name,price,price_change_rate,w52_high,w52_low,volume') \
+        .eq('base_date', today) \
+        .eq('w52_high_date', today) \
+        .gt('volume', 0) \
+        .gt('price_change_rate', 0) \
+        .order('price_change_rate', desc=True) \
+        .execute()
+
+    result = []
+    for r in (res.data or []):
+        code = (r.get('stock_code') or '').strip()
+        if not code:
+            continue
+        result.append({
+            'code':          code,
+            'name':          r.get('corp_name') or code,
+            'price':         int(r.get('price') or 0),
+            'chg_pct':       float(r.get('price_change_rate') or 0),
+            'volume':        int(r.get('volume') or 0),
+            'new_hgpr_cls':  '신고가',
+            'new_hgpr_code': '1',
+            'd52_high':      int(r.get('w52_high') or 0),
+            'd52_low':       int(r.get('w52_low') or 0),
+        })
+
+    logging.info(f"[신고가] market_data 기준 {len(result)}개 (오늘 갱신·상승마감·실거래)")
+    save_new_high_to_db(result, today, sb_client)
+    return result
 
 
 # ══════════════════════════════════════════════════════════
