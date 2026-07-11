@@ -242,17 +242,21 @@ class DartRoutingBot:
         return stock_api.get_company_chat_id(corp_name, stock_code)
 
     def _build_msg(self, corp_name, report_nm, rcept_no, stock_code, prefix="", detail=""):
-        import re
+        import re, html
         emoji       = self.get_emoji(report_nm)
         link        = f"http://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
         target_code = COMPANY_CODES.get(corp_name, stock_code)
         price_info  = stock_api.get_stock_price(target_code)
         stock_msg   = f"<b>{price_info}</b>\n" if price_info else ""
-        detail_block = f"\n\n{detail}" if detail else ""
+        # 외부 데이터(DART 파싱 detail·기업명·공시명)는 원문 XML/특수문자(<,>,&)를
+        # 포함할 수 있어 HTML parse_mode를 깨뜨림(예: <?xml → 400 발송실패) → 이스케이프.
+        corp_esc    = html.escape(corp_name or "", quote=False)
+        detail_esc  = html.escape(detail, quote=False) if detail else ""
+        detail_block = f"\n\n{detail_esc}" if detail_esc else ""
         # DART report_nm에 과도한 공백이 포함되는 경우 정규화
-        report_nm_clean = re.sub(r'\s+', ' ', report_nm).strip()
+        report_nm_clean = html.escape(re.sub(r'\s+', ' ', report_nm).strip(), quote=False)
         return (
-            f"{prefix}{emoji} <b>[{corp_name}]</b>\n"
+            f"{prefix}{emoji} <b>[{corp_esc}]</b>\n"
             f"{stock_msg}{report_nm_clean}{detail_block}\n"
             f"🔗 <a href='{link}'>공시 원문</a> | "
             f"📈 <a href='https://finance.naver.com/item/main.nhn?code={target_code}'>네이버</a>"

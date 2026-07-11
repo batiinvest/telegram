@@ -396,9 +396,11 @@ class TelegramBotManager:
                 time.sleep(min(retry_after, 60))
                 continue
 
-            if res.status_code == 400 and "parse" in res.text.lower():
+            if res.status_code == 400 and payload.get("parse_mode") and "parse" in res.text.lower():
+                # parse_mode를 None으로 두면 JSON에 parse_mode:null로 직렬화돼
+                # 텔레그램이 "unsupported parse_mode"(400)로 거부 → 키 자체를 제거해 평문 발송.
                 logging.warning(f"⚠️ HTML 파싱 에러 → 평문 재전송 ({chat_id}): {res.text[:150]}")
-                payload["parse_mode"] = None
+                payload.pop("parse_mode", None)
                 continue
 
             if res.status_code in (400, 403):
