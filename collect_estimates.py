@@ -26,15 +26,14 @@ from logger_config import get_logger
 from collect_utils import batch_upsert, fetch_all_pages
 log = get_logger(__name__)
 
-import requests
 from dotenv import load_dotenv
 load_dotenv()
 
 from db_client import get_supabase_client
 from managers import kis_auth
-from config import KIS_APP_KEY, KIS_APP_SECRET, KIS_BASE_URL, COMPANY_CODES
+from config import COMPANY_CODES
 
-API_PATH = "/uapi/domestic-stock/v1/quotations/estimate-perform"
+API_PATH = "quotations/estimate-perform"   # kis_auth.kis_get이 공통 prefix 부착
 TR_ID = "HHKST668300C0"
 
 # output2 행 순서 (실측): 매출액, 매출YoY, 영업이익, 영업이익YoY, 순이익, 순이익YoY
@@ -57,20 +56,12 @@ def _ratio(v):
     return round(n / 10, 2) if n is not None else None
 
 
-def fetch_estimate_one(token: str, code: str, name: str = ""):
-    """한 종목의 추정실적 조회 → 레코드 리스트 (미커버 종목은 빈 리스트)."""
-    headers = {
-        "content-type": "application/json; charset=utf-8",
-        "authorization": f"Bearer {token}",
-        "appkey": KIS_APP_KEY,
-        "appsecret": KIS_APP_SECRET,
-        "tr_id": TR_ID,
-        "custtype": "P",
-    }
-    r = requests.get(f"{KIS_BASE_URL}{API_PATH}", headers=headers,
-                     params={"SHT_CD": code}, timeout=10)
-    r.raise_for_status()
-    data = r.json()
+def fetch_estimate_one(code: str, name: str = ""):
+    """한 종목의 추정실적 조회 → 레코드 리스트 (미커버 종목은 빈 리스트).
+    네트워크/토큰 실패는 예외로 올려 호출부(run)의 failed 집계 유지."""
+    data = kis_auth.kis_get(TR_ID, API_PATH, {"SHT_CD": code}, custtype="P")
+    if data is None:
+        raise RuntimeError("KIS 응답 없음 (토큰/네트워크)")
     if data.get("rt_cd") != "0":
         log.warning(f"[추정실적] {code} {name} rt_cd={data.get('rt_cd')} {data.get('msg1')}")
         return []
@@ -183,8 +174,7 @@ def _detect_revisions(code, name, new_records, existing_by_stock):
 
 def run(codes: dict = None):
     """모니터링 종목 추정실적 수집. codes={name: code} (기본 COMPANY_CODES)."""
-    token = kis_auth.get_token()
-    if not token:
+    if not kis_auth.get_token():   # 대량 작업 전 fast-fail (호출은 kis_get이 처리)
         log.error("[추정실적] KIS 토큰 발급 실패")
         return 0, 0
 
@@ -195,7 +185,7 @@ def run(codes: dict = None):
     all_records, all_revisions, covered, failed = [], [], 0, 0
     for name, code in targets.items():
         try:
-            records = fetch_estimate_one(token, code, name)
+            records = fetch_estimate_one(code, name)
         except Exception as e:
             failed += 1
             log.warning(f"[추정실적] {code} {name} 조회 실패: {e}")

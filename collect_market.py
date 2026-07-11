@@ -406,22 +406,6 @@ def fetch_foreign_institution(
     """기관/외국인 매매종목 가집계 조회
     장중 집계 시간: 외국인 09:30/11:20/13:20/14:30 / 기관 10:00/11:20/13:20/14:30
     """
-    from managers import kis_auth, kis_rate_limiter, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
-    import requests as req
-
-    token = kis_auth.get_token()
-    if not token:
-        logging.warning("[수급] 토큰 없음")
-        return []
-
-    url = f"{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/foreign-institution-total"
-    headers = {
-        "authorization": f"Bearer {token}",
-        "appkey":    KIS_APP_KEY,
-        "appsecret": KIS_APP_SECRET,
-        "tr_id":     "FHPTJ04400000",
-        "custtype":  "P",
-    }
     params = {
         "FID_COND_MRKT_DIV_CODE":  "V",
         "FID_COND_SCR_DIV_CODE":   "16449",
@@ -430,15 +414,16 @@ def fetch_foreign_institution(
         "FID_RANK_SORT_CLS_CODE":  sort_cls,
         "FID_ETC_CLS_CODE":        etc_cls,
     }
+    data = kis_auth.kis_get("FHPTJ04400000", "quotations/foreign-institution-total",
+                            params, custtype="P")
+    if not data:
+        logging.warning("[수급] KIS 응답 없음 (토큰/네트워크)")
+        return []
+    if data.get('rt_cd') != '0':
+        logging.warning(f"[수급] API 오류: {data.get('msg1')}")
+        return []
 
     try:
-        kis_rate_limiter.acquire()
-        res = req.get(url, headers=headers, params=params, timeout=10)
-        data = res.json()
-        if data.get('rt_cd') != '0':
-            logging.warning(f"[수급] API 오류: {data.get('msg1')}")
-            return []
-
         result = []
         for row in (data.get('output') or []):
             code = row.get('mksc_shrn_iscd', '').strip()
@@ -713,8 +698,6 @@ def backfill_market(days: int = 90, max_workers: int = 3,
 
     from_date/to_date: 'YYYY-MM-DD' 형식으로 날짜 범위 지정 가능
     """
-    from managers import kis_auth, kis_rate_limiter, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
-    import requests as req
     import datetime
 
     if not SB_URL or not SB_SERVICE_KEY:
@@ -722,8 +705,7 @@ def backfill_market(days: int = 90, max_workers: int = 3,
         return
 
     sb_client = get_supabase_client()
-    token = kis_auth.get_token()
-    if not token:
+    if not kis_auth.get_token():   # 대량 작업 전 fast-fail (호출은 kis_get이 처리)
         log.error("[백필] 토큰 없음")
         return
 
@@ -743,14 +725,6 @@ def backfill_market(days: int = 90, max_workers: int = 3,
         date_from = start_dt.strftime('%Y%m%d')
         date_to   = end_dt.strftime('%Y%m%d')
 
-    headers = {
-        'authorization': f'Bearer {token}',
-        'appkey':    KIS_APP_KEY,
-        'appsecret': KIS_APP_SECRET,
-        'tr_id':     'FHKST03010100',
-        'custtype':  'P',
-    }
-
     # Step1: 종목별 일별 시세 수집
     def fetch_daily(t):
         code, name = t['code'], t['name']
@@ -763,13 +737,10 @@ def backfill_market(days: int = 90, max_workers: int = 3,
             'FID_ORG_ADJ_PRC':        '1',  # 원주가 — market_data 원주가 관행 통일(일일·stock_api·backfill_market_90d)
         }
         try:
-            kis_rate_limiter.acquire()
-            res = req.get(
-                f'{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice',
-                headers=headers, params=params, timeout=10
-            )
-            data = res.json()
-            if data.get('rt_cd') != '0':
+            data = kis_auth.kis_get('FHKST03010100',
+                                    'quotations/inquire-daily-itemchartprice',
+                                    params, custtype='P')
+            if not data or data.get('rt_cd') != '0':
                 return code, name, []
 
             output2 = data.get('output2', []) or []
@@ -915,24 +886,10 @@ def fetch_analyst_opinions(stock_code: str, corp_name: str,
     종목별 증권사 투자의견 조회
     from_date/to_date: 'YYYYMMDD' 형식, 기본값 오늘
     """
-    from managers import kis_auth, kis_rate_limiter, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
-    import requests as req
-
-    token = kis_auth.get_token()
-    if not token:
-        return []
-
     today = date.today().strftime('%Y%m%d')
     from_date = from_date or today
     to_date   = to_date   or today
 
-    headers = {
-        'authorization': f'Bearer {token}',
-        'appkey':    KIS_APP_KEY,
-        'appsecret': KIS_APP_SECRET,
-        'tr_id':     'FHKST663300C0',
-        'custtype':  'P',
-    }
     params = {
         'FID_COND_MRKT_DIV_CODE': 'J',
         'FID_COND_SCR_DIV_CODE':  '16633',
@@ -940,18 +897,15 @@ def fetch_analyst_opinions(stock_code: str, corp_name: str,
         'FID_INPUT_DATE_1':       from_date,
         'FID_INPUT_DATE_2':       to_date,
     }
+    data = kis_auth.kis_get('FHKST663300C0', 'quotations/invest-opinion',
+                            params, custtype='P')
+    if not data:
+        return []
+    if data.get('rt_cd') != '0':
+        logging.warning(f"[투자의견] {corp_name}({stock_code}) API 오류: {data.get('msg1')}")
+        return []
 
     try:
-        kis_rate_limiter.acquire()
-        res = req.get(
-            f'{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/invest-opinion',
-            headers=headers, params=params, timeout=10
-        )
-        data = res.json()
-        if data.get('rt_cd') != '0':
-            logging.warning(f"[투자의견] {corp_name}({stock_code}) API 오류: {data.get('msg1')}")
-            return []
-
         result = []
         for row in (data.get('output') or []):
             d = row.get('stck_bsop_date', '')

@@ -282,43 +282,57 @@ class KisAuthManager:
             logging.error(f"❌ 토큰 요청 에러: {e}")
             return None
 
-    # ✅ [Phase 2] stock_api.py에서 이관된 API 호출 로직
-    def call_api(self, tr_id: str, path: str, code: str, extra_params: Dict = None, custtype: str = None, timeout: int = 10) -> Optional[Dict]:
-        """KIS API 호출을 전담하는 메서드"""
-        if not KIS_APP_KEY or not code: return None
-        
-        token = self.get_token()
-        if not token: return None
+    def kis_get(self, tr_id: str, path: str, params: Dict,
+                custtype: str = None, timeout: int = 10) -> Optional[Dict]:
+        """KIS GET 공통 실행기 — 토큰·헤더·레이트리미터·세션·JSON 파싱만 담당.
+        params는 호출부가 전부 구성 (rt_cd 판정도 호출부 책임 — 경고 로그 문맥 보존).
 
-        clean_code = code.split('.')[0]
-        url = f"{KIS_BASE_URL}/uapi/domestic-stock/v1/{path}"
-        
+        collect_market(수급·백필·투자의견)/collect_macro(지수)/collect_estimates/
+        is_kr_holiday 가 각자 반복하던 token→headers→req.get 보일러플레이트 통합.
+        rt_cd '0' 필터까지 포함한 상위 래퍼는 call_api().
+        반환: 파싱된 JSON dict, 실패(토큰 없음·네트워크·비JSON) 시 None.
+        """
+        if not KIS_APP_KEY:
+            return None
+        token = self.get_token()
+        if not token:
+            return None
         headers = {
             "authorization": f"Bearer {token}",
             "appkey": KIS_APP_KEY,
             "appsecret": KIS_APP_SECRET,
-            "tr_id": tr_id
+            "tr_id": tr_id,
         }
         if custtype:
             headers["custtype"] = custtype
+        try:
+            kis_rate_limiter.acquire()
+            res = global_session.get(
+                f"{KIS_BASE_URL}/uapi/domestic-stock/v1/{path}",
+                headers=headers, params=params, timeout=timeout,
+            )
+            return res.json()
+        except Exception as e:
+            logging.error(f"KIS GET Error ({path}): {e}")
+            return None
 
-        # 기본 파라미터
+    # ✅ [Phase 2] stock_api.py에서 이관된 API 호출 로직
+    def call_api(self, tr_id: str, path: str, code: str, extra_params: Dict = None, custtype: str = None, timeout: int = 10) -> Optional[Dict]:
+        """종목 단건 조회용 상위 래퍼 — 기본 FID 파라미터 + rt_cd '0' 필터 포함"""
+        if not KIS_APP_KEY or not code: return None
+
+        clean_code = code.split('.')[0]
         params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": clean_code}
         if extra_params:
             params.update(extra_params)
 
-        try:
-            kis_rate_limiter.acquire()
-            res = global_session.get(url, headers=headers, params=params, timeout=timeout)
-            data = res.json()
-
-            if data['rt_cd'] != '0':
-                logging.debug(f"KIS rt_cd!=0 ({path}, {clean_code}): {data.get('msg_cd')} {data.get('msg1')}")
-                return None
-            return data
-        except Exception as e:
-            logging.error(f"API Call Error ({path}): {e}")
+        data = self.kis_get(tr_id, path, params, custtype, timeout)
+        if not data:
             return None
+        if data.get('rt_cd') != '0':
+            logging.debug(f"KIS rt_cd!=0 ({path}, {clean_code}): {data.get('msg_cd')} {data.get('msg1')}")
+            return None
+        return data
 
 # ==========================================
 # 🤖 [Manager] 텔레그램 봇 관리자
@@ -518,27 +532,14 @@ class MarketTimeManager:
         today_str = now.strftime('%Y%m%d')
         if hasattr(self, '_holiday_cache') and self._holiday_cache.get('date') == today_str:
             return self._holiday_cache['is_holiday']
-        # KIS API 조회
+        # KIS API 조회 (kis_get 공통 실행기 — 구현 시절엔 rate limiter 미적용이었음)
         try:
-            import requests as _req
-            # kis_auth 인스턴스에서 토큰 가져오기
-            try:
-                token = kis_auth.get_token()
-            except Exception:
-                token = None
-            url = f"{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/chk-holiday"
-            headers = {
-                'authorization': f'Bearer {token}',
-                'appkey':    KIS_APP_KEY,
-                'appsecret': KIS_APP_SECRET,
-                'tr_id':     'CTCA0903R',
-                'custtype':  'P',
-            }
-            r = _req.get(url, headers=headers,
-                        params={'BASS_DT': today_str, 'CTX_AREA_FK': '', 'CTX_AREA_NK': ''},
-                        timeout=5)
-            data = r.json()
-            if data.get('rt_cd') == '0':
+            data = kis_auth.kis_get(
+                'CTCA0903R', 'quotations/chk-holiday',
+                {'BASS_DT': today_str, 'CTX_AREA_FK': '', 'CTX_AREA_NK': ''},
+                custtype='P', timeout=5,
+            )
+            if data and data.get('rt_cd') == '0':
                 rows = data.get('output', [])
                 # 오늘 날짜 행 찾기
                 for row in rows:

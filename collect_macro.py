@@ -151,27 +151,13 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
     returns: (price, chg_pct) or (None, None)
     """
     try:
-        from managers import kis_auth, kis_rate_limiter, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
+        from managers import kis_auth
         from datetime import datetime, timedelta, timezone
-        import requests as req
-
-        token = kis_auth.get_token()
-        if not token:
-            log.warning(f"[KIS 지수] 토큰 없음 (iscd={iscd})")
-            return None, None
 
         kst_now   = datetime.now(timezone.utc) + timedelta(hours=9)
         end_date  = kst_now.strftime('%Y%m%d')
         start_date = (kst_now - timedelta(days=10)).strftime('%Y%m%d')  # 최근 10일치 조회
 
-        url = f"{KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-index-daily-price"
-        headers = {
-            "authorization": f"Bearer {token}",
-            "appkey":    KIS_APP_KEY,
-            "appsecret": KIS_APP_SECRET,
-            "tr_id":     "FHKUP03500100",
-            "custtype":  "P",
-        }
         params = {
             "fid_cond_mrkt_div_code": "U",   # U = 지수
             "fid_input_iscd":          iscd,
@@ -179,10 +165,12 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
             "fid_input_date_2":        end_date,
             "fid_period_div_code":     "D",
         }
-        kis_rate_limiter.acquire()
-        r = req.get(url, headers=headers, params=params, timeout=10)
-        r.raise_for_status()
-        body = r.json()
+        body = kis_auth.kis_get("FHKUP03500100",
+                                "quotations/inquire-index-daily-price",
+                                params, custtype="P")
+        if not body:
+            log.warning(f"[KIS 지수] 응답 없음 — 토큰/네트워크 (iscd={iscd})")
+            return None, None
         log.debug(f"[KIS 지수 raw] iscd={iscd} keys={list(body.keys())} rt_cd={body.get('rt_cd')} msg={body.get('msg1','')}")
 
         # output1 = 최신 요약(지수 현재가 + 전일대비율). output2(일별 차트행)에는
