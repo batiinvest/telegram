@@ -2011,71 +2011,71 @@ def parse_major_shareholder_change(kv: dict) -> list:
 
 
 def parse_insider_report(kv: dict) -> list:
-    """임원ㆍ주요주주 소유상황보고서"""
-    lines = []
+    """임원ㆍ주요주주 특정증권등 소유상황보고서.
 
-    # 보고자 + 직책
-    reporter = _get(kv, '보고자', 'Name (Title)', 'Korean')
-    position = _get(kv, 'Position')
+    이 보고서는 국/영문 이중언어 표라 영문 KV 키가 값과 정렬이 어긋난다
+    (담당자 직위를 보고자 직위로, 변동전 수량을 현재보유로 오매칭). 따라서
+    document.xml 원문 텍스트의 한글 라벨(직위명·발행주식 총수·변동전/증감/변동후)
+    기준으로 파싱한다.
+    """
+    lines = []
+    html = kv.get('_html', '')
+    txt = re.sub(r'<[^>]+>', ' ', html)
+    txt = re.sub(r'\s+', ' ', txt).strip()
+
+    # 보고자 + 직위(직위명 — 담당자 '직 위'와 구분됨)
+    reporter = (_get(kv, '보고자') or '').split('(')[0].strip()
+    if not reporter:
+        m_r = re.search(r'한\s*글\s+([가-힣]{2,5})', txt)
+        reporter = m_r.group(1) if m_r else ''
+    m_pos = re.search(r'직위명\s+([가-힣A-Za-z·]{2,15})', txt)
+    position = m_pos.group(1).strip() if m_pos else ''
     if reporter:
         lines.append(f'👤 보고자: {reporter}' + (f' ({position})' if position else ''))
 
-    # 증감 + 비율
-    change_str = _get(kv, 'Increase or decrease')
-    total_issued = _get(kv, 'Total number of shares issued')
-    current_str  = kv.get('Total')     # 현재 총 보유수 (정확한 키 매칭, substring 방지)
+    # 발행주식 총수 (비율 계산 기준)
+    m_tot = re.search(r'발행주식\s*총수\s+([\d,]+)', txt)
+    total_issued = int(m_tot.group(1).replace(',', '')) if m_tot else 0
 
-    if change_str:
-        try:
-            n = int(change_str.replace(',', ''))
-            sign = '+' if n >= 0 else ''
-            # 발행주식 대비 비율
-            ratio_str = ''
-            if total_issued:
-                try:
-                    t = int(total_issued.replace(',', ''))
-                    if t > 0:
-                        ratio = abs(n) / t * 100
-                        ratio_sign = '+' if n >= 0 else '-'
-                        ratio_str = f' ({ratio_sign}{ratio:.2f}%)'
-                except (ValueError, AttributeError):
-                    pass
-            lines.append(f'📊 증감: {sign}{n:,}주{ratio_str}')
-        except (ValueError, AttributeError):
-            lines.append(f'📊 증감: {change_str}주')
+    def _ratio(n: int) -> str:
+        return f' ({n / total_issued * 100:.2f}%)' if total_issued > 0 else ''
 
-    # 보고 전→후 보유 수량 변화
-    if current_str and change_str:
-        try:
-            curr  = int(current_str.replace(',', ''))
-            chng  = int(change_str.replace(',', ''))
-            chng_abs = abs(chng)
-            prev  = curr - chng   # 보고 전 = 현재 - 증감
+    # 소유 변동: '변동전 증감 변동후' 헤더 이후 세부표
+    m_hdr = re.search(r'변동전\s+증감\s+변동후\s+(.*)', txt)
+    detail = m_hdr.group(1) if m_hdr else ''
 
-            def _ratio(n: int) -> str:
-                if not total_issued:
-                    return ''
-                try:
-                    t = int(total_issued.replace(',', ''))
-                    return f' ({n/t*100:.2f}%)' if t > 0 else ''
-                except (ValueError, AttributeError):
-                    return ''
+    # 보고사유 + 변동일 (첫 데이터 행: '[사유] YYYY.MM.DD ...')
+    reason, change_date = '', ''
+    m_row = re.match(r'\s*(.+?)\s+(\d{4}\.\d{2}\.\d{2})', detail)
+    if m_row:
+        reason = re.sub(r'\s*\([+\-]\)\s*$', '', m_row.group(1)).strip()
+        change_date = m_row.group(2).replace('.', '-')
 
-            # 신규 취득(보고 전 0)이 아닌 경우만 전→후 표시
-            if curr != chng_abs or chng < 0:
-                arrow = '🔻' if chng < 0 else '🔺'
-                lines.append(
-                    f'📦 보유변화: {prev:,}주{_ratio(prev)} {arrow} {curr:,}주{_ratio(curr)}'
-                )
-            else:
-                # 신규 취득
-                lines.append(f'📦 현재보유: {curr:,}주{_ratio(curr)}')
-        except (ValueError, AttributeError):
-            pass
+    # 변동전 / 변동후 (합계 행 우선, 없으면 첫 데이터 행)
+    prev = after = None
+    m_sum = re.search(r'합\s*계\s+([\d,]+)\s+[\d,]+\s+([\d,]+)', detail)
+    if m_sum:
+        prev  = int(m_sum.group(1).replace(',', ''))
+        after = int(m_sum.group(2).replace(',', ''))
+    else:
+        m_d = re.search(r'\d{4}\.\d{2}\.\d{2}\s+\S+\s+([\d,]+)\s+[\d,]+\s+([\d,]+)', detail)
+        if m_d:
+            prev  = int(m_d.group(1).replace(',', ''))
+            after = int(m_d.group(2).replace(',', ''))
 
-    # 발생일
-    if v := _get(kv, 'Date of occurrence of reporting obligation', 'Date of occurrence'):
-        lines.append(f'📅 발생일: {v}')
+    if prev is not None and after is not None:
+        change = after - prev
+        sign = '+' if change >= 0 else ''
+        reason_str = f' · {reason}' if reason else ''
+        lines.append(f'📊 증감: {sign}{change:,}주{reason_str}')
+        if prev == 0:
+            lines.append(f'📦 신규취득: {after:,}주{_ratio(after)}')
+        else:
+            arrow = '🔺' if change >= 0 else '🔻'
+            lines.append(f'📦 보유: {prev:,}주{_ratio(prev)} {arrow} {after:,}주{_ratio(after)}')
+
+    if change_date:
+        lines.append(f'📅 변동일: {change_date}')
 
     return lines
 
@@ -2500,8 +2500,6 @@ _SKIP_DETAIL_TYPES = frozenset([
     '대규모기업집단현황', '기업지배구조보고서',
     # 정기보고서류 — 수천 개 KV + 인코딩 깨짐, 헤더만 표시
     '사업보고서', '반기보고서', '분기보고서', '감사보고서',
-    # 임원보유 보고서 — DART XML 인코딩 깨짐 + ENG 키 노출 문제
-    '임원ㆍ주요주주특정증권등소유상황보고서',
 ])
 
 
