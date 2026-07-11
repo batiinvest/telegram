@@ -16,18 +16,20 @@ load_dotenv()
 
 
 
+# import 시점 sys.exit 금지 — run_all이 잡 안에서 import하므로 SystemExit가
+# except Exception을 뚫고 스케줄러 스레드를 죽인다. 실패는 None으로 두고 실행 시 검증.
 try:
     import yfinance as yf
 except ImportError:
+    yf = None
     log.error("yfinance 미설치 — pip install yfinance --break-system-packages")
-    sys.exit(1)
 
 try:
     from db_client import get_supabase_client
     _sb = get_supabase_client()
 except Exception as e:
+    _sb = None
     log.error(f"Supabase 연결 실패: {e}")
-    sys.exit(1)
 
 # ── 산업별 ETF 정의 ──────────────────────────────────────────────
 US_ETF_MAP = {
@@ -82,6 +84,8 @@ def fetch_history(ticker: str, days: int = 10):
 
 def collect_and_save(days: int = 5):
     """us_etf_map 테이블에서 티커 목록 조회 후 us_market에 가격 데이터 upsert"""
+    if yf is None or _sb is None:
+        raise RuntimeError("yfinance/Supabase 미가용 — US ETF 수집 불가")
     # us_etf_map에서 최신 매핑 조회
     try:
         map_res = _sb.table('us_etf_map').select('industry,ticker').execute()

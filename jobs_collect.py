@@ -339,7 +339,8 @@ def job_collect_financials():
             y, mo = m.group(1), int(m.group(2))
             return y, {3:'Q1', 6:'Q2', 9:'Q3', 12:'Q4'}.get(mo)
 
-        today_corps  = []
+        today_corps    = []
+        quarter_groups = {}  # {(year, quarter): [corp_code]} — 정기보고서 없는 날 NameError 방지
         if disc_fin is not None and not disc_fin.empty:
             filtered = disc_fin[
                 disc_fin['report_nm'].str.contains('|'.join(target_types), na=False) &
@@ -457,24 +458,29 @@ def job_collect_financials():
                 'insider_summary': d.get('insider_summary') or None,
             } for d in processed_disclosures]
 
-            sb.table('daily_disclosures').delete().eq('base_date', _today_str).execute()
+            # 공시 0건이면 삭제 스킵 — DART 빈 응답(장애/수동 트리거) 시
+            # delete→insert가 그날 저장분을 통째로 지우는 것 방지
+            if not rows_to_insert:
+                logging.warning("⚠️ [공시저장] 오늘 공시 0건 — 기존 daily_disclosures 보존(삭제 스킵)")
+            else:
+                sb.table('daily_disclosures').delete().eq('base_date', _today_str).execute()
 
-            # 청크별 2회 재시도 — 부분 저장(중간 실패로 일부 공시 유실) 감지·복구
-            _failed_chunks = 0
-            for i in range(0, len(rows_to_insert), 100):
-                _chunk_rows = rows_to_insert[i:i + 100]
-                for _attempt in (1, 2):
-                    try:
-                        sb.table('daily_disclosures').insert(_chunk_rows).execute()
-                        break
-                    except Exception as _ins_e:
-                        if _attempt == 2:
-                            _failed_chunks += 1
-                            logging.error(f"❌ [공시저장] 청크 {i // 100} 삽입 실패(2회): {_ins_e}")
-                        else:
-                            time.sleep(2)
-            if _failed_chunks:
-                logging.error(f"❌ [공시저장] {_failed_chunks}개 청크 유실 — daily_disclosures 부분 저장 상태")
+                # 청크별 2회 재시도 — 부분 저장(중간 실패로 일부 공시 유실) 감지·복구
+                _failed_chunks = 0
+                for i in range(0, len(rows_to_insert), 100):
+                    _chunk_rows = rows_to_insert[i:i + 100]
+                    for _attempt in (1, 2):
+                        try:
+                            sb.table('daily_disclosures').insert(_chunk_rows).execute()
+                            break
+                        except Exception as _ins_e:
+                            if _attempt == 2:
+                                _failed_chunks += 1
+                                logging.error(f"❌ [공시저장] 청크 {i // 100} 삽입 실패(2회): {_ins_e}")
+                            else:
+                                time.sleep(2)
+                if _failed_chunks:
+                    logging.error(f"❌ [공시저장] {_failed_chunks}개 청크 유실 — daily_disclosures 부분 저장 상태")
 
             logging.info(
                 f"📊 [공시저장] 실적공시 {len(today_corps)}건 / "

@@ -202,7 +202,9 @@ def fetch_industry_trend(target_date: str, days: int = 5) -> dict:
     try:
         # 회사별 산업 조회 — 모니터링 종목 전체(~312개, 단일 조회로 절단 없음)
         ind_res = sb.table("companies")             .select("code,industry")             .eq("is_monitored", True).execute()
-        ind_map = {r["code"]: r["industry"] for r in (ind_res.data or []) if r.get("industry")}
+        # companies.code는 .KS/.KQ suffix 포함 가능 — market_data.stock_code(clean)와 매칭되도록 제거
+        ind_map = {r["code"].split(".")[0]: r["industry"]
+                   for r in (ind_res.data or []) if r.get("industry") and r.get("code")}
         if not ind_map:
             return {}
 

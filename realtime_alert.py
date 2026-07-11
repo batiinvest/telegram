@@ -1144,8 +1144,8 @@ class KisMyStockScanner:
                 time.sleep(5)
 
     def run(self):
+        # 재시작 공지 제거 — 워치독이 스레드를 되살릴 때마다 메인 공개 채널에 발송되던 스팸
         logging.info("🚀 바티대리 출근 완료")
-        stock_api.send_telegram(DEFAULT_CHAT_ID, "🚀 <b>채팅방 기능 업데이트</b>(시스템 리팩토링 완료)")
         t = threading.Thread(target=self.monitoring_loop, daemon=True)
         t.start()
         self.telegram_listener()

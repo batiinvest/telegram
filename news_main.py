@@ -322,6 +322,13 @@ class NaverNewsBot:
                     time.sleep(0.5)
                 return []
             else:
+                # 401(키 무효)·403 등이 무음이면 수집 전체가 조용히 0건이 됨 — 로그 + 로테이션
+                logging.warning(
+                    f"⚠️ [뉴스] API {res.status_code} (key#{self.key_index + 1}): {res.text[:100]}"
+                )
+                if res.status_code in (401, 403):
+                    self._rotate_key()
+                    time.sleep(0.5)
                 return []
         except Exception:
             return []
