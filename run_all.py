@@ -175,11 +175,41 @@ def run_scheduler():
             time.sleep(60)
 
 
+def _notify_admin(msg: str):
+    """관리자 방으로 운영 알림 발송. admin_chat_id 미설정이면 로그만 (공개 채널 폴백 없음)."""
+    try:
+        import stock_api
+        from telegram_utils import get_admin_chat_id
+        target = get_admin_chat_id()
+        if target:
+            stock_api.send_telegram(target, msg)
+        else:
+            logging.info(f"[관리자알림] admin_chat_id 미설정 — 스킵: {msg[:80]}")
+    except Exception as e:
+        logging.debug(f"[관리자알림] 발송 실패 (무시): {e}")
+
+
+def _git_commit_short() -> str:
+    """현재 배포 커밋 해시 (재시작 알림용). 실패 시 빈 문자열."""
+    try:
+        import subprocess, os
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
 def restart_thread(target_func, name):
     logging.warning(f"🔄 [{name}] 재시작을 시도합니다...")
     new_thread = threading.Thread(target=target_func, name=name, daemon=True)
     new_thread.start()
     logging.info(f"✅ [{name}] 재시작 성공!")
+    # 스레드가 죽어 워치독이 되살린 건 장애 신호 — 관리자에게 즉시 알림
+    _notify_admin(f"⚠️ <b>[스레드 재시작]</b> {name} 응답 없음 → 워치독이 재기동했습니다.")
     return new_thread
 
 
@@ -209,6 +239,15 @@ def main():
     for name, info in threads.items():
         info["thread"].start()
         time.sleep(2)
+
+    # 프로세스 기동 알림 — systemd 재시작·배포 확인용 (관리자 방 전용, 공개 채널 발송 없음)
+    _commit = _git_commit_short()
+    _notify_admin(
+        f"🔄 <b>[시스템 재시작]</b> bati_bot 기동 완료\n"
+        f"🕐 {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        + (f" · <code>{_commit}</code>" if _commit else "")
+        + f"\n🧵 스레드 {len(threads)}개 기동 (시세·뉴스·공시·스케줄러)"
+    )
 
     while True:
         try:
