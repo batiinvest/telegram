@@ -44,7 +44,8 @@ SB_SERVICE_KEY = os.getenv("SB_SERVICE_KEY", "")
 
 def run(dry_run: bool = False):
     if not all([DART_API_KEY, SB_URL, SB_SERVICE_KEY]):
-        log.error("DART_API_KEY, SB_URL, SB_SERVICE_KEY 환경변수 필요"); sys.exit(1)
+        # sys.exit 금지 — 스케줄러 잡에서 호출되므로 SystemExit가 except Exception을 뚫음
+        raise RuntimeError("DART_API_KEY, SB_URL, SB_SERVICE_KEY 환경변수 필요")
 
     dart.set_api_key(DART_API_KEY)
     sb = _get_sb()
@@ -71,9 +72,12 @@ def run(dry_run: bool = False):
         }
 
     # 2. DB 로드
+    # ⚠️ chat_id는 rooms 테이블로 분리돼 companies에 없음 — select에 포함하면
+    #   42703으로 조회 실패 → fetch_all_pages가 빈 리스트 반환 → 전체가 '신규' 오판
+    #   → chat_id 포함 insert가 PGRST204로 전멸 (07-04~07-11 동기화 무동작의 원인)
     log.info("DB 기존 종목 로드 중...")
     rows = _fetch_all_pages(sb.table("companies").select(
-        "id,name,code,corp_code,market,monitoring_level,is_monitored,chat_id"
+        "id,name,code,corp_code,market,monitoring_level,is_monitored"
     ))
     db_map = {
         (row.get("code") or "").strip(): row
@@ -81,6 +85,11 @@ def run(dry_run: bool = False):
         if (row.get("code") or "").strip()
     }
     log.info(f"DB: {len(db_map)}개")
+
+    # 조회 실패(빈 결과)를 '전부 신규'로 오판하지 않도록 가드 —
+    # DART가 수천 개인데 DB가 0개면 쿼리 실패 가능성이 압도적
+    if not db_map:
+        raise RuntimeError("companies 조회 결과 0건 — 쿼리 실패 의심, 동기화 중단 (오판 방지)")
 
     dart_codes = set(dart_map.keys())
     db_codes   = set(db_map.keys())
@@ -98,7 +107,7 @@ def run(dry_run: bool = False):
                 "name": di["name"], "code": code,
                 "corp_code": di["corp_code"], "market": di["market"],
                 "sector": di["sector"], "product": di["product"],
-                "industry": "", "sub_industry": "", "chat_id": None,
+                "industry": "", "sub_industry": "",
                 "keywords": "",
                 "active": True, "is_monitored": False, "monitoring_level": "data",
             })
@@ -142,7 +151,7 @@ def run(dry_run: bool = False):
     if delisted_monitored:
         log.warning("\n[⚠️  상폐 경고 — 수동 처리 필요]")
         for d in delisted_monitored:
-            log.warning(f"  {d['name']} ({d.get('code')}) level={d.get('monitoring_level')} chat_id={d.get('chat_id')}")
+            log.warning(f"  {d['name']} ({d.get('code')}) level={d.get('monitoring_level')}")
 
     if dry_run:
         log.info("\n[DRY-RUN] DB 변경 없음. --dry-run 제거 후 재실행하세요.")
