@@ -279,6 +279,27 @@ def _load_rooms(bridge, seed: bool = False):
 # ==========================================
 # 4. 초기화 / 재로드 (import 부작용의 명시적 진입점)
 # ==========================================
+
+# ── reload 콜백 레지스트리 ─────────────────────────────
+# check_reload_flag()는 bridge 싱글톤에 마지막 값을 저장하는 단일 소비자 설계라,
+# 여러 곳(공시봇·뉴스봇·워치독)이 각자 폴링하면 먼저 본 쪽만 True를 받는 경쟁이 생긴다.
+# → 플래그 소비는 워치독 한 곳으로 통일하고, 모듈별 후속 갱신(필터 재로드·방 매핑
+#   재빌드 등)은 여기 등록된 콜백으로 전파한다. key 중복 등록 시 교체(인스턴스 재생성 안전).
+_RELOAD_CALLBACKS: dict = {}   # key → callable
+
+
+def on_reload(fn, key: str = None):
+    """reload_company_data() 완료 후 호출될 콜백 등록."""
+    _RELOAD_CALLBACKS[key or getattr(fn, '__qualname__', repr(fn))] = fn
+
+
+def _fire_reload_callbacks():
+    for _key, _fn in list(_RELOAD_CALLBACKS.items()):
+        try:
+            _fn()
+        except Exception as _cbe:
+            logging.error(f"⚠️ [Reload] 콜백 '{_key}' 실행 실패: {_cbe}")
+
 def init_config():
     """
     설정 전체 로드 — 모듈 하단에서 import 시 1회 자동 호출.
@@ -356,6 +377,8 @@ def reload_company_data():
         _load_rooms(_b, seed=False)
     except Exception as _ce:
         logging.warning(f"⚠️ [Reload] rooms 채팅방 로드 실패 (기존 유지): {_ce}")
+
+    _fire_reload_callbacks()   # 봇별 후속 갱신 (공시필터·뉴스필터·리스너 방 매핑 등)
 
     logging.info(f"✅ [Reload] 완료 — {len(COMPANY_CODES)}개 종목, {len(COMPANY_CHAT_IDS)}개 채팅방")
     return True

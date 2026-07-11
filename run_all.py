@@ -10,6 +10,7 @@ run_all.py — 통합 시스템 엔트리포인트
 import sys
 import time
 import logging
+import functools
 import threading
 
 # 로깅은 하위 모듈 import 전에 초기화 — import 시점 로그도 파일에 기록
@@ -96,26 +97,37 @@ def run_dart_bot():
         logging.error(f"❌ [공시 봇] 종료됨 (에러): {e}")
 
 
+def _threaded(job_fn):
+    """독립 잡을 백그라운드 스레드로 실행 — schedule은 단일 스레드 직렬이라
+    긴 잡(전체 수집 ~10분, 브리핑 방 순회)이 후속 잡을 밀어내는 문제 완화.
+    ⚠️ 수집 체인(시장수집→수급→섹터요약→신고가→주도주→시장요약)은 순서 의존이므로
+    스레드화하지 않는다 — 직렬 실행이 곧 순서 보장."""
+    @functools.wraps(job_fn)
+    def runner():
+        threading.Thread(target=job_fn, name=f"Job-{job_fn.__name__}", daemon=True).start()
+    return runner
+
+
 def run_scheduler():
     logging.info("🚀 [스케줄러] 시작 (schedule 라이브러리 적용)")
     schedule.clear()  # 재시작 시 중복 job 방지 — 없으면 이미 지난 시각 job이 즉시 실행됨
 
-    schedule.every().day.at("09:00").do(job_pro_channel_check)  # 프로 채널 구독 만료 체크
-    schedule.every().day.at("09:05").do(job_kind_ir)             # KIND IR자료 오전 수집
-    schedule.every().day.at("08:50").do(job_naver_report)
-    schedule.every().day.at("08:55").do(job_collect_analyst_opinions)  # 투자의견 (장전)
-    schedule.every().day.at("06:30").do(job_collect_macro)             # 글로벌 매크로 수집 + 메인 채널 브리핑 (서머타임 05:00/겨울 06:00 마감 → 06:30 안전)
-    schedule.every().day.at("06:35").do(job_collect_us_etf)            # US ETF 수집 (미국 장 마감 직후)
+    schedule.every().day.at("09:00").do(_threaded(job_pro_channel_check))  # 프로 채널 구독 만료 체크
+    schedule.every().day.at("09:05").do(_threaded(job_kind_ir))            # KIND IR자료 오전 수집
+    schedule.every().day.at("08:50").do(_threaded(job_naver_report))
+    schedule.every().day.at("08:55").do(_threaded(job_collect_analyst_opinions))  # 투자의견 (장전)
+    schedule.every().day.at("06:30").do(_threaded(job_collect_macro))             # 글로벌 매크로 수집 + 메인 채널 브리핑 (서머타임 05:00/겨울 06:00 마감 → 06:30 안전)
+    schedule.every().day.at("06:35").do(_threaded(job_collect_us_etf))            # US ETF 수집 (미국 장 마감 직후)
     schedule.every().day.at("09:30").do(job_collect_market)            # 장 시작 모니터링 수집
     schedule.every().day.at("09:35").do(job_collect_foreign_institution)  # 기관/외국인 수급 ①
     schedule.every().day.at("11:25").do(job_collect_foreign_institution)  # 기관/외국인 수급 ②
-    schedule.every().day.at("11:30").do(job_lunch_briefing)
+    schedule.every().day.at("11:30").do(_threaded(job_lunch_briefing))
     schedule.every().day.at("12:00").do(job_collect_market)            # 점심 모니터링 수집
     schedule.every().day.at("13:25").do(job_collect_foreign_institution)  # 기관/외국인 수급 ③
     schedule.every().day.at("14:35").do(job_collect_foreign_institution)  # 기관/외국인 수급 ④
     schedule.every().day.at("15:35").do(job_collect_foreign_institution)  # 기관/외국인 수급 ⑤ (장 마감 최종)
-    schedule.every().day.at("16:10").do(job_collect_macro)             # 장 마감 후 매크로 수집
-    schedule.every().day.at("16:20").do(job_collect_us_etf)            # US ETF 수집 (미장 전일 종가)
+    schedule.every().day.at("16:10").do(_threaded(job_collect_macro))  # 장 마감 후 매크로 수집
+    schedule.every().day.at("16:20").do(_threaded(job_collect_us_etf)) # US ETF 수집 (미장 전일 종가)
     schedule.every().day.at("17:20").do(job_collect_new_high)          # 신고가 종목 수집 (장마감 확정 수집 17:00 이후 — market_data 기준)
     schedule.every().day.at("16:45").do(job_collect_investor_trend)    # 종목별 외국인·기관 순매수 확정 (sector_summary 전)
     schedule.every().day.at("18:15").do(job_collect_investor_trend)    # 종목별 수급 확정 정산 (KRX 확정 후 — 당일 최종값 반영)
@@ -125,9 +137,9 @@ def run_scheduler():
     schedule.every().day.at("19:45").do(job_sector_summary)            # 산업집계 재계산 (19:30 수급 확정 후 — 당일 최종 반영)
     schedule.every().day.at("17:30").do(job_leading_stocks)            # 주도주 탐색기 스코어 계산
     schedule.every().day.at("18:30").do(job_market_summary)            # 투자포인트 요약 생성 (18:15 수급 확정 후)
-    schedule.every().day.at("18:00").do(job_naver_report)
-    schedule.every().day.at("18:10").do(job_kind_ir)             # KIND IR자료 오후 수집
-    schedule.every().day.at("18:30").do(job_daily_closing)
+    schedule.every().day.at("18:00").do(_threaded(job_naver_report))
+    schedule.every().day.at("18:10").do(_threaded(job_kind_ir))       # KIND IR자료 오후 수집
+    schedule.every().day.at("18:30").do(_threaded(job_daily_closing)) # 마감 브리핑 — 18:30 재무수집·시장요약과 병렬
     # 봇 시작 시 초기 재무 데이터 수집 (최초 1회만)
     # job_initial_financials 제거 — 필요시 수동 실행
     logging.info("🚀 [초기수집] 백그라운드 스레드 시작")
@@ -135,7 +147,7 @@ def run_scheduler():
     schedule.every().saturday.at("00:30").do(job_cleanup_market_data)   # 새벽 market_data 정리
     schedule.every().saturday.at("01:00").do(job_sync_listed_companies) # 새벽 상장사 동기화
     schedule.every().day.at("18:30").do(job_collect_financials)        # 장 마감 후 재무수집 (공시 기반)
-    schedule.every().day.at("18:35").do(job_collect_analyst_opinions)  # 투자의견 (장후)
+    schedule.every().day.at("18:35").do(_threaded(job_collect_analyst_opinions))  # 투자의견 (장후)
     schedule.every().day.at("18:40").do(job_collect_estimates)        # 종목추정실적 (미래 매출/영업이익 + 상향감지)
     schedule.every().day.at("19:50").do(job_daily_ops_summary)        # 일일 운영 요약 (잡 성공/실패/소요시간) → 관리자 방
     schedule.every().saturday.at("10:00").do(job_saturday_main_ranking)

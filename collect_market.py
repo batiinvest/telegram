@@ -293,104 +293,13 @@ if __name__ == "__main__":
 
 
 # ══════════════════════════════════════════════════════════
-# 신고가 종목 수집 (KIS ka10017 — 주식신고가조회)
+# 신고가 종목 수집
+# ──────────────────────────────────────────────────────────
+# 구 fetch_new_high_stocks(FHPST01870000 near-new-highlow 랭킹 API)는 07-10
+# market_data 소스로 교체되며 죽은 코드가 되어 2026-07-11 제거.
+# (고정 소량 페이지 + 거래량 0 가짜 종목 도배로 실제 신고가 누락 — collect_new_high
+#  docstring의 구현 이력 참조)
 # ══════════════════════════════════════════════════════════
-
-def fetch_new_high_stocks(market_code: str = '0000') -> list[dict]:
-    """
-    KIS near-new-highlow API로 52주 신고가 종목 조회
-    (FHPST01870000 / ranking/near-new-highlow)
-    - hprc_near_rate == 0.00 → 오늘 52주 신고가 갱신
-    - hprc_near_rate < 0    → 신고가 근접 (미갱신)
-    market_code: 0000=전체, 0001=거래소, 1001=코스닥
-    """
-    from managers import kis_auth, kis_rate_limiter, KIS_BASE_URL, KIS_APP_KEY, KIS_APP_SECRET
-    import requests as req
-
-    token = kis_auth.get_token()
-    if not token:
-        logging.warning("[신고가] 토큰 없음")
-        return []
-
-    url = f"{KIS_BASE_URL}/uapi/domestic-stock/v1/ranking/near-new-highlow"
-    headers = {
-        "authorization": f"Bearer {token}",
-        "appkey":    KIS_APP_KEY,
-        "appsecret": KIS_APP_SECRET,
-        "tr_id":     "FHPST01870000",
-        "custtype":  "P",
-    }
-    params = {
-        "fid_cond_mrkt_div_code":  "J",
-        "fid_cond_scr_div_code":   "20187",
-        "fid_div_cls_code":        "0",
-        "fid_input_cnt_1":         "",
-        "fid_input_cnt_2":         "",
-        "fid_prc_cls_code":        "0",   # 0=신고근접
-        "fid_input_iscd":          market_code,
-        "fid_trgt_cls_code":       "0",
-        "fid_trgt_exls_cls_code":  "0",
-        "fid_aply_rang_prc_1":     "",
-        "fid_aply_rang_prc_2":     "",
-        "fid_aply_rang_vol":       "0",
-    }
-
-    try:
-        kis_rate_limiter.acquire()
-        res = req.get(url, headers=headers, params=params, timeout=10)
-        data = res.json()
-        if data.get('rt_cd') != '0':
-            logging.warning(f"[신고가] API 오류 (mkt={market_code}): rt_cd={data.get('rt_cd')} msg={data.get('msg1')}")
-            return []
-        logging.info(f"[신고가] API 응답 (mkt={market_code}): output {len(data.get('output') or [])}개")
-
-        result = []
-        for row in (data.get('output') or []):
-            code  = row.get('mksc_shrn_iscd', '').strip()
-            name  = row.get('hts_kor_isnm', '').strip()
-            price = int(float(row.get('stck_prpr', 0) or 0))
-            chg   = float(row.get('prdy_ctrt', 0) or 0)
-            near_raw = row.get('hprc_near_rate', '')
-            try:
-                near = float(near_raw) if near_raw not in ('', None) else None
-            except (ValueError, TypeError):
-                near = None
-            high  = int(float(row.get('new_hgpr', 0) or 0))
-            low   = int(float(row.get('new_lwpr', 0) or 0))
-            vol   = int(float(row.get('acml_vol', 0) or 0))
-
-            if not code:
-                continue
-
-            # 52주 신고가 갱신 종목만 수집 (near_rate == 0.00 → 오늘 갱신)
-            # near_raw가 빈 문자열인 경우도 0으로 처리 (신고가 갱신 당일 API 응답)
-            if near is not None and near != 0.0:
-                continue   # 근접(미갱신) 포함하지 않음
-            # 거래량 0 = 당일 미거래(거래정지/관리종목 등) → 진짜 신고가 갱신 아님(오탐 제거)
-            if vol <= 0:
-                continue
-            cls_label = '신고가'
-            cls_code  = '1'
-
-            result.append({
-                'code':          code,
-                'name':          name,
-                'price':         price,
-                'chg_pct':       chg,
-                'volume':        vol,
-                'new_hgpr_cls':  cls_label,
-                'new_hgpr_code': cls_code,
-                'd52_high':      high,
-                'd52_low':       low,
-            })
-
-        logging.info(f"[신고가] {market_code} → {len(result)}개 (갱신+근접)")
-        return result
-
-    except Exception as e:
-        logging.error(f"[신고가] 조회 오류: {e}")
-        return []
-
 
 def save_new_high_to_db(rows: list[dict], base_date: str, sb_client=None):
     """신고가 정보를 market_data.hgpr_cls_code 컬럼에 업데이트

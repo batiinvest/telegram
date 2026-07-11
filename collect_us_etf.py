@@ -31,33 +31,9 @@ except Exception as e:
     _sb = None
     log.error(f"Supabase 연결 실패: {e}")
 
-# ── 산업별 ETF 정의 ──────────────────────────────────────────────
-US_ETF_MAP = {
-    '반도체': ['SOXX', 'SMH', 'XSD'],
-    '바이오': ['IBB', 'XBI', 'ARKG'],
-    '로봇':   ['BOTZ', 'ROBO'],
-    '우주':   ['ARKX', 'UFO', 'ROKT'],
-    '2차전지':['LIT', 'BATT', 'DRIV'],
-    '소비재': ['XLY', 'ONLN', 'RTH'],
-    '엔터':   ['XLC', 'PEJ', 'HERO', 'BNGE'],
-    '조선':   ['BOAT', 'SEA', 'BDRY'],
-    '테크':   ['VGT', 'XLK', 'IYW'],
-    '뷰티':   ['RTH', 'ONLN'],
-    '신재생': ['ICLN', 'QCLN', 'PBW', 'RNRG', 'FAN', 'TAN'],
-}
-
-# 전체 유니크 티커 목록
-ALL_TICKERS = {}
-for ind, tickers in US_ETF_MAP.items():
-    for t in tickers:
-        ALL_TICKERS[t] = ind  # 마지막 산업으로 덮어쓰기 (중복 없도록 별도 관리)
-
-# 중복 티커를 모든 산업에 매핑
-TICKER_INDUSTRIES = {}  # { 'ONLN': ['소비재', '뷰티'], ... }
-for ind, tickers in US_ETF_MAP.items():
-    for t in tickers:
-        TICKER_INDUSTRIES.setdefault(t, []).append(ind)
-
+# 티커 목록은 us_etf_map 테이블이 단일 출처 (collect_and_save가 직접 조회).
+# 과거 하드코딩 US_ETF_MAP/ALL_TICKERS/TICKER_INDUSTRIES dict은 죽은 코드로 남아 있다가
+# 2026-07-11 제거 — 테이블과 드리프트해 혼동만 유발.
 
 # ── 데이터 수집 ──────────────────────────────────────────────────
 def fetch_history(ticker: str, days: int = 10):

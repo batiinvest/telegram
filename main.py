@@ -143,6 +143,16 @@ def _load_dart_filters():
         logging.warning(f"⚠️ [공시봇] 필터 로드 실패 (기본값 사용): {e}")
 
 
+# reload_flag 소비는 watchdog 단일 창구 — 재로드 시 공시 필터도 함께 갱신되도록 콜백 등록.
+# (구: 봇 자체 check_reload_flag 폴링 — bridge 싱글톤 플래그를 워치독과 경쟁 소비해
+#  먼저 본 쪽만 반영되던 문제. 2026-07-11 등록제로 통일)
+try:
+    from config import on_reload as _on_reload
+    _on_reload(_load_dart_filters)
+except Exception:
+    pass
+
+
 def classify_disclosure(report_nm: str) -> str:
     """
     공시 중요도 분류.
@@ -273,14 +283,8 @@ class DartRoutingBot:
                     _bridge.heartbeat("dart_bot")
                 except Exception:
                     pass
-                try:
-                    if _bridge.check_reload_flag():
-                        from config import reload_company_data
-                        reload_company_data()
-                        _load_dart_filters()
-                        logging.info("🔄 [main] 종목 데이터 재로드 완료")
-                except Exception as _re:
-                    logging.debug(f"reload_flag 체크 오류: {_re}")
+                # reload_flag 자체 폴링 제거 — watchdog이 단일 소비자,
+                # 필터 갱신은 config.on_reload(_load_dart_filters) 콜백으로 수신
 
             now = market_timer.get_now()
             if not market_timer.is_weekday():
@@ -290,16 +294,29 @@ class DartRoutingBot:
             if 7 <= now.hour < 19:
                 try:
                     today_str = now.strftime("%Y%m%d")
-                    params = {
-                        "crtfc_key": DART_API_KEY,
-                        "bgn_de": today_str, "end_de": today_str,
-                        "page_count": 50, "page_no": 1
-                    }
-                    res  = self.session.get(self.base_url, params=params, timeout=10)
-                    data = res.json()
+                    # 공시 폭주 분(분당 50건 초과) 누락 방지 — 최대 3페이지(150건).
+                    # 페이지는 최신순이므로, 페이지 안에 이미 처리한 공시가 하나라도 있으면
+                    # 그보다 오래된 페이지는 볼 필요 없음 → 평시엔 기존과 동일하게 1페이지 1호출.
+                    items = []
+                    for _page in range(1, 4):
+                        params = {
+                            "crtfc_key": DART_API_KEY,
+                            "bgn_de": today_str, "end_de": today_str,
+                            "page_count": 50, "page_no": _page,
+                        }
+                        res  = self.session.get(self.base_url, params=params, timeout=10)
+                        data = res.json()
+                        if data.get("status") != "000":
+                            break
+                        page_items = data.get("list", [])
+                        items.extend(page_items)
+                        if _page >= int(data.get("total_page", 1) or 1):
+                            break
+                        if any(self.history.contains(it.get("rcept_no")) for it in page_items):
+                            break
 
-                    if data.get("status") == "000":
-                        for item in reversed(data.get("list", [])):
+                    if items:
+                        for item in reversed(items):
                             rcept_no   = item.get("rcept_no")
                             corp_name  = item.get("corp_name")
                             report_nm  = item.get("report_nm", "")

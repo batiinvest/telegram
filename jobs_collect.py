@@ -127,20 +127,14 @@ def _preprocess_disclosures(all_disc_records: list, sb) -> list:
     cap_map    = {}       # corp_code → market_cap
 
     try:
-        # 2. 상장 여부
+        # 2+3. 상장 여부 + corp_code→stock_code 매핑 — 동일 쿼리 2회 반복하던 것을 1회로 통합
         chunk = 500
+        stock_map = {}   # corp_code → stock_code
         for i in range(0, len(corp_codes), chunk):
             res = sb.table('companies').select('corp_code,code') \
                     .in_('corp_code', corp_codes[i:i+chunk]).execute()
             for c in (res.data or []):
                 listed_set.add(c['corp_code'])
-
-        # 3. 시총 — 전체 corp_codes → stock_code 매핑 (500개 제한 버그 수정)
-        stock_map = {}   # corp_code → stock_code
-        for i in range(0, len(corp_codes), chunk):
-            res2 = sb.table('companies').select('corp_code,code') \
-                      .in_('corp_code', corp_codes[i:i+chunk]).execute()
-            for c in (res2.data or []):
                 sc = (c.get('code') or '').replace('.KS', '').replace('.KQ', '')
                 if sc:
                     stock_map[c['corp_code']] = sc
@@ -586,6 +580,13 @@ def job_save_trend_flags(year: str = None, quarter: str = None):
 def job_collect_macro():
     """글로벌 매크로 데이터 수집 (지수/환율/원자재) — 06:30 아침 수집 시 메인 채널 발송 포함"""
     if not _is_enabled('collect_macro'):
+        return
+    # 주말 스킵 — 단, 토요일 새벽(06시대)은 미국 금요일장 마감분 수집을 위해 허용.
+    # 일요일·주말 저녁 실행은 토요일 값의 복제 행만 만들어 macro_data에
+    # 비거래일 base_date를 쌓는다 (섹터요약 거래일 산정 오염의 원인이었음).
+    _now = datetime.datetime.now()
+    if _now.weekday() >= 5 and not (_now.weekday() == 5 and _now.hour == 6):
+        logging.info("⏸ [매크로] 주말 스킵 (토 06시대 미국 마감분 수집만 허용)")
         return
     logging.info("=== 매크로 데이터 수집 시작 ===")
     try:

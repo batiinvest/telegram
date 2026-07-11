@@ -82,6 +82,15 @@ def _load_news_filters():
         logging.warning(f"⚠️ [뉴스봇] 필터 키워드 DB 로드 실패 (기본값 사용): {e}")
 
 
+# reload_flag 소비는 watchdog 단일 창구 — 재로드 시 뉴스 필터도 함께 갱신되도록 콜백 등록.
+# (구: 봇 자체 check_reload_flag 폴링 — bridge 싱글톤 플래그 경쟁 소비 문제)
+try:
+    from config import on_reload as _on_reload
+    _on_reload(_load_news_filters)
+except Exception:
+    pass
+
+
 # ══════════════════════════════════════════════════════
 #  스팸/광고성 뉴스 필터 패턴
 #  — 제목에 이 패턴이 포함되면 발송하지 않음
@@ -363,14 +372,8 @@ class NaverNewsBot:
                     _bridge.heartbeat("news_bot")
                 except Exception:
                     pass
-                try:
-                    if _bridge.check_reload_flag():
-                        from config import reload_company_data
-                        reload_company_data()
-                        _load_news_filters()
-                        logging.info("🔄 [뉴스봇] 종목/필터 데이터 재로드 완료")
-                except Exception as _re:
-                    logging.debug(f"reload_flag 체크 오류: {_re}")
+                # reload_flag 자체 폴링 제거 — watchdog이 단일 소비자,
+                # 필터 갱신은 config.on_reload(_load_news_filters) 콜백으로 수신
 
             for company_info in COMPANY_KEYWORDS:
                 company_name = company_info["name"]

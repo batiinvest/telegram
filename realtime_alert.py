@@ -91,16 +91,19 @@ class KisMyStockScanner:
 
         self.chat_id_to_code = {}
         self.chat_id_to_name = {}
-        
+        self.allowed_configs = []
+
         # DB에서 알림 임계값·어드민 채팅방·신뢰도 출처 로드
         _load_alert_config()
 
-        # 설정 파일 로드
-        for name, chat_id in COMPANY_CHAT_IDS.items():
-            if name in COMPANY_CODES:
-                str_cid = str(chat_id)
-                self.chat_id_to_code[str_cid] = COMPANY_CODES[name]
-                self.chat_id_to_name[str_cid] = name
+        # 방 매핑 빌드 + reload 시 재빌드 등록
+        # (기존엔 시작 시 1회 스냅샷이라 대시보드에서 방 추가해도 명령어 무반응 — 재시작 필요했음)
+        self._rebuild_room_maps()
+        try:
+            from config import on_reload as _on_reload
+            _on_reload(self._rebuild_room_maps, key="scanner_room_maps")
+        except Exception as _ore:
+            logging.warning(f"⚠️ [시세봇] reload 콜백 등록 실패: {_ore}")
 
         # ===============================================================
         # 🎮 [Refactor] Dictionary Dispatcher (명령어 매핑)
@@ -134,6 +137,24 @@ class KisMyStockScanner:
             "/브리핑": self.cmd_stock_briefing,
             "/일정": self.cmd_stock_briefing
         }
+
+    def _rebuild_room_maps(self):
+        """COMPANY/INDUSTRY_CHAT_IDS 공유 컨테이너 기준으로 리스너 매핑 재빌드.
+        __init__ 1회 + config.reload_company_data() 콜백으로 호출 (방 추가 즉시 반영)."""
+        code_map, name_map = {}, {}
+        for name, chat_id in COMPANY_CHAT_IDS.items():
+            if name in COMPANY_CODES:
+                str_cid = str(chat_id)
+                code_map[str_cid] = COMPANY_CODES[name]
+                name_map[str_cid] = name
+        self.chat_id_to_code = code_map
+        self.chat_id_to_name = name_map
+        self.allowed_configs = [
+            str(x) for x in list(COMPANY_CHAT_IDS.values())
+            + list(INDUSTRY_CHAT_IDS.values())
+            + [DEFAULT_CHAT_ID, ADMIN_CHAT_ID]
+        ]
+        logging.info(f"✅ [시세봇] 방 매핑 갱신 — 종목방 {len(code_map)}개 / 허용 {len(self.allowed_configs)}개")
 
     # ===============================================================
     # 🕵️‍♂️ 내부 로직 (감시 루프)
@@ -1037,12 +1058,7 @@ class KisMyStockScanner:
 
     def telegram_listener(self):
         logging.info("👂 바티대리 리스너 대기 중")
-        
-        allowed_configs = [
-            str(x) for x in list(COMPANY_CHAT_IDS.values()) + 
-            list(INDUSTRY_CHAT_IDS.values()) + 
-            [DEFAULT_CHAT_ID, ADMIN_CHAT_ID]
-        ]
+        # 허용 방 목록은 self.allowed_configs — reload 콜백(_rebuild_room_maps)이 갱신
 
         while True:
             try:
@@ -1112,13 +1128,13 @@ class KisMyStockScanner:
 
                         matched_key = None
                         str_cid = str(chat_id)
-                        
-                        if str_cid in allowed_configs: matched_key = str_cid
+
+                        if str_cid in self.allowed_configs: matched_key = str_cid
                         elif message.get("chat", {}).get("username"):
                             u_id = f"@{message['chat']['username']}"
-                            if u_id in allowed_configs: matched_key = u_id
+                            if u_id in self.allowed_configs: matched_key = u_id
                             else:
-                                for cfg in allowed_configs:
+                                for cfg in self.allowed_configs:
                                     if cfg.lower() == u_id.lower(): matched_key = cfg; break
                         
                         # ── 1:1 DM 처리 (구독 신청 / 봇 명령어) ──────────

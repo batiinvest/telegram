@@ -84,14 +84,27 @@ def detect_signal(us_v: float | None, kr_v: float | None, period: int) -> str | 
 
 # ── 거래일 목록 ───────────────────────────────────────────────────────────────
 def get_trading_days(base_date: str) -> list[str]:
-    """base_date 기준 최근 LOOKBACK 거래일 (최신→구)."""
-    rows = sb.from_('macro_data') \
-        .select('base_date') \
-        .lte('base_date', base_date) \
-        .order('base_date', desc=True) \
-        .limit(LOOKBACK) \
-        .execute().data or []
-    return [r['base_date'] for r in rows]
+    """base_date 기준 최근 LOOKBACK 거래일 (최신→구).
+
+    소스 macro_data → market_data 교체(2026-07-11): macro_data는 주말·휴장일에도
+    base_date=당일로 저장돼 거래일 목록이 오염됐고, 5d/20d 윈도우에 비거래일이 끼어
+    실제로는 3/13거래일만 집계되는 왜곡이 있었다. market_data에는 KR 거래일만 존재.
+    PostgREST는 distinct 미지원 → 최신 날짜부터 1건씩 내려가며 수집 (LOOKBACK회 경량 쿼리).
+    """
+    days: list[str] = []
+    cur = base_date
+    first = True
+    for _ in range(LOOKBACK):
+        q = sb.from_('market_data').select('base_date') \
+              .order('base_date', desc=True).limit(1)
+        q = q.lte('base_date', cur) if first else q.lt('base_date', cur)
+        rows = q.execute().data or []
+        if not rows:
+            break
+        cur = rows[0]['base_date']
+        days.append(cur)
+        first = False
+    return days
 
 
 # ── 산업 매핑 ─────────────────────────────────────────────────────────────────

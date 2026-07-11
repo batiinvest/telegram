@@ -255,7 +255,9 @@ class KisAuthManager:
                 logging.error(f"❌ 토큰 발급 실패: {data}")
                 return None
                 
-            expired_str = data.get('token_token_expired')
+            # KIS 실제 응답 키는 access_token_token_expired ('token_token_expired'는 과거 오타
+            # — 항상 12h fallback을 타서 토큰 재발급이 잦았음). 구키는 호환용으로 유지.
+            expired_str = data.get('access_token_token_expired') or data.get('token_token_expired')
             if not expired_str:
                 expired_dt = datetime.now() + timedelta(hours=12)
             else:
