@@ -140,8 +140,13 @@ def _send_to_targets(sb, targets, content, parse_mode, history_target, requested
         row['sent_by'] = requested_by
     try:
         sb.table('notice_history').insert(row).execute()
-    except Exception as e:
-        logging.warning(f"[BotReq] notice_history 기록 실패: {e}")
+    except Exception:
+        # sent_by 컬럼 미존재 등 스키마 불일치 → 해당 필드 제거 후 1회 재시도
+        row.pop('sent_by', None)
+        try:
+            sb.table('notice_history').insert(row).execute()
+        except Exception as e2:
+            logging.warning(f"[BotReq] notice_history 기록 실패: {e2}")
     return {'sent_count': len(targets), 'ok_count': ok, 'parts': len(parts)}
 
 
