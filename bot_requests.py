@@ -10,6 +10,7 @@
 #   notice        {target, content, parse_mode}   — 그룹/개별 공지
 #                  target: all | open | 산업명 | room:ID | admin_direct | bati_direct
 #   notice_single {room_id, content}              — 방 상세 모달 단건 발송 (HTML)
+#   sync_desc     {room_id?}                      — 종목방 그룹 설명(소개글) 표준양식 일괄 교체
 #   ping          {}                              — getMe 연결 테스트
 #
 # status: pending → processing → done | error   (result JSONB에 요약/오류)
@@ -168,6 +169,49 @@ def _handle_notice_single(sb, payload, requested_by=None):
     return _send_to_targets(sb, [r], content, 'HTML', r['name'], requested_by)
 
 
+DESC_TEMPLATE = """<{name} 채팅방>
+📈 {name} 관련 정보를 실시간으로 공유하는 방입니다.
+• 공시 및 뉴스 실시간 제공
+• 시세 알림
+• IR 자료 및 증권사 리포트
+
+☕️ 후원: https://litt.ly/batiinvest
+📬 문의: @BatiInvestment
+⛔️ 퇴장 기준
+① 광고·욕설·비하·반말·선동 등 비매너
+② 3일 이상 미접속(미활동)
+③ 규정 위반 시 즉시 퇴장"""
+
+
+def _handle_sync_desc(sb, payload):
+    """종목 채팅방 그룹 설명(Description)을 표준 소개글로 일괄 교체.
+    payload {room_id?} 지정 시 해당 방만, 없으면 room_type=company 전체."""
+    only_room = payload.get('room_id')
+    q = sb.table('rooms').select('id,name,chat_id,room_type')
+    if only_room:
+        q = q.eq('id', only_room)
+    else:
+        q = q.eq('room_type', 'company')
+    rooms = q.execute().data or []
+    ok = skip = fail = 0
+    fails = []
+    for r in rooms:
+        name = r.get('name'); cid = r.get('chat_id')
+        if not name or not cid:
+            fail += 1; fails.append(f"{name or '?'}: chat_id 없음"); continue
+        try:
+            _tg('setChatDescription', {'chat_id': str(cid),
+                                       'description': DESC_TEMPLATE.format(name=name)})
+            ok += 1
+        except Exception as e:
+            if 'not modified' in str(e):
+                skip += 1
+            else:
+                fail += 1; fails.append(f"{name}: {str(e)[:50]}")
+        time.sleep(0.35)
+    return {'total': len(rooms), 'ok': ok, 'skip': skip, 'fail': fail, 'fails': fails[:20]}
+
+
 def _process_one(sb, req):
     rid = req['id']
     sb.table('bot_requests').update({'status': 'processing'}).eq('id', rid).execute()
@@ -183,6 +227,8 @@ def _process_one(sb, req):
             result = _handle_notice(sb, payload, by)
         elif rtype == 'notice_single':
             result = _handle_notice_single(sb, payload, by)
+        elif rtype == 'sync_desc':
+            result = _handle_sync_desc(sb, payload)
         elif rtype == 'ping':
             b = _tg('getMe', {})
             result = {'username': b.get('username'), 'first_name': b.get('first_name')}
