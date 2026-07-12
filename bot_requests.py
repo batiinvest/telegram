@@ -257,6 +257,14 @@ def process_bot_requests():
         return
     sb = get_supabase_client()
     try:
+        # 봇 재시작 등으로 중단된 고아 processing 복구 — 15분 경과 시 error 처리
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+        sb.table('bot_requests').update({
+            'status': 'error',
+            'result': {'error': '봇 재시작으로 처리 중단 — 일부만 발송됐을 수 있습니다. 필요 시 재발송하세요.'},
+            'processed_at': datetime.now(timezone.utc).isoformat(),
+        }).eq('status', 'processing').lt('created_at', cutoff).execute()
         res = sb.table('bot_requests').select('*') \
                 .eq('status', 'pending').order('created_at').limit(10).execute()
     except Exception as e:
