@@ -188,6 +188,18 @@ DESC_TEMPLATE = """<{name} 채팅방>
 ③ 규정 위반 시 즉시 퇴장"""
 
 
+def _get_desc_template(sb):
+    """소개글 템플릿 — app_config.room_desc_template 우선(대시보드 편집), 없으면 기본값."""
+    try:
+        res = sb.table('app_config').select('value').eq('key', 'room_desc_template').execute()
+        v = ((res.data[0]['value'] if res.data else '') or '').strip()
+        if v:
+            return v
+    except Exception as e:
+        logging.warning(f"[BotReq] room_desc_template 조회 실패(기본값 사용): {e}")
+    return DESC_TEMPLATE
+
+
 def _handle_sync_desc(sb, payload):
     """종목 채팅방 그룹 설명(Description)을 표준 소개글로 일괄 교체.
     payload {room_id?} 지정 시 해당 방만, 없으면 room_type=company 전체."""
@@ -198,6 +210,7 @@ def _handle_sync_desc(sb, payload):
     else:
         q = q.eq('room_type', 'company')
     rooms = q.execute().data or []
+    tmpl = _get_desc_template(sb)
     ok = skip = fail = 0
     fails = []
     for r in rooms:
@@ -206,7 +219,7 @@ def _handle_sync_desc(sb, payload):
             fail += 1; fails.append(f"{name or '?'}: chat_id 없음"); continue
         try:
             _tg('setChatDescription', {'chat_id': str(cid),
-                                       'description': DESC_TEMPLATE.format(name=name)})
+                                       'description': tmpl.replace('{name}', name)})
             ok += 1
         except Exception as e:
             if 'not modified' in str(e):
