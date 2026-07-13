@@ -18,7 +18,7 @@ import logging
 from logger_config import get_logger
 log = get_logger(__name__)
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -945,7 +945,8 @@ def collect_analyst_opinions(from_date: str = None, to_date: str = None) -> int:
 
     sb_client = get_supabase_client()
     today = date.today().strftime('%Y%m%d')
-    from_date = from_date or today
+    # report is not published daily -> 30d rolling window (upsert key dedupes)
+    from_date = from_date or (date.today() - timedelta(days=30)).strftime('%Y%m%d')
     to_date   = to_date   or today
 
     # 모니터링 종목 조회
