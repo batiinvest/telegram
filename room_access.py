@@ -182,9 +182,9 @@ def request_room(uid: int, username: str, name: str, room_id) -> bool:
     try:
         dup = sb.table('room_entries').select('id,status') \
                 .eq('telegram_id', uid).eq('room_id', room_id) \
-                .in_('status', ['approved', 'pending']).execute()
+                .in_('status', ['approved', 'joined', 'pending']).execute()
         rows = dup.data or []
-        if any(r['status'] == 'approved' for r in rows):
+        if any(r['status'] in ('approved', 'joined') for r in rows):
             _tg('sendMessage', chat_id=uid, parse_mode='HTML',
                 text=(f"이미 <b>{rname}</b> 입장이 승인된 계정입니다.\n"
                       f"링크 분실 시 @batiinvest로 문의해 주세요."))
@@ -484,7 +484,7 @@ def reissue_room(uid: int, room_id, admin_id: str = '') -> tuple:
             sb.table('room_entries').update({
                 'invite_link': link,
                 'approved_at': datetime.now(timezone.utc).isoformat(),
-            }).eq('telegram_id', uid).eq('room_id', room_id).eq('status', 'approved').execute()
+            }).eq('telegram_id', uid).eq('room_id', room_id).in_('status', ['approved', 'joined']).execute()
         except Exception as e:
             log.warning("[room] reissue DB 업데이트 실패: " + str(e))
     log.info("[room] 링크 재발급: " + str(uid) + " → " + room['name'])
@@ -514,3 +514,57 @@ def _notify_admin_reissue(uid: int, username: str, name: str, room: dict):
         {'text': '❌ 무시', 'callback_data': "ROOM|ignore|" + str(uid) + "|" + str(room['id'])},
     ]]}
     _tg('sendMessage', chat_id=admin, text=msg, parse_mode='HTML', reply_markup=keyboard)
+
+
+def mark_joined(uid, chat_id):
+    """유료방 실제 입장 감지 → approved 엔트리를 joined로 마킹. (name, room_name) 또는 None."""
+    sb = _sb()
+    if not sb:
+        return None
+    try:
+        res = sb.table('room_entries').select('id,telegram_name,room_name') \
+                .eq('telegram_id', uid).eq('room_chat_id', str(chat_id)) \
+                .eq('status', 'approved').limit(1).execute()
+        rows = res.data or []
+        if not rows:
+            return None
+        row = rows[0]
+        sb.table('room_entries').update({'status': 'joined'}).eq('id', row['id']).execute()
+        log.info("[room] 입장 완료: " + str(uid) + " → " + str(row.get("room_name")))
+        return row.get('telegram_name'), row.get('room_name')
+    except Exception as e:
+        log.warning("[room] mark_joined 오류: " + str(e))
+        return None
+
+
+def entry_stats():
+    """관리자 /현황 집계."""
+    out = {'pending': 0, 'approved_not_joined': 0, 'joined': 0, 'rejected': 0,
+           'today_approved': 0, 'not_joined_rooms': {}, 'rooms': 0, 'paid_rooms': 0}
+    sb = _sb()
+    if not sb:
+        return out
+    try:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        ents = sb.table('room_entries').select('status,room_name,approved_at').execute().data or []
+        for e in ents:
+            st = e.get('status')
+            if st == 'pending':
+                out['pending'] += 1
+            elif st == 'approved':
+                out['approved_not_joined'] += 1
+                rn = e.get('room_name') or '?'
+                out['not_joined_rooms'][rn] = out['not_joined_rooms'].get(rn, 0) + 1
+            elif st == 'joined':
+                out['joined'] += 1
+            elif st == 'rejected':
+                out['rejected'] += 1
+            if e.get('approved_at') and str(e['approved_at'])[:10] == today:
+                out['today_approved'] += 1
+        rooms = sb.table('rooms').select('status').execute().data or []
+        out['rooms'] = len(rooms)
+        out['paid_rooms'] = sum(1 for r in rooms if r.get('status') == 'paid')
+    except Exception as e:
+        log.warning("[room] entry_stats 오류: " + str(e))
+    return out

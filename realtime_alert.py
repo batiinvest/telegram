@@ -565,6 +565,24 @@ class KisMyStockScanner:
 
     def _handle_chat_member(self, cm: dict):
         """프로 채널 멤버 입장/퇴장 감지 → in_channel DB 자동 동기화."""
+        # 유료방 실제 입장 완료 감지 → approved→joined + 관리자 알림
+        try:
+            _chat = cm.get('chat', {})
+            _cid = _chat.get('id')
+            _new = cm.get('new_chat_member', {})
+            _uid = _new.get('user', {}).get('id')
+            _st = _new.get('status', '')
+            if _cid and _uid and _st in ('member', 'administrator', 'creator'):
+                import room_access as _ra
+                _r = _ra.mark_joined(_uid, _cid)
+                if _r:
+                    _nm, _rn = _r
+                    _admin = _ra._get_admin_chat()
+                    if _admin:
+                        _ra._tg('sendMessage', chat_id=_admin, parse_mode='HTML',
+                                text='✅ <b>[입장 완료]</b> ' + _ra._esc(_nm or str(_uid)) + ' → <b>' + _ra._esc(_rn) + '</b>')
+        except Exception as _je:
+            logging.debug('[입장감지] ' + str(_je))
         try:
             import pro_channel as _pro
 

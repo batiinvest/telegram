@@ -74,7 +74,7 @@ _ADMIN_KEYBOARD = {
     'keyboard': [
         [{'text': '🧹 미접속 강퇴'}, {'text': '📋 방 목록'}],
         [{'text': '🚫 아이디 차단'}, {'text': '♻️ 차단 해제'}],
-        [{'text': '🎟 유료 채팅방 입장'}],
+        [{'text': '📊 현황'}, {'text': '🎟 유료 채팅방 입장'}],
     ],
     'resize_keyboard': True,
     'is_persistent': True,
@@ -188,6 +188,9 @@ def _handle(update: dict):
         return
     if text == '📋 방 목록':
         _run_room_list(chat_id, uid)
+        return
+    if text == '📊 현황':
+        _run_status(chat_id, uid)
         return
     if text == '🚫 아이디 차단':
         import room_access as _ra
@@ -334,6 +337,10 @@ def _handle(update: dict):
                              else '사용법: <code>/차단 [id 또는 @아이디]</code>'))
         else:
             (_run_unban if _unban else _run_ban)(chat_id, uid, payload)
+
+    # ── 관리자 현황 요약 ──────────────────────────────────────
+    elif cmd in ('/현황', '/status2'):
+        _run_status(chat_id, uid)
 
 
 def run_polling():
@@ -569,3 +576,24 @@ def _run_unban(chat_id, uid, query):
               reply_markup={'inline_keyboard': [[{'text': '🚫 다시 차단', 'callback_data': 'SPAM|banall|' + str(target)}]]})
     threading.Thread(target=_w, daemon=True).start()
     _reply(chat_id, "♻️ 차단 해제 처리 중…")
+
+
+def _run_status(chat_id, uid):
+    import room_access as _ra
+    if not _ra.is_room_admin(uid):
+        _reply(chat_id, "⛔ 관리자 전용 기능입니다.")
+        return
+    s = _ra.entry_stats()
+    _NL = chr(10)
+    lines = ['📊 <b>유료방 입장 현황</b>',
+             '방 ' + str(s['rooms']) + '개 (유료 ' + str(s['paid_rooms']) + ')',
+             '─────',
+             '⏳ 대기(pending): ' + str(s['pending']) + '명',
+             '✅ 오늘 승인: ' + str(s['today_approved']) + '명',
+             '🚪 입장 완료: ' + str(s['joined']) + '명',
+             '⚠️ 미입장(승인후 안들어옴): ' + str(s['approved_not_joined']) + '명']
+    if s['not_joined_rooms']:
+        lines.append('─ 미입장 방별:')
+        for rn, c in sorted(s['not_joined_rooms'].items(), key=lambda x: -x[1]):
+            lines.append('  · ' + rn + ': ' + str(c))
+    _reply(chat_id, _NL.join(lines))
