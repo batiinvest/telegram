@@ -89,6 +89,16 @@ def _display_name(u):
     return str(u.id)
 
 
+def _exempt_ids():
+    """강퇴 전역 예외(관리자/스태프). .env KICK_EXEMPT_IDS(콤마) + 운영계정."""
+    ids = set()
+    raw = os.environ.get("KICK_EXEMPT_IDS", "")
+    for x in raw.replace(" ", "").split(","):
+        if x.lstrip("-").isdigit():
+            ids.add(int(x))
+    return ids
+
+
 def _scan_room(client, room, cutoff, me_id):
     """단일 방 스캔 → (seen, [uid,...], [name 샘플]). 권한없음/오류 시 예외."""
     cid = int(room["chat_id"])
@@ -97,12 +107,13 @@ def _scan_room(client, room, cutoff, me_id):
         raise PermissionError("no ban rights")
     admin_ids = {a.id for a in client.iter_participants(
         cid, filter=ChannelParticipantsAdmins)}
+    exempt = _exempt_ids()
     cands = []
     samples = []
     seen = 0
     for u in client.iter_participants(cid):
         seen += 1
-        if u.id == me_id or u.id in admin_ids:
+        if u.id == me_id or u.id in admin_ids or u.id in exempt:
             continue
         ok, _ = _should_kick(u, cutoff)
         if ok:
