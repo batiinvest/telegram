@@ -497,10 +497,12 @@ def _run_room_list(chat_id, uid):
 
 def _send_inactive_menu(chat_id, rooms, total, age_min):
     _NL = chr(10)
+    import inactive_kick as _ik
+    _d = str(_ik.INACTIVE_DAYS)
     items = sorted([(rid, i) for rid, i in rooms.items() if i['cands']],
                    key=lambda x: -len(x[1]['cands']))
     if not items:
-        _post('sendMessage', chat_id=chat_id, text="✅ 미접속(7일+) 대상자가 없습니다.")
+        _post('sendMessage', chat_id=chat_id, text="✅ 미접속(" + _d + "일+) 대상자가 없습니다.")
         return
     btns = []
     for rid, info in items:
@@ -511,7 +513,7 @@ def _send_inactive_menu(chat_id, rooms, total, age_min):
     kb.append([{'text': '⚠️ 전체 강퇴 (' + str(total) + ')', 'callback_data': 'IK|sel|all'}])
     kb.append([{'text': '🔄 다시 스캔', 'callback_data': 'IK|rescan'}])
     age_txt = '방금 스캔' if age_min is None else ('🕒 ' + str(int(age_min)) + '분 전')
-    head = ('🧹 <b>미접속(7일+) 강퇴</b> · 대상 ' + str(total) + '명 / '
+    head = ('🧹 <b>미접속(' + _d + '일+) 강퇴</b> · 대상 ' + str(total) + '명 / '
             + str(len(items)) + '개 방 · ' + age_txt + _NL
             + '방 선택 → 명단 확인 후 강퇴 (강퇴해도 이 메뉴는 유지됩니다)')
     _post('sendMessage', chat_id=chat_id, text=head, parse_mode='HTML',

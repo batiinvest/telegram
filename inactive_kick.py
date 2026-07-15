@@ -32,7 +32,7 @@ from telethon.tl.types import ChannelParticipantsAdmins
 
 load_dotenv("/home/kjhofone/.env")
 
-INACTIVE_DAYS = 7
+INACTIVE_DAYS = 5
 KICK_SLEEP = 1.5          # 강퇴 간 간격(초) — 계정 보호
 CACHE_TTL_MIN = 30        # 스캔 결과 재사용 시간(분)
 SAMPLE_N = 8              # 명단 미리보기 개수
