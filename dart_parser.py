@@ -923,12 +923,14 @@ def _parse_numbered_body(text: str, max_items: int = 7) -> list[str]:
     return items
 
 
-def _parse_clinical_result(text: str, max_sections: int = 4, sec_limit: int = 260) -> list:
+def _parse_clinical_result(text: str, max_sections: int = 5, sec_limit: int = 600) -> list:
     """임상시험결과 '결과값'을 '- 섹션명:' 단위로 분리해 bullet로 반환.
 
     예) '- 항바이러스 활성: ... - 안전성, 내약성: ... - 약동학: ...'
     → 섹션별 라인. 섹션 헤더가 없으면 빈 리스트(호출측에서 단순 truncate fallback).
     본문 내 인라인 콜론('200 mg:', 'Dose:')은 앞에 ' - '가 없어 오분리되지 않음.
+    결과는 핵심 정보라 섹션당 넉넉히(600자) 표시하고, 용량행('N mg:')·'위약:'은
+    개행+들여쓰기해 용량반응·약동학 표를 세로로 정렬(가독성).
     """
     text = re.sub(r'\s+', ' ', text).strip()
     parts = re.split(r'(?:^|\s)-\s+([가-힣][가-힣,·\s]{0,14}):\s+', text)
@@ -940,7 +942,10 @@ def _parse_clinical_result(text: str, max_sections: int = 4, sec_limit: int = 26
         content = parts[i + 1].strip() if i + 1 < len(parts) else ''
         if not content:
             continue
-        lines.append(f'  • {label}: {_trunc_clean(content, sec_limit)}')
+        content = _trunc_clean(content, sec_limit)
+        # 용량행·위약 앞 개행 → 표 형태로 세로 정렬
+        content = re.sub(r'\s+(?=(?:\d[\d,]*\s*mg|위약)\s*:)', '\n      ', content)
+        lines.append(f'  • {label}: {content}')
         if len(lines) >= max_sections:
             break
     return lines
@@ -1011,7 +1016,7 @@ def parse_mgmt_event(kv: dict) -> list:
             lines.append('🔬 결과:')
             lines.extend(sec_lines)
         else:
-            lines.append(f'🔬 결과: {_trunc_clean(result_val, 260)}')
+            lines.append(f'🔬 결과: {_trunc_clean(result_val, 500)}')
 
     # 변경신청 사유 (변경승인 공시)
     if v := _get(kv, '3. 변경신청 사유', '변경신청 사유', '변경사유'):
