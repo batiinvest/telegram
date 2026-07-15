@@ -888,9 +888,13 @@ def _strip_disclaimer(text: str) -> str:
     return ''
 
 
-def _parse_numbered_body(text: str, max_items: int = 7) -> list[str]:
-    """
-    '1) 항목명 - 내용' 또는 '1. 항목명: 내용' 형태 번호 목록을 줄별 bullet로 변환.
+def _parse_numbered_body(text: str, max_items: int = 8, val_limit: int = 300) -> list[str]:
+    """'1) 항목명: 내용' / '1. 항목명 - 내용' 형태 번호 목록을 줄별 bullet로 변환.
+
+    - 값 선두의 대시 불릿('- ')은 노이즈라 제거.
+    - 값 안에 ' - ' 하위항목이 여럿이면(예: 신청일/승인일/조기종료일/승인기관)
+      **버리지 않고** 개행+들여쓰기로 모두 표시(핵심 날짜·기관 보존).
+    - 서술형(사유·향후계획 등)은 val_limit까지 넉넉히 표시(핵심 정보라 절단 최소화).
     """
     # 번호 목록 분리: '1)' / '1. ' / '1.임상'(공백없음) 모두 지원.
     # (?!\d): '0.56'·날짜('06.30')·소수는 분리 안 함. (?<!\w): '제3상'·'GV1001' 보호.
@@ -900,22 +904,26 @@ def _parse_numbered_body(text: str, max_items: int = 7) -> list[str]:
     i = 1
     while i < len(parts) - 1:
         content = parts[i + 1].strip()
-        # 'key: value' 또는 'key - value' 분리
-        m = re.match(r'^(.{1,25}?)\s*[:－-]\s*(.+)', content, re.DOTALL)
+        # 'key: value' 또는 'key - value' 분리 (콜론이 먼저 오면 콜론 우선 매칭)
+        m = re.match(r'^(.{1,40}?)\s*[:－-]\s*(.+)', content, re.DOTALL)
         if m:
             key = m.group(1).strip()
             val = re.sub(r'\s+', ' ', m.group(2)).strip()
-            # 핵심값 앞부분 추출 (dash 이후 부연설명 제거하고 80자)
-            val_short = _trunc(val.split(' - ')[0].strip() if ' - ' in val else val, 80)
-            # 너무 짧은 값(헤더성)은 생략
-            if len(val_short) < 3 or val_short in ('없음', '-', '해당없음'):
+            val = re.sub(r'^[-·•]\s*', '', val)   # 선두 대시 불릿 제거
+            if len(val) < 2 or val in ('없음', '-', '해당없음', '.'):
                 i += 2
                 continue
-            items.append(f'  • {key}: {val_short}')
+            # ' - ' 하위항목 다수 → 개행 정렬, 아니면 단일값 표시
+            subs = [s.strip() for s in re.split(r'\s+-\s+', val) if s.strip()]
+            if len(subs) >= 2:
+                body = '\n      ' + '\n      '.join(_trunc_clean(s, 120) for s in subs[:6])
+                items.append(f'  • {key}:{body}')
+            else:
+                items.append(f'  • {key}: {_trunc_clean(val, val_limit)}')
         else:
             short = re.sub(r'\s+', ' ', content).strip()
             # 단순 섹션 헤더(짧고 콜론/값 없는 것)는 생략
-            if 10 <= len(short) <= 80:
+            if 10 <= len(short) <= val_limit:
                 items.append(f'  • {short}')
         i += 2
         if len(items) >= max_items:
