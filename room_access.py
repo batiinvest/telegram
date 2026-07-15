@@ -188,6 +188,7 @@ def request_room(uid: int, username: str, name: str, room_id) -> bool:
             _tg('sendMessage', chat_id=uid, parse_mode='HTML',
                 text=(f"이미 <b>{rname}</b> 입장이 승인된 계정입니다.\n"
                       f"링크 분실 시 @batiinvest로 문의해 주세요."))
+            _notify_admin_reissue(uid, username, name, room)
             return False
         if any(r['status'] == 'pending' for r in rows):
             _tg('sendMessage', chat_id=uid, parse_mode='HTML',
@@ -454,3 +455,62 @@ def handle_bot_added_to_group(chat_id, title) -> None:
                       f"chat_id: <code>{chat_id}</code>\n\n"
                       f"수동 연결: <code>/방연결 &lt;종목&gt; {chat_id}</code>"))
         log.info(f"[room] 그룹 추가 감지(미매칭): {title} {chat_id}")
+
+
+# ══ 🔁 링크 재발급 (만료/미수신 대응) ══
+_reissue_notified = {}
+
+
+def reissue_room(uid: int, room_id, admin_id: str = '') -> tuple:
+    """승인된 사용자에게 1회용 링크 재발급 (만료/미수신 대응). (ok, msg)."""
+    _NL = chr(10)
+    room = _get_room(room_id)
+    if not room:
+        return False, "방을 찾을 수 없습니다."
+    link = create_invite_link(room['chat_id'])
+    if not link:
+        return False, "초대 링크 생성 실패 — 봇이 해당 방 관리자인지 확인하세요."
+    res = _tg('sendMessage', chat_id=uid, parse_mode='HTML',
+              text=("🔓 <b>" + _esc(room['name']) + "</b> 입장 링크(재발급)입니다." + _NL + _NL
+                    + "🔗 " + link + _NL + _NL
+                    + "⚠️ 1회용 링크이며 입장 시 자동 만료됩니다. " + str(_INVITE_EXPIRE_HOURS)
+                    + "시간 내 사용해 주세요." + _NL + "문의: @batiinvest"))
+    if not res.get('ok'):
+        return False, "링크 DM 발송 실패 — 사용자가 봇을 차단했을 수 있습니다."
+    sb = _sb()
+    if sb:
+        try:
+            from datetime import datetime, timezone
+            sb.table('room_entries').update({
+                'invite_link': link,
+                'approved_at': datetime.now(timezone.utc).isoformat(),
+            }).eq('telegram_id', uid).eq('room_id', room_id).eq('status', 'approved').execute()
+        except Exception as e:
+            log.warning("[room] reissue DB 업데이트 실패: " + str(e))
+    log.info("[room] 링크 재발급: " + str(uid) + " → " + room['name'])
+    return True, room['name'] + " 링크 재발급 완료"
+
+
+def _notify_admin_reissue(uid: int, username: str, name: str, room: dict):
+    """재발급 요청을 어드민에 알림 (3분 스로틀로 도배 방지)."""
+    _NL = chr(10)
+    key = str(uid) + ":" + str(room['id'])
+    now = time.time()
+    if now - _reissue_notified.get(key, 0) < 180:
+        return
+    _reissue_notified[key] = now
+    admin = _get_admin_chat()
+    if not admin:
+        return
+    uname = ('@' + _esc(username)) if username else "없음"
+    msg = ("🔁 <b>[링크 재발급 요청]</b>" + _NL + _NL
+           + "방: <b>" + _esc(room['name']) + "</b>" + _NL
+           + "이름: " + (_esc(name) or '-') + _NL
+           + "@username: " + uname + _NL
+           + "텔레그램 ID: <code>" + str(uid) + "</code>" + _NL + _NL
+           + "링크 만료/미수신으로 재발급을 요청했습니다.")
+    keyboard = {'inline_keyboard': [[
+        {'text': '🔗 링크 재발급', 'callback_data': "ROOM|reissue|" + str(uid) + "|" + str(room['id'])},
+        {'text': '❌ 무시', 'callback_data': "ROOM|ignore|" + str(uid) + "|" + str(room['id'])},
+    ]]}
+    _tg('sendMessage', chat_id=admin, text=msg, parse_mode='HTML', reply_markup=keyboard)

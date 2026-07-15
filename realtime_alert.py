@@ -776,6 +776,17 @@ class KisMyStockScanner:
                 _ra.reject_room(uid, room_id)
                 answer("거절 처리")
                 edit(f"❌ <b>[입장 거절]</b>\nID: <code>{uid}</code>")
+            elif action == 'reissue':
+                ok, msg = _ra.reissue_room(uid, room_id, admin_id=chat_id)
+                if ok:
+                    answer("🔗 재발급 완료")
+                    edit("🔗 <b>[링크 재발급]</b>" + chr(10) + msg + chr(10) + "ID: <code>" + str(uid) + "</code>")
+                else:
+                    answer("❌ " + msg, alert=True)
+                    edit("⚠️ <b>[재발급 실패]</b>" + chr(10) + msg + chr(10) + "ID: <code>" + str(uid) + "</code>")
+            elif action == 'ignore':
+                answer("무시 처리")
+                edit("➖ <b>[재발급 무시]</b>" + chr(10) + "ID: <code>" + str(uid) + "</code>")
             else:
                 answer("알 수 없는 액션", alert=True)
         except Exception as e:
