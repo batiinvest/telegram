@@ -197,6 +197,7 @@ def kick_cached(room_id):
         targets = [(rid, info)] if info else []
         name = info["name"] if info else ""
     cutoff = datetime.now(timezone.utc) - timedelta(days=INACTIVE_DAYS)
+    exempt = _exempt_ids()
     done = total = 0
     with TelegramClient(StringSession(_SESSION), _API_ID, _API_HASH) as client:
         for rid, info in targets:
@@ -209,6 +210,8 @@ def kick_cached(room_id):
                 # 참가자 순회로 entity 확보 + 강퇴 직전 재확인
                 for u in client.iter_participants(cid):
                     if u.id not in cand_set:
+                        continue
+                    if u.id in exempt:
                         continue
                     if not _should_kick(u, cutoff)[0]:
                         continue  # 스캔 후 활동 재개 → 제외
