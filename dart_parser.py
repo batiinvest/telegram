@@ -472,6 +472,17 @@ def _trunc(text: str, limit: int = 80) -> str:
     return text[:limit] + '…' if len(text) > limit else text
 
 
+def _trunc_clean(text: str, limit: int) -> str:
+    """limit 초과 시 마지막 공백 경계에서 끊어 '…' 추가 (숫자·괄호 중간 절단 방지)."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    idx = cut.rfind(' ')
+    if idx > limit * 0.5:
+        cut = cut[:idx]
+    return cut.rstrip(' ,(') + '…'
+
+
 # ══════════════════════════════════════════════
 #  범용 파서 — 전체 필드 추출
 # ══════════════════════════════════════════════
@@ -912,6 +923,29 @@ def _parse_numbered_body(text: str, max_items: int = 7) -> list[str]:
     return items
 
 
+def _parse_clinical_result(text: str, max_sections: int = 4, sec_limit: int = 260) -> list:
+    """임상시험결과 '결과값'을 '- 섹션명:' 단위로 분리해 bullet로 반환.
+
+    예) '- 항바이러스 활성: ... - 안전성, 내약성: ... - 약동학: ...'
+    → 섹션별 라인. 섹션 헤더가 없으면 빈 리스트(호출측에서 단순 truncate fallback).
+    본문 내 인라인 콜론('200 mg:', 'Dose:')은 앞에 ' - '가 없어 오분리되지 않음.
+    """
+    text = re.sub(r'\s+', ' ', text).strip()
+    parts = re.split(r'(?:^|\s)-\s+([가-힣][가-힣,·\s]{0,14}):\s+', text)
+    if len(parts) < 3:   # 섹션 헤더 못 찾음
+        return []
+    lines = []
+    for i in range(1, len(parts), 2):
+        label = parts[i].strip()
+        content = parts[i + 1].strip() if i + 1 < len(parts) else ''
+        if not content:
+            continue
+        lines.append(f'  • {label}: {_trunc_clean(content, sec_limit)}')
+        if len(lines) >= max_sections:
+            break
+    return lines
+
+
 def parse_mgmt_event(kv: dict) -> list:
     """투자판단관련주요경영사항 — 임상·기술이전·계약 등"""
     lines = []
@@ -969,10 +1003,15 @@ def parse_mgmt_event(kv: dict) -> list:
                 clean = cut + '…'
             lines.append(f'  {clean}')
 
-    # 시험결과 (임상시험결과 공시)
+    # 시험결과 (임상시험결과 공시) — '- 섹션:' 구조면 섹션별 분리, 아니면 단순 표시
     result_val = _get(kv, '2) 결과값', '결과값')
     if result_val:
-        lines.append(f'🔬 결과: {_trunc(result_val, 150)}')
+        sec_lines = _parse_clinical_result(result_val)
+        if sec_lines:
+            lines.append('🔬 결과:')
+            lines.extend(sec_lines)
+        else:
+            lines.append(f'🔬 결과: {_trunc_clean(result_val, 260)}')
 
     # 변경신청 사유 (변경승인 공시)
     if v := _get(kv, '3. 변경신청 사유', '변경신청 사유', '변경사유'):
