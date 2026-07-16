@@ -1070,22 +1070,9 @@ def parse_mgmt_event(kv: dict) -> list:
         if bullets:
             lines.extend(bullets)
         else:
-            # 앞의 '- ' 또는 '· ' 제거 후 문장 단위로 자연스럽게 truncate
-            clean = re.sub(r'^[\-·•]\s*', '', stripped).strip()
-            # 150자 내에서 마지막 문장 종결('. ') 위치를 찾아 그 앞까지 표시
-            if len(clean) > 150:
-                cut = clean[:150]
-                # 마지막 '. ' 위치에서 끊기
-                last_period = cut.rfind('. ')
-                if last_period > 60:
-                    cut = cut[:last_period + 1]
-                else:
-                    # 마지막 공백에서 끊기
-                    last_space = cut.rfind(' ')
-                    if last_space > 60:
-                        cut = cut[:last_space]
-                clean = cut + '…'
-            lines.append(f'  {clean}')
+            # 앞의 '- ' 또는 '· ' 제거 후 산문 전문 표시 (극단 케이스만 공백경계 절단)
+            clean = re.sub(r'^[\-·•]\s*', '', re.sub(r'\s+', ' ', stripped)).strip()
+            lines.append(f'  {_trunc_clean(clean, 800)}')
 
     # 시험결과 (임상시험결과 공시) — '- 섹션:' 구조면 섹션별 분리, 아니면 단순 표시
     result_val = _get(kv, '2) 결과값', '결과값')
@@ -2711,7 +2698,9 @@ def parse_misc_mgmt(kv: dict) -> list:
             lines.extend(bullets)
         else:
             clean = re.sub(r'^[\-·•]\s*', '', re.sub(r'\s+', ' ', stripped)).strip()
-            lines.append(f'📋 {_trunc_clean(clean, 500)}')
+            # 주요내용이 공시 본체 → 사실상 전문 표시 (2000자 초과 극단 케이스만 절단,
+            # 4000자 초과 발송은 managers._split_text가 분할 처리)
+            lines.append(f'📋 {_trunc_clean(clean, 2000)}')
 
     if v := _get(kv, '3. 결정(발생)일자', '결정(발생)일자', '결정일자', '발생일자'):
         lines.append(f'📅 결정일: {v}')
