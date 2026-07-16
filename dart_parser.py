@@ -1792,7 +1792,12 @@ def parse_equity_acquisition(kv: dict) -> list:
 
 
 def parse_agm_notice(kv: dict) -> list:
-    """주주총회소집결의 / 소집공고"""
+    """주주총회소집결의 / 소집공고.
+
+    소집결의(이사회 결의)는 KV 테이블(날짜·장소 등)에서 추출되지만,
+    소집공고는 자유서식 본문이라 KV가 비어 범용 파서가 난독 출력 → 이 경우
+    본문 '아래' 섹션(일시·장소·부의안건) 텍스트 파싱으로 폴백.
+    """
     lines = []
 
     date = _get(kv, '날짜', 'Date')
@@ -1804,6 +1809,10 @@ def parse_agm_notice(kv: dict) -> list:
     _f(lines, kv, '📋 구분', '-주주총회 구분', '주주총회 구분')
     _f(lines, kv, '📋 의결권기준일', '3. 의결권행사기준일', '의결권행사기준일')
     _f(lines, kv, '🔗 관련', '관련공시', '※관련공시', trunc=50)
+
+    # KV 테이블에서 못 뽑음(소집공고 자유서식) → 본문 텍스트 파싱 폴백
+    if not lines:
+        return _parse_agm_notice_text(kv)
 
     return lines
 
@@ -2512,8 +2521,8 @@ def parse_share_pledge(kv: dict) -> list:
     return lines
 
 
-def parse_shareholder_meeting(kv: dict) -> list:
-    """주주총회소집공고 — 본문 '아래' 섹션(일시·장소·보고·부의안건) 파싱.
+def _parse_agm_notice_text(kv: dict) -> list:
+    """주주총회소집공고 자유서식 본문 '아래' 섹션(일시·장소·보고·부의안건) 파싱.
 
     KV 테이블은 이사회 결의이력·참석표가 뒤섞여 범용 파서로는 난독이므로,
     규격화된 소집공고 본문(1. 일시 : ... 2. 장소 : ... N. 부의 안건 : 제1호...)을
@@ -2589,7 +2598,6 @@ _PARSER_MAP = [
     (['대량보유상황보고서'],                      parse_large_holding_report),
     (['공개매수결과보고서', '공개매수청약'],       parse_tender_offer_result),
     (['주식담보제공'],                             parse_share_pledge),
-    (['주주총회소집공고', '주주총회소집'],         parse_shareholder_meeting),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
