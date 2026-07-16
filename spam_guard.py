@@ -34,12 +34,34 @@ except Exception:
 
 log = logging.getLogger(__name__)
 
-# 화이트리스트 (절대 건드리지 않음) — 관리자 본인
-_EXEMPT_IDS = {533725430}
+# 스태프 화이트리스트 (강퇴 KICK_EXEMPT_IDS와 공용) — 관리자 본인 + .env
+def _exempt_ids():
+    ids = {533725430}
+    raw = os.environ.get("KICK_EXEMPT_IDS", "")
+    for x in raw.replace(" ", "").split(","):
+        if x.lstrip("-").isdigit():
+            ids.add(int(x))
+    return ids
 
 # ── 탐지 패턴 ──────────────────────────────────────────────
 _INVITE_RE = re.compile(r"(t\.me/\+|t\.me/joinchat|telegram\.me/joinchat|tg://join)", re.IGNORECASE)
 _KAKAO_RE = re.compile(r"(open\.kakao\.com|openchat|오픈\s*채팅|오픈\s*카톡)", re.IGNORECASE)
+
+# 뉴스/정상 도메인 — 도배 판정에서 제외 (정상 뉴스 공유 오탐 방지)
+_NEWS_DOMAINS = (
+    "naver.com", "daum.net", "hankyung.com", "mk.co.kr", "mt.co.kr", "edaily.co.kr",
+    "sedaily.com", "yna.co.kr", "yonhapnews", "chosun.com", "joongang.co.kr",
+    "donga.com", "hani.co.kr", "khan.co.kr", "fnnews.com", "asiae.co.kr",
+    "newspim.com", "businesspost.co.kr", "thebell.co.kr", "wowtv.co.kr",
+    "mtn.co.kr", "infostockdaily", "paxnetnews", "dart.fss.or.kr", "irgo.co.kr",
+    "youtube.com", "youtu.be",
+)
+
+
+def _has_news_link(text):
+    low = text.lower()
+    return any(d in low for d in _NEWS_DOMAINS)
+
 
 # 도배 추적: text_hash -> [(chat_id, ts)]
 _recent = {}
@@ -86,13 +108,14 @@ def _is_flood(text, chat_id):
 
 
 def _detect(text, chat_id):
+    """(is_spam, reason, auto_delete). 도배는 auto_delete=False(알림만)."""
     if _INVITE_RE.search(text):
-        return True, "텔레그램 외부 초대링크"
+        return True, "텔레그램 외부 초대링크", True
     if _KAKAO_RE.search(text):
-        return True, "카카오 오픈채팅"
-    if _is_flood(text, chat_id):
-        return True, "다중방 도배"
-    return False, ""
+        return True, "카카오 오픈채팅", True
+    if _is_flood(text, chat_id) and not _has_news_link(text):
+        return True, "다중방 도배(의심)", False
+    return False, "", False
 
 
 def _fetch_admins(chat_id):
@@ -113,7 +136,7 @@ def _is_chat_admin(chat_id, uid):
 
 
 def check_message(scanner, message):
-    """그룹 메시지 1건 검사 → 광고 의심 시 삭제 + 관리자 알림. (차단은 콜백)"""
+    """그룹 메시지 검사 → 광고(자동삭제)·도배(알림만) → 관리자 알림."""
     chat = message.get("chat", {})
     if chat.get("type") not in ("group", "supergroup"):
         return
@@ -122,46 +145,48 @@ def check_message(scanner, message):
         return
     frm = message.get("from", {})
     uid = frm.get("id")
-    if not uid or frm.get("is_bot") or uid in _EXEMPT_IDS:
+    if not uid or frm.get("is_bot") or uid in _exempt_ids():
         return
     chat_id = chat.get("id")
-    is_spam, reason = _detect(text, chat_id)
+    is_spam, reason, auto_delete = _detect(text, chat_id)
     if not is_spam:
         return
     if _is_chat_admin(chat_id, uid):
         return  # 관리자 발언은 제외
-    # 자동 삭제
-    try:
-        scanner.delete_message(chat_id, message.get("message_id"))
-    except Exception as e:
-        log.debug(f"[spam] 삭제 오류: {e}")
-    _notify_admin(chat, frm, text, reason)
-    log.info(f"[spam] 삭제 chat={chat_id} uid={uid} reason={reason}")
+    msg_id = message.get("message_id")
+    if auto_delete:
+        try:
+            scanner.delete_message(chat_id, msg_id)
+        except Exception as e:
+            log.debug(f"[spam] 삭제 오류: {e}")
+    _notify_admin(chat, frm, text, reason, auto_delete, msg_id)
+    _act = '삭제' if auto_delete else '알림'
+    log.info(f"[spam] {_act} chat={chat_id} uid={uid} reason={reason}")
 
 
-def _notify_admin(chat, frm, text, reason):
+def _notify_admin(chat, frm, text, reason, deleted, message_id):
     admin = _get_admin_chat()
     if not admin:
         return
+    _NL = chr(10)
     uid = frm.get("id")
     name = frm.get("first_name") or ""
     uname = ("@" + frm["username"]) if frm.get("username") else ""
     cid = chat.get("id")
     title = chat.get("title") or str(cid)
-    body = (
-        "🚫 <b>광고 의심 — 자동 삭제됨</b>\n\n"
-        f"방: <b>{_esc(title)}</b>\n"
-        f"발신: {_esc(name)} {uname} (id <code>{uid}</code>)\n"
-        f"사유: {reason}\n"
-        f"내용: {_esc(text[:300])}\n\n"
-        f"발신자를 차단할까요?"
-    )
-    kb = {"inline_keyboard": [[
-        {"text": "🚫 이 방 차단", "callback_data": f"SPAM|ban|{uid}|{cid}"},
-        {"text": "🚫 전체 차단", "callback_data": f"SPAM|banall|{uid}"},
-        {"text": "✅ 정상", "callback_data": "SPAM|ok"},
-    ]]}
-    _tg("sendMessage", chat_id=admin, parse_mode="HTML", text=body, reply_markup=kb)
+    head = "🚫 <b>광고 의심 — 자동 삭제됨</b>" if deleted else "⚠️ <b>도배 의심 — 삭제 안 함</b>"
+    body = (head + _NL + _NL
+            + "방: <b>" + _esc(title) + "</b>" + _NL
+            + "발신: " + _esc(name) + " " + uname + " (id <code>" + str(uid) + "</code>)" + _NL
+            + "사유: " + reason + _NL
+            + "내용: " + _esc(text[:300]))
+    row = []
+    if not deleted:
+        row.append({"text": "🗑 삭제", "callback_data": "SPAM|del|" + str(cid) + "|" + str(message_id)})
+    row.append({"text": "🚫 이 방 차단", "callback_data": "SPAM|ban|" + str(uid) + "|" + str(cid)})
+    row.append({"text": "🚫 전체 차단", "callback_data": "SPAM|banall|" + str(uid)})
+    row.append({"text": "✅ 정상", "callback_data": "SPAM|ok"})
+    _tg("sendMessage", chat_id=admin, parse_mode="HTML", text=body, reply_markup={"inline_keyboard": [row]})
 
 
 # ── 차단 (관리자 콜백에서 호출) ────────────────────────────
