@@ -2512,6 +2512,50 @@ def parse_share_pledge(kv: dict) -> list:
     return lines
 
 
+def parse_shareholder_meeting(kv: dict) -> list:
+    """주주총회소집공고 — 본문 '아래' 섹션(일시·장소·보고·부의안건) 파싱.
+
+    KV 테이블은 이사회 결의이력·참석표가 뒤섞여 범용 파서로는 난독이므로,
+    규격화된 소집공고 본문(1. 일시 : ... 2. 장소 : ... N. 부의 안건 : 제1호...)을
+    원문 텍스트에서 직접 추출. 섹션 종결자는 다음 번호 헤더(' N. 한글')로 일반화.
+    """
+    lines = []
+    txt = re.sub(r'<[^>]+>', ' ', kv.get('_html', ''))
+    txt = re.sub(r'\s+', ' ', txt).strip()
+
+    def _sec(label_pat: str) -> str:
+        m = re.search(label_pat + r'\s*[:：]\s*(.+?)\s+\d+\s*\.\s*[가-힣]', txt)
+        return m.group(1).strip() if m else ''
+
+    # 회차 (제N기 임시/정기 주주총회)
+    m_round = re.search(r'(제\s*\d+\s*기\s*(?:임시|정기)?\s*주주총회)', txt)
+    if m_round:
+        lines.append('🏛 ' + re.sub(r'\s+', ' ', m_round.group(1)).strip())
+
+    if dt := _sec(r'일\s*시'):
+        lines.append(f'📅 일시: {_trunc(dt, 50)}')
+    if loc := _sec(r'장\s*소'):
+        lines.append(f'📍 장소: {_trunc(loc, 60)}')
+    if rpt := _sec(r'보고사항'):
+        lines.append(f'📢 보고: {_trunc(rpt, 50)}')
+
+    # 부의 안건 — '제N호' 단위 분리
+    m_ag = re.search(
+        r'(?:부의\s*안건|회의의?\s*목적사항?|회의목적)\s*[:：]\s*(.+?)\s+\d+\s*\.\s*[가-힣]', txt)
+    if m_ag:
+        items = [it.strip() for it in re.split(r'\s*제\s*\d+\s*호\s*', m_ag.group(1)) if it.strip()]
+        if items:
+            lines.append('📋 부의 안건:')
+            for idx, it in enumerate(items[:10], 1):
+                lines.append(f'  제{idx}호. {_trunc(it, 70)}')
+
+    # 구조 미매칭 시 범용파서(난독 테이블) fallback 방지 — 헤더성 한 줄로 대체
+    if not lines:
+        lines.append('🏛 주주총회 소집 — 안건은 공시 원문 참조')
+
+    return lines
+
+
 # 공시 제목 키워드 → 카테고리 파서 매핑
 # ※ 순서 중요: 구체적인 타입을 먼저, 일반적인 타입을 나중에
 _PARSER_MAP = [
@@ -2545,6 +2589,7 @@ _PARSER_MAP = [
     (['대량보유상황보고서'],                      parse_large_holding_report),
     (['공개매수결과보고서', '공개매수청약'],       parse_tender_offer_result),
     (['주식담보제공'],                             parse_share_pledge),
+    (['주주총회소집공고', '주주총회소집'],         parse_shareholder_meeting),
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
