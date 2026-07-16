@@ -591,6 +591,9 @@ def parse_all_fields(kv: dict) -> list:
     seen_vals: set = set()
 
     for k, v in kv.items():
+        # 내부 키(_html·_rcept_no 등) 노출 방지
+        if k.startswith('_'):
+            continue
         k = re.sub(r'\s+', ' ', k).strip()
         v = re.sub(r'\s+', ' ', v).strip()
 
@@ -2691,6 +2694,38 @@ def parse_bonus_issue(kv: dict) -> list:
     return lines
 
 
+def parse_misc_mgmt(kv: dict) -> list:
+    """기타주요경영사항(자율공시) — 주요내용이 곧 공시의 본체.
+
+    구조: 1.제출사유 / 2.주요내용 / 3.결정(발생)일자 / 4.기타(관련공시).
+    제출사유는 공시 제목 괄호에 이미 노출되므로 생략, 주요내용을 넉넉히(500자,
+    문장경계) 표시. 번호목록 구조면 _parse_numbered_body로 분리.
+    """
+    lines = []
+
+    body = _get(kv, '2. 주요내용', '주요내용') or ''
+    stripped = _strip_disclaimer(body).strip()
+    if stripped:
+        bullets = _parse_numbered_body(stripped)
+        if bullets and len(bullets) >= 2:
+            lines.extend(bullets)
+        else:
+            clean = re.sub(r'^[\-·•]\s*', '', re.sub(r'\s+', ' ', stripped)).strip()
+            lines.append(f'📋 {_trunc_clean(clean, 500)}')
+
+    if v := _get(kv, '3. 결정(발생)일자', '결정(발생)일자', '결정일자', '발생일자'):
+        lines.append(f'📅 결정일: {v}')
+
+    # 관련공시 (4.기타 값 안의 '※ 관련 공시 - 날짜. 제목 - ...' 목록 → 최근 2건)
+    etc = _get(kv, '4. 기타 투자판단에 참고할 사항', '기타 투자판단에 참고할 사항') or ''
+    rel = re.findall(r'(\d{4}\.\d{2}\.\d{2})\.?\s*([가-힣A-Za-z0-9()·\s]{4,40}?)(?=\s*-\s*\d{4}\.|\s*$)', etc)
+    if rel:
+        shown = ' · '.join(f'{d} {t.strip()}' for d, t in rel[-2:])
+        lines.append(f'🔗 관련: {_trunc(shown, 90)}')
+
+    return lines
+
+
 # 공시 제목 키워드 → 카테고리 파서 매핑
 # ※ 순서 중요: 구체적인 타입을 먼저, 일반적인 타입을 나중에
 _PARSER_MAP = [
@@ -2700,6 +2735,7 @@ _PARSER_MAP = [
     (['단일판매', '공급계약체결', '수주'],   parse_contract),
     (['전환사채', '신주인수권부사채'],        parse_cb),
     (['투자판단관련주요경영사항'],           parse_mgmt_event),
+    (['기타주요경영사항'],                   parse_misc_mgmt),
     (['임원ㆍ주요주주', '임원·주요주주'],     parse_insider_report),
     (['거래정지', '매매거래정지'],           parse_trading_halt),
     (['권리락'],                             parse_ex_rights),
