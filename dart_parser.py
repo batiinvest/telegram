@@ -102,6 +102,64 @@ _DESKTOP_UA = (
 )
 
 
+def _fetch_zip_original(rcept_no: str) -> str | None:
+    """DART 웹사이트 '원본파일 다운로드'(zip.do)로 공시 원문 획득.
+
+    document.xml API는 접수 당일 status 014(미제공)지만, 웹사이트 원본 zip은
+    접수 직후에도 제공되며 인코딩이 깨끗함(실측). 브라우저 흐름 재현 필수:
+    뷰어(main.do, dcmNo 추출) → 다운로드 팝업(쿠키/Referer) → zip.do.
+
+    strict 디코딩(utf-8→cp949→euc-kr)이 성공할 때만 텍스트 반환.
+    어떤 실패든 None → 호출측이 기존 뷰어 스크래핑으로 그대로 폴백.
+    """
+    import zipfile, io as _io
+    base = 'http://dart.fss.or.kr'
+    h = {'User-Agent': _DESKTOP_UA}
+    try:
+        viewer_url = f'{base}/dsaf001/main.do?rcpNo={rcept_no}'
+        idx = _session.get(viewer_url, headers=h, timeout=8)
+        if idx.status_code != 200:
+            return None
+        m = re.search(r'viewDoc\("(\d+)",\s*"(\d+)"',
+                      idx.content.decode('utf-8', errors='replace'))
+        if not m:
+            return None
+        rcp, dcm = m.group(1), m.group(2)
+
+        popup_url = f'{base}/pdf/download/main.do?rcp_no={rcp}&dcm_no={dcm}'
+        _session.get(popup_url, headers={**h, 'Referer': viewer_url}, timeout=8)
+
+        zr = _session.get(
+            f'{base}/pdf/download/zip.do?rcp_no={rcp}&dcm_no={dcm}',
+            headers={**h, 'Referer': popup_url}, timeout=12)
+        if zr.status_code != 200 or zr.content[:2] != b'PK':
+            return None
+
+        z = zipfile.ZipFile(_io.BytesIO(zr.content))
+        # 본문 파일 선택: xml/html 우선, 그중 최대 크기
+        names = [n for n in z.namelist()
+                 if n.lower().endswith(('.xml', '.html', '.htm'))] or z.namelist()
+        if not names:
+            return None
+        name = max(names, key=lambda n: z.getinfo(n).file_size)
+        raw = z.read(name)
+        if len(raw) < 100:
+            return None
+        # strict 디코딩 성공 시에만 채택 (손상 콘텐츠 반환 방지)
+        for enc in ('utf-8', 'cp949', 'euc-kr'):
+            try:
+                text = raw.decode(enc)
+                # DART 원본 XML 전용 개행 엔티티 제거 — &cr; 및 이중 이스케이프
+                # &amp;cr; 형태 모두 (뷰어/API 경로엔 없음)
+                return re.sub(r'&(?:amp;)?(?:cr|lf|tab);', ' ', text)
+            except (UnicodeDecodeError, LookupError):
+                continue
+        return None
+    except Exception as e:
+        log.debug(f'[DART 파서] zip.do 원본 실패 ({rcept_no}): {e}')
+        return None
+
+
 # ══════════════════════════════════════════════
 #  HTML 가져오기
 # ══════════════════════════════════════════════
@@ -227,8 +285,12 @@ def _detect_encoding(content: bytes, headers: dict) -> str:
 def _fetch_html(rcept_no: str) -> str | None:
     """
     DART 공시 본문 HTML 가져오기.
-    1순위: DART OpenAPI document.xml (zip) — 인코딩 손상 없음
-    2순위: 웹 뷰어 스크래핑 + _fix_dart_utf8 복구 (API 키 없거나 실패 시)
+    1순위: DART OpenAPI document.xml (zip) — 인코딩 손상 없음.
+           단, 접수 당일 공시는 status 014(파일 미존재) — 다음날에야 제공됨(실측).
+    1.5순위: DART 웹사이트 원본파일 다운로드(zip.do) — 접수 직후에도 제공,
+           인코딩 깨끗(실측: viewer.do가 깨뜨린 문서도 zip.do는 손상 0).
+           strict 디코딩 성공 시에만 반환 → 실패 시 기존 2순위로 그대로 폴백.
+    2순위: 웹 뷰어 스크래핑 + _fix_dart_utf8 복구 (특정 XML 문서 인코딩 손상 가능)
     """
     # ── 1순위: DART document.xml API ────────────────────────────────────────
     try:
@@ -251,6 +313,12 @@ def _fetch_html(rcept_no: str) -> str | None:
                     log.debug(f'[DART 파서] document.xml zip 실패 ({rcept_no}): {e}')
     except Exception as e:
         log.debug(f'[DART 파서] document.xml API 접근 실패: {e}')
+
+    # ── 1.5순위: 웹사이트 원본파일 다운로드 (당일 공시 대응) ────────────────
+    zip_text = _fetch_zip_original(rcept_no)
+    if zip_text:
+        log.debug(f'[DART 파서] zip.do 원본파일 사용 ({rcept_no})')
+        return zip_text
 
     # ── 2순위: 웹 뷰어 스크래핑 ─────────────────────────────────────────────
     headers = {'User-Agent': _DESKTOP_UA}
