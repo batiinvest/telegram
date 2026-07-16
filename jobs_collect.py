@@ -919,6 +919,19 @@ def job_collect_estimates():
 
 
 @_job(holiday=True)
+def job_collect_credit_balance():
+    """평일 오전 (10:30) — KOFIA 신용공여 잔고(신용거래융자 등) 수집.
+    전 영업일분이 다음날 오전 발표되므로 14일 윈도 멱등 upsert."""
+    try:
+        logging.info("💳 [신용잔고] collect_credit_balance 실행 시작")
+        import collect_credit_balance
+        n = collect_credit_balance.run()
+        logging.info(f"=== [신용잔고] 완료: {n}건 upsert ===")
+    except Exception as e:
+        logging.error(f"❌ [신용잔고] 오류: {e}")
+
+
+@_job(holiday=True)
 def job_leading_stocks():
     """평일 장 마감 후 (17:30) — 주도주 탐색기 스코어 계산 및 저장"""
     try:

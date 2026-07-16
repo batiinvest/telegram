@@ -36,6 +36,7 @@ from jobs_collect import (
     job_collect_new_high, job_collect_us_etf, job_collect_market,
     job_collect_market_closing, job_short_surge, job_collect_investor_trend,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
+    job_collect_credit_balance,
 )
 from jobs_briefing import (
     job_lunch_briefing, job_naver_report, job_daily_closing, job_kind_ir,
@@ -149,6 +150,7 @@ def run_scheduler():
     schedule.every().day.at("18:30").do(job_collect_financials)        # 장 마감 후 재무수집 (공시 기반)
     schedule.every().day.at("18:35").do(_threaded(job_collect_analyst_opinions))  # 투자의견 (장후)
     schedule.every().day.at("18:40").do(job_collect_estimates)        # 종목추정실적 (미래 매출/영업이익 + 상향감지)
+    schedule.every().day.at("10:30").do(job_collect_credit_balance)  # KOFIA 신용공여 잔고 (전 영업일분 오전 발표)
     schedule.every().day.at("19:50").do(job_daily_ops_summary)        # 일일 운영 요약 (잡 성공/실패/소요시간) → 관리자 방
     schedule.every().saturday.at("10:00").do(job_saturday_main_ranking)
     schedule.every().saturday.at("10:30").do(job_saturday_industry_report)
