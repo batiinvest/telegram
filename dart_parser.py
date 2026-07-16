@@ -2633,11 +2633,70 @@ def _parse_agm_notice_text(kv: dict) -> list:
     return lines
 
 
+def parse_bonus_issue(kv: dict) -> list:
+    """무상증자결정 — 배정비율·신주수·기준일·상장일·발행주식 증가.
+
+    국/영문 이중언어 표라 영문 KV 키 정렬이 어긋남(제출문 헤더 노이즈 포함)
+    → 원문 텍스트의 한글 라벨 기준 파싱(임원보고서 파서와 동일 접근).
+    """
+    lines = []
+    txt = re.sub(r'<[^>]+>', ' ', kv.get('_html', ''))
+    txt = re.sub(r'\s+', ' ', txt).strip()
+
+    def _kdate(s: str) -> str:
+        m = re.search(r'(\d{4})\D+(\d{1,2})\D+(\d{1,2})', s or '')
+        return f'{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}' if m else (s or '').strip()
+
+    # 1주당 배정비율 — 무상증자의 핵심
+    m = re.search(r'1주당\s*신주배정\s*주식수\s*보통주식?\s*\(주\)\s*([\d.]+)', txt)
+    if m:
+        lines.append(f'🎁 무상배정: 1주당 {m.group(1)}주')
+
+    # 신주 수 (보통 + 기타)
+    m = re.search(r'신주의\s*종류와\s*수\s*보통주식?\s*\(주\)\s*([\d,]+)'
+                  r'(?:\s*기타주식\s*\(주\)\s*([\d,\-]+))?', txt)
+    if m:
+        s = f'📊 신주: 보통 {m.group(1)}주'
+        etc = (m.group(2) or '').strip()
+        if etc and etc not in ('-', '0'):
+            s += f' + 기타 {etc}주'
+        lines.append(s)
+
+    # 배정기준일 · 상장예정일
+    m  = re.search(r'신주배정기준일\s*([^\s].{0,20}?일)', txt)
+    m2 = re.search(r'상장\s*예정일\s*([^\s].{0,20}?일|-)', txt)
+    if m or m2:
+        parts = []
+        if m:
+            parts.append(f'배정기준 {_kdate(m.group(1))}')
+        if m2 and m2.group(1) != '-':
+            parts.append(f'상장 {_kdate(m2.group(1))}')
+        lines.append('📅 ' + ' | '.join(parts))
+
+    # 발행주식 전→후 (배정내역 표, 보통주 자기주식 제외 행)
+    m = re.search(r'보통주\(자기주식\s*제외\)\s*([\d,]+)\s*([\d,]+|-)\s*([\d,]+)', txt)
+    if m:
+        try:
+            pre  = int(m.group(1).replace(',', ''))
+            post = int(m.group(3).replace(',', ''))
+            pct  = (post - pre) / pre * 100 if pre else 0
+            lines.append(f'📦 발행주식: {pre:,} → {post:,}주 (+{pct:.1f}%)')
+        except ValueError:
+            pass
+
+    m = re.search(r'이사회결의일\(?결정일\)?\s*([^\s].{0,20}?일)', txt)
+    if m:
+        lines.append(f'📅 결의일: {_kdate(m.group(1))}')
+
+    return lines
+
+
 # 공시 제목 키워드 → 카테고리 파서 매핑
 # ※ 순서 중요: 구체적인 타입을 먼저, 일반적인 타입을 나중에
 _PARSER_MAP = [
     (['유무상증자'],                         parse_combined_ci),
     (['유상증자'],                          parse_rights_offering),
+    (['무상증자'],                          parse_bonus_issue),
     (['단일판매', '공급계약체결', '수주'],   parse_contract),
     (['전환사채', '신주인수권부사채'],        parse_cb),
     (['투자판단관련주요경영사항'],           parse_mgmt_event),
