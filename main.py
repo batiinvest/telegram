@@ -42,139 +42,14 @@ except Exception:
 
 DEFAULT_CHAT_ID = "@BatiInvestChat"
 
-# ══════════════════════════════════════════════════════
-#  공시 중요도 분류
-#
-#  URGENT  → 메인 + 산업 + 기업채널
-#  MAJOR   → 산업 + 기업채널
-#  NORMAL  → 기업채널만
-#  SKIP    → 산업/메인에서 제외 (기업채널엔 발송)
-# ══════════════════════════════════════════════════════
-
-URGENT_KEYWORDS = [
-    "거래정지", "매매거래정지",
-    "상장폐지", "관리종목",
-    "횡령", "배임",
-    "공개매수",
-    "불성실공시",
-    "영업정지",
-    "회생절차", "파산", "감자",
-    "상장적격성",   # 상장적격성 실질심사 사유 발생/결과 — 상폐 심사 단계
-]
-
-MAJOR_KEYWORDS = [
-    "공급계약", "수주",
-    "잠정실적", "매출액",
-    "무상증자",
-    "유상증자",
-    "최대주주변경",
-    "합병", "분할", "인수",
-    "전환사채", "신주인수권부사채",
-    "소송", "분쟁",
-    "특허", "임상",
-    "사업보고서", "분기보고서", "반기보고서",
-    "영업양수", "영업양도", "주식소각", "액면", "배당",
-]
-
-# 산업/메인 채널에서 스킵 (기업채널은 정상 발송)
-SKIP_FOR_BROADCAST = [
-    "주식등의대량보유상황보고",
-    "임원ㆍ주요주주특정증권등소유상황보고서",
-    "임원·주요주주특정증권등소유상황보고서",
-    "소유상황보고",
-    "기업설명회",
-    "IR개최",
-    "감사보고서",
-    "주주총회소집공고",
-    "주주총회결과",
-    "의결권대리행사권유",
-    "증권발행실적보고서",  # 증자 완료 후 결과 보고
-    "투자설명서",          # 공모 관련 중간 서류
-    "자기주식취득결과보고서",
-    "자기주식처분결과보고서",
-]
-
-# 기업 블랙리스트 (기본값 — DB에서 덮어씀)
-DART_BLACKLIST: set = set()
-DART_TITLE_FILTER: list = []   # 공시 제목 부분일치 차단
-DART_CORP_FILTER: list = []    # 기업명 부분일치 차단
-
-
-def _load_dart_filters():
-    """app_config에서 공시 등급 키워드 + 각종 필터 로드. DB에 없는 기본값은 최초 1회 시드."""
-    global DART_BLACKLIST, URGENT_KEYWORDS, MAJOR_KEYWORDS, SKIP_FOR_BROADCAST
-    global DART_TITLE_FILTER, DART_CORP_FILTER
-    if not _BRIDGE_OK:
-        return
-    _bridge.seed_defaults({
-        "dart_urgent": ",".join(URGENT_KEYWORDS),
-        "dart_major":  ",".join(MAJOR_KEYWORDS),
-        "dart_skip":   ",".join(SKIP_FOR_BROADCAST),
-    })
-    try:
-        client = _bridge._get_client()
-        if not client:
-            return
-        keys = ['dart_blacklist', 'dart_urgent', 'dart_major', 'dart_skip',
-                'dart_title_filter', 'dart_corp_filter']
-        res = client.table('app_config').select('key,value').in_('key', keys).execute()
-        cfg = {r['key']: r['value'] for r in (res.data or [])}
-
-        if cfg.get('dart_blacklist'):
-            DART_BLACKLIST = {c.strip() for c in cfg['dart_blacklist'].split(',') if c.strip()}
-            logging.info(f"✅ [공시봇] 블랙리스트 {len(DART_BLACKLIST)}개 로드")
-
-        if cfg.get('dart_urgent'):
-            kws = [k.strip() for k in cfg['dart_urgent'].split(',') if k.strip()]
-            if kws: URGENT_KEYWORDS = kws; logging.info(f"✅ [공시봇] 긴급 키워드 {len(kws)}개 로드")
-
-        if cfg.get('dart_major'):
-            kws = [k.strip() for k in cfg['dart_major'].split(',') if k.strip()]
-            if kws: MAJOR_KEYWORDS = kws; logging.info(f"✅ [공시봇] 중요 키워드 {len(kws)}개 로드")
-
-        if cfg.get('dart_skip'):
-            kws = [k.strip() for k in cfg['dart_skip'].split(',') if k.strip()]
-            if kws: SKIP_FOR_BROADCAST = kws; logging.info(f"✅ [공시봇] 잡공시 키워드 {len(kws)}개 로드")
-
-        if cfg.get('dart_title_filter'):
-            kws = [k.strip() for k in cfg['dart_title_filter'].split(',') if k.strip()]
-            if kws: DART_TITLE_FILTER = kws; logging.info(f"✅ [공시봇] 제목 필터 {len(kws)}개 로드")
-
-        if cfg.get('dart_corp_filter'):
-            kws = [k.strip() for k in cfg['dart_corp_filter'].split(',') if k.strip()]
-            if kws: DART_CORP_FILTER = kws; logging.info(f"✅ [공시봇] 기업명 필터 {len(kws)}개 로드")
-
-    except Exception as e:
-        logging.warning(f"⚠️ [공시봇] 필터 로드 실패 (기본값 사용): {e}")
-
-
-# reload_flag 소비는 watchdog 단일 창구 — 재로드 시 공시 필터도 함께 갱신되도록 콜백 등록.
-# (구: 봇 자체 check_reload_flag 폴링 — bridge 싱글톤 플래그를 워치독과 경쟁 소비해
-#  먼저 본 쪽만 반영되던 문제. 2026-07-11 등록제로 통일)
-try:
-    from config import on_reload as _on_reload
-    _on_reload(_load_dart_filters)
-except Exception:
-    pass
-
-
-def classify_disclosure(report_nm: str) -> str:
-    """
-    공시 중요도 분류.
-    반환: 'urgent' | 'major' | 'skip' | 'normal'
-    """
-    # 긴급 최우선 — skip 키워드와 한 제목에서 겹칠 때 긴급이 이겨야 함
-    # (키워드는 app_config에서 운영 변경되므로 겹침을 전제로 방어)
-    if any(k in report_nm for k in URGENT_KEYWORDS):
-        return 'urgent'
-    if any(k in report_nm for k in SKIP_FOR_BROADCAST):
-        return 'skip'
-    if any(k in report_nm for k in MAJOR_KEYWORDS):
-        return 'major'
-    return 'normal'
-
-
-CAP_THRESHOLD_MAIN = 100_000_000_000  # 메인 채널 시총 기준: 1000억
+# 분류·라우팅 정책은 dart_rules.py로 분리 (순수 함수 — test_dart_rules.py로 회귀 테스트).
+# 키워드·필터 컨테이너는 in-place 갱신이라 from-import 참조 안전.
+# reload_flag 시 재로드 콜백(config.on_reload)은 dart_rules 모듈이 등록.
+from dart_rules import (
+    classify_disclosure, decide_targets, load_dart_filters,
+    DART_BLACKLIST, DART_TITLE_FILTER, DART_CORP_FILTER,
+    CAP_MAIN, CAP_LARGE,
+)
 
 class DartRoutingBot:
     def __init__(self):
@@ -196,8 +71,11 @@ class DartRoutingBot:
         self._cap_loaded: datetime.datetime | None = None
         self._load_cap_cache()
 
-        # DB에서 블랙리스트 로드
-        _load_dart_filters()
+        # DB에서 키워드·필터 로드
+        load_dart_filters()
+
+        # 발송이력 DB 이중화 — sent_list.txt 유실(서버 이전 등) 시 당일 재발송 방지
+        self._seed_history_from_db()
 
     def _load_cap_cache(self):
         """Supabase market_data에서 최신 시총 캐시 로드 (24시간마다 갱신).
@@ -226,20 +104,45 @@ class DartRoutingBot:
         except Exception as e:
             logging.warning(f"[공시봇] 시총 캐시 로드 실패: {e}")
 
-    def _is_main_worthy(self, stock_code: str) -> bool:
-        """시총 1000억 이상인지 확인. 정보 없으면 True(허용)."""
-        # 24시간마다 캐시 갱신
+    def _get_cap(self, stock_code: str):
+        """시총 조회 (캐시, 24시간 갱신). 정보 없으면 None."""
         if self._cap_loaded is None or \
            (datetime.datetime.now() - self._cap_loaded).total_seconds() > 86400:
             self._load_cap_cache()
+            if self._cap_loaded is None or \
+               (datetime.datetime.now() - self._cap_loaded).total_seconds() > 86400:
+                # 갱신 실패 — 다음 주기까지 재시도 억제 (항목마다 블로킹 방지)
+                self._cap_loaded = datetime.datetime.now()
 
         if not stock_code:
-            return True  # stock_code 없으면 허용 (시장 전체 중요 공시 등)
+            return None
         code = stock_code.replace('.KS', '').replace('.KQ', '').strip()
-        cap  = self._cap_cache.get(code)
-        if cap is None:
-            return True  # 시총 정보 없으면 허용
-        return cap >= CAP_THRESHOLD_MAIN
+        return self._cap_cache.get(code)
+
+    def _seed_history_from_db(self):
+        """notice_history의 최근 2일 발송분(#rcept_no 마커)으로 이력 복원.
+        파일 이력이 정상이면 전부 no-op, 유실 시에만 실제 시드됨."""
+        if not _BRIDGE_OK:
+            return
+        try:
+            client = _bridge._get_client()
+            if not client:
+                return
+            since = (datetime.datetime.now(datetime.timezone.utc)
+                     - datetime.timedelta(days=2)).isoformat()
+            res = client.table('notice_history').select('content') \
+                        .gte('created_at', since).like('content', '[공시/%') \
+                        .limit(1000).execute()
+            seeded = 0
+            for row in (res.data or []):
+                m = re.search(r'#(\d{14})\s*$', row.get('content') or '')
+                if m and not self.history.contains(m.group(1)):
+                    self.history.add(m.group(1))
+                    seeded += 1
+            if seeded:
+                logging.info(f"[공시봇] 발송이력 {seeded}건 DB에서 복원 (파일 유실 대비)")
+        except Exception as e:
+            logging.warning(f"[공시봇] 발송이력 DB 시드 실패 (파일 이력만 사용): {e}")
 
     def ai_worker(self, chat_id, corp_name, report_nm, rcept_no):
         logging.info(f"🤖 AI Analyzing: {corp_name}")
@@ -425,42 +328,22 @@ class DartRoutingBot:
             detail = f"{audit_note}\n{detail}".strip()
         msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
 
-        # ── 채널 라우팅 — 대상 확정 후 일괄 발송 (성공 여부 추적) ──
+        # ── 채널 라우팅 — 정책은 dart_rules.decide_targets (순수 함수) ──
         industry = COMPANY_TO_INDUSTRY.get(corp_name)
         _ind_cid = INDUSTRY_CHAT_IDS.get(industry) if industry else None
         _cid     = self._get_company_chat_id(corp_name, stock_code)
+        cap      = self._get_cap(stock_code)
 
-        targets = []
-        if level == 'urgent':
-            # 긴급: 메인(시총 1000억↑) + 산업 + 기업
-            if self._is_main_worthy(stock_code):
-                targets.append(DEFAULT_CHAT_ID)
-            if _ind_cid:
-                targets.append(_ind_cid)
-            if _cid:
-                targets.append(_cid)
-        elif level == 'major':
-            # 중요: 산업 + 기업 (+ 시장속보/공급계약·수주는 메인, 시총 1000억↑만)
-            if _ind_cid:
-                targets.append(_ind_cid)
-            if _cid:
-                targets.append(_cid)
-            _to_main = is_market_wide or ("기재정정" not in report_nm and any(k in report_nm for k in ("공급계약", "수주")))
-            if _to_main and self._is_main_worthy(stock_code):
-                targets.append(DEFAULT_CHAT_ID)
-        elif level == 'skip':
-            # 잡공시: 기업채널만 (산업/메인 제외)
-            if _cid:
-                targets.append(_cid)
-        else:  # normal
-            # 일반: 산업 + 기업 (메인 제외)
-            if _ind_cid:
-                targets.append(_ind_cid)
-            if _cid:
-                targets.append(_cid)
-
-        # 같은 방 중복 발송 방지 (산업방=기업방 동일 설정 등) — 순서 보존 dedup
-        targets = list(dict.fromkeys(targets))
+        targets = decide_targets(
+            level,
+            main_chat=DEFAULT_CHAT_ID,
+            ind_chat=_ind_cid,
+            comp_chat=_cid,
+            is_market_wide=is_market_wide,
+            report_nm=report_nm,
+            cap_ok_main=(cap is None or cap >= CAP_MAIN),
+            cap_ok_large=(cap is not None and cap >= CAP_LARGE),
+        )
 
         results = [stock_api.send_telegram(t, msg) for t in targets]
         failed  = [t for t, ok in zip(targets, results) if not ok]
@@ -490,9 +373,11 @@ class DartRoutingBot:
         # ── 발송 기록 ──
         if _BRIDGE_OK:
             try:
+                # content 끝 '#rcept_no' 마커 = 발송이력 DB 이중화 키
+                # (_seed_history_from_db가 재기동 시 파싱해 이력 복원)
                 _bridge.log_notice(
                     target=corp_name,
-                    content=f"[공시/{level}] {report_nm}",
+                    content=f"[공시/{level}] {report_nm} #{rcept_no}",
                     sent_count=len(targets),
                     ok_count=sum(1 for r in results if r),
                 )

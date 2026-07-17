@@ -1,0 +1,103 @@
+"""
+test_dart_rules.py — 공시 분류·라우팅 정책 회귀 테스트
+
+실행: python3 test_dart_rules.py   (외부 의존 없음 — 순수 함수만 검증)
+키워드를 app_config에서 바꾸기 전/후 정책 회귀 확인용.
+※ import 시 DB 로드 없음 — 코드 기본값 기준으로 검증.
+"""
+from dart_rules import classify_disclosure, decide_targets
+
+FAIL = []
+
+
+def eq(got, exp, label):
+    if got != exp:
+        FAIL.append(f"{label}: got={got!r} exp={exp!r}")
+
+
+# ══════════════════════════════════════════════
+#  1. 등급 분류
+# ══════════════════════════════════════════════
+CLASSIFY_CASES = {
+    # urgent
+    "주권매매거래정지":                        "urgent",
+    "상장폐지결정":                            "urgent",
+    "관리종목지정":                            "urgent",
+    "횡령ㆍ배임혐의발생":                      "urgent",
+    "공개매수결과보고서":                      "urgent",   # skip '결과보고서'류와 겹쳐도 긴급 우선
+    "회생절차개시신청":                        "urgent",
+    "파산신청":                                "urgent",
+    "감자결정(무상감자)":                      "urgent",
+    "기타시장안내(상장적격성 실질심사 사유 발생)": "urgent",
+    # skip (산업/메인 제외, 기업채널만)
+    "주주총회소집공고":                        "skip",
+    "감사보고서제출":                          "skip",
+    "임원ㆍ주요주주특정증권등소유상황보고서":  "skip",
+    "자기주식취득결과보고서":                  "skip",
+    # major
+    "단일판매ㆍ공급계약체결":                  "major",
+    "유상증자결정":                            "major",
+    "무상증자결정":                            "major",
+    "전환사채권발행결정":                      "major",
+    "최대주주변경":                            "major",
+    "영업양수도결정":                          "major",
+    "주식소각결정":                            "major",
+    "현금ㆍ현물배당결정":                      "major",
+    "소송등의제기ㆍ신청":                      "major",
+    "연결재무제표기준영업(잠정)실적(공정공시)": "major",
+    # normal
+    "본점소재지변경":                          "normal",
+    "타법인주식및출자증권취득결정":            "normal",
+    "기업가치제고계획":                        "normal",
+}
+for nm, exp in CLASSIFY_CASES.items():
+    eq(classify_disclosure(nm), exp, f"classify[{nm}]")
+
+
+# ══════════════════════════════════════════════
+#  2. 채널 라우팅
+# ══════════════════════════════════════════════
+MAIN, IND, COMP = "@main", "@ind", "@comp"
+
+
+def targets(level, nm="테스트공시", market_wide=False,
+            cap_main=True, cap_large=False, ind=IND, comp=COMP):
+    return decide_targets(level, main_chat=MAIN, ind_chat=ind, comp_chat=comp,
+                          is_market_wide=market_wide, report_nm=nm,
+                          cap_ok_main=cap_main, cap_ok_large=cap_large)
+
+
+# urgent: 메인(시총 관문) + 산업 + 기업
+eq(targets("urgent"), [MAIN, IND, COMP], "urgent 기본")
+eq(targets("urgent", cap_main=False), [IND, COMP], "urgent 소형주 메인 제외")
+# skip: 기업만
+eq(targets("skip"), [COMP], "skip 기업만")
+eq(targets("skip", comp=None), [], "skip 기업방 없음")
+# normal: 산업 + 기업 (메인 없음)
+eq(targets("normal"), [IND, COMP], "normal")
+# major 기본: 산업 + 기업
+eq(targets("major", "유상증자결정"), [IND, COMP], "major 기본 메인 제외")
+# major 공급계약·수주 → 메인 (1000억↑)
+eq(targets("major", "단일판매ㆍ공급계약체결"), [IND, COMP, MAIN], "major 공급계약 메인 포함")
+eq(targets("major", "단일판매ㆍ공급계약체결", cap_main=False), [IND, COMP], "major 공급계약 소형주 제외")
+eq(targets("major", "[기재정정]단일판매ㆍ공급계약체결"), [IND, COMP], "major 기재정정 공급계약 메인 제외")
+# major 시장속보 → 메인
+eq(targets("major", "유상증자결정", market_wide=True), [IND, COMP, MAIN], "major 시장속보 메인 포함")
+# 시총 가중: 대형주(1조↑) 구조적 이벤트 → 메인
+eq(targets("major", "유상증자결정", cap_large=True), [IND, COMP, MAIN], "major 대형주 유상증자 메인 승격")
+eq(targets("major", "합병결정", cap_large=True), [IND, COMP, MAIN], "major 대형주 합병 메인 승격")
+eq(targets("major", "[기재정정]유상증자결정", cap_large=True), [IND, COMP], "major 대형주 기재정정 승격 제외")
+eq(targets("major", "특허권취득", cap_large=True), [IND, COMP], "major 대형주 일상성(특허) 승격 제외")
+eq(targets("major", "소송등의제기ㆍ신청", cap_large=True), [IND, COMP], "major 대형주 소송 승격 제외")
+# 중복 제거 (산업방 = 기업방 동일 설정)
+eq(targets("urgent", ind="@same", comp="@same"), [MAIN, "@same"], "동일 채널 dedup")
+eq(targets("normal", ind=None), [COMP], "산업방 없음")
+
+
+# ══════════════════════════════════════════════
+if FAIL:
+    print(f"❌ FAIL {len(FAIL)}건")
+    for f in FAIL:
+        print(" -", f)
+    raise SystemExit(1)
+print(f"✅ test_dart_rules OK — classify {len(CLASSIFY_CASES)} + routing 17 케이스 통과")
