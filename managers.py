@@ -641,7 +641,7 @@ class MarketTimeManager:
         return is_holiday
 
     def is_market_open(self) -> bool:
-        """현재 장이 열려있는지 확인 (평일 & 08:50 ~ 15:30)"""
+        """현재 장이 열려있는지 확인 (평일 & 08:50 ~ 15:30 & 공휴일 제외)"""
         now = self.get_now()
         
         # 1. 주말 체크
@@ -650,7 +650,12 @@ class MarketTimeManager:
             
         # 2. 시간 체크
         current_time = now.time()
-        return self.OPEN_TIME <= current_time <= self.CLOSE_TIME
+        if not (self.OPEN_TIME <= current_time <= self.CLOSE_TIME):
+            return False
+
+        # 3. 공휴일 체크 — 휴장일에도 KIS 시세 API는 직전 거래일 데이터를
+        #    반환하므로 여기서 막지 않으면 스테일 알림이 나감 (일자별 캐시, API 하루 1회)
+        return not self.is_kr_holiday()
 
     def seconds_until_open(self) -> float:
         """다음 개장까지 남은 초(seconds) 계산 (대기용)"""
