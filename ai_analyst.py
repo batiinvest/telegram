@@ -57,7 +57,8 @@ def crawl_dart_mobile(rcept_no):
         }
         
         res = _session.get(url, headers=headers, timeout=5)
-        res.encoding = 'utf-8' # 한글 깨짐 방지
+        # 한글 깨짐 방지 — 서버가 euc-kr을 주는 경우 대비 감지 폴백
+        res.encoding = res.apparent_encoding or 'utf-8'
         
         # 모바일 페이지는 별도 파싱 없이 본문이 바로 HTML에 들어있음
         if res.status_code == 200:
@@ -115,9 +116,11 @@ def analyze_disclosure_gemini(corp_name, report_nm, rcept_no):
         
         [지시사항]
         1. 3줄 이내로 핵심만 요약할 것.
-        2. '호재', '악재', '중립', '정보' 중 하나를 판단하여 맨 앞에 표시할 것. (예: [호재])
+        2. '긍정적 참고', '부정적 참고', '중립', '정보' 중 하나로 성격을 맨 앞에 표시할 것. (예: [긍정적 참고])
+           — 호재/악재 단정, 매수/매도 권유, 주가 전망 표현은 금지.
         3. 금액, 날짜, 계약 상대 등 숫자가 있다면 반드시 포함할 것.
-        4. 초보자도 이해하기 쉬운 구어체(해요체)로 작성할 것.
+        4. 공시에 없는 내용은 절대 추가하지 말 것.
+        5. 초보자도 이해하기 쉬운 구어체(해요체)로 작성할 것.
 
         [공시 본문]
         {clean_text}

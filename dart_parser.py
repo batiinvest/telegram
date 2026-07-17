@@ -13,12 +13,52 @@ dart_parser.py — DART 공시 원문 구조화 파서
 
 import re
 import logging
+from collections import Counter
 from bs4 import BeautifulSoup
 from managers import global_session as _session
 
 log = logging.getLogger(__name__)
 
 _DART_API_BASE = 'https://opendart.fss.or.kr/api'
+
+# 파서 적중률 통계 — get_disclosure_detail이 증가, 공시봇 일일요약이 읽고 clear.
+# 키: 카테고리 파서명 / 'amendment' / 'fallback' / 'empty' / 'no_html' / 'skip_type' / 'error'
+PARSER_STATS: Counter = Counter()
+
+
+_AUDIT_OPINION_PAT = re.compile(
+    r'(?:감사의견|검토의견)[^가-힣]{0,20}(의견\s*거절|부적정|비적정|한정|적정)')
+
+
+def get_audit_opinion(rcept_no: str) -> str | None:
+    """감사·검토보고서 제출 공시에서 감사의견(+부가 위험 항목) 추출.
+
+    제목엔 의견이 드러나지 않아('감사보고서제출') 비적정 여부는 원문에서만
+    판별 가능 — 공시봇이 skip 등급을 urgent로 승격할 때 사용.
+    의견이 적정이라도 실질심사·관리종목 사유가 되는 부가 항목(계속기업
+    존속불확실성 해당, 횡령ㆍ배임 기재, 내부회계 비적정)이 있으면
+    '적정(사유)' 형태로 반환 → 호출측 '적정' 비교에서 승격됨.
+    반환: '적정' | '적정(…)' | '한정' | '부적정' | '비적정' | '의견거절' | None.
+    """
+    html = _fetch_html(rcept_no)
+    if not html:
+        return None
+    txt = re.sub(r'<[^>]+>', ' ', html)
+    txt = re.sub(r'\s+', ' ', txt)
+    m = _AUDIT_OPINION_PAT.search(txt)
+    opinion = m.group(1).replace(' ', '') if m else None
+    if opinion == '적정':
+        flags = []
+        # '해당여부 해당'만 매칭 ('미해당'은 '미' 뒤 '해당'이라 매칭 안 됨)
+        if re.search(r'존속\s*불확실성\s*사유\s*해당\s*여부\s*해당', txt):
+            flags.append('계속기업 불확실성')
+        if re.search(r'횡령[ㆍ·]?\s*배임사항\s*기재\s*여부\s*예', txt):
+            flags.append('횡령·배임 기재')
+        if re.search(r'내부회계관리제도\s*감사\(검토\)의견\s*비적정\s*등\s*여부\s*해당', txt):
+            flags.append('내부회계 비적정')
+        if flags:
+            return f"적정({'·'.join(flags)})"
+    return opinion
 
 
 def _fetch_dart_list_item(rcept_no: str) -> dict:
@@ -2720,6 +2760,127 @@ def parse_misc_mgmt(kv: dict) -> list:
     return lines
 
 
+def parse_lawsuit(kv: dict) -> list:
+    """소송등의제기ㆍ신청 / 판결ㆍ결정 — 사건명·원고·청구금액·내용·법원·대책"""
+    lines = []
+
+    if v := _get(kv, '사건의 명칭', '사건명'):
+        lines.append(f'⚖️ 사건: {_trunc(v, 70)}')
+
+    if v := _get(kv, '원고ㆍ신청인', '원고·신청인', '원고(신청인)', '원고'):
+        lines.append(f'👤 원고: {_trunc(_clean_party(v), 50)}')
+
+    # 청구금액 + 자기자본 대비
+    amount = _get(kv, '청구금액(원)', '소송가액(원)', '청구금액', '소송가액')
+    ratio  = _get(kv, '자기자본대비(%)', '자기자본 대비(%)')
+    if amount and re.search(r'\d', amount):
+        m = re.search(r'([\d,]{4,})', amount)
+        if m:
+            ratio_str = f' (자기자본 대비 {ratio}%)' if ratio else ''
+            lines.append(f'💰 청구금액: {_fmt_amount(m.group(1))}원{ratio_str}')
+
+    if v := _get(kv, '판결ㆍ결정내용', '판결·결정내용', '판결내용', '청구내용', '신청취지'):
+        body = _trunc_clean(re.sub(r'\s+', ' ', v), 150)
+        lines.append(f'📋 내용: {body}')
+
+    if v := _get(kv, '관할법원', '법원'):
+        lines.append(f'🏛 관할: {_trunc(v, 40)}')
+
+    if v := _get(kv, '향후대책', '향후 대책'):
+        plan = _trunc_clean(re.sub(r'\s+', ' ', v), 120)
+        lines.append(f'🧭 대책: {plan}')
+
+    if v := _get(kv, '제기일자', '판결일자', '확인일자', '접수일자'):
+        lines.append(f'📅 일자: {_clean_date(v)}')
+
+    return lines
+
+
+def parse_embezzlement(kv: dict) -> list:
+    """횡령ㆍ배임 혐의발생 / 사실확인 — 대상자·혐의금액·내용·진행단계"""
+    lines = []
+
+    person   = _get(kv, '사고자', '고소ㆍ고발 대상자', '혐의자', '대상자')
+    relation = _get(kv, '회사와의 관계', '직위')
+    if person:
+        rel = f' ({relation})' if relation and relation != person else ''
+        lines.append(f'👤 대상: {_trunc(person, 40)}{rel}')
+
+    amount = _get(kv, '혐의발생금액(원)', '횡령등 금액(원)', '혐의발생금액', '횡령등금액')
+    ratio  = _get(kv, '자기자본대비(%)', '자기자본 대비(%)')
+    if amount and re.search(r'\d', amount):
+        m = re.search(r'([\d,]{4,})', amount)
+        if m:
+            ratio_str = f' (자기자본 대비 {ratio}%)' if ratio else ''
+            lines.append(f'💸 혐의금액: {_fmt_amount(m.group(1))}원{ratio_str}')
+
+    if v := _get(kv, '혐의내용', '사고내용', '확인내용'):
+        body = _trunc_clean(re.sub(r'\s+', ' ', v), 150)
+        lines.append(f'📋 혐의: {body}')
+
+    if v := _get(kv, '진행상황', '조치내용', '향후대책'):
+        action = _trunc_clean(re.sub(r'\s+', ' ', v), 100)
+        lines.append(f'🧭 조치: {action}')
+
+    if v := _get(kv, '확인일자', '발생일자', '혐의발생일'):
+        lines.append(f'📅 확인일: {_clean_date(v)}')
+
+    return lines
+
+
+def parse_market_measure(kv: dict) -> list:
+    """상장폐지·관리종목·상장적격성 등 시장조치 — 대상·사유·일자·근거"""
+    lines = []
+
+    if v := _get(kv, '대상종목', '종목명'):
+        lines.append(f'📋 대상: {_trunc(v, 50)}')
+
+    if v := _get(kv, '지정사유', '해제사유', '폐지사유', '결정사유', '선정사유', '사유'):
+        reason = _trunc_clean(re.sub(r'\s+', ' ', v), 150)
+        lines.append(f'🚨 사유: {reason}')
+
+    for label, keys in (('📅 지정일', ('지정일',)),
+                        ('📅 해제일', ('해제일',)),
+                        ('📅 폐지일', ('폐지일', '상장폐지일')),
+                        ('🕐 정리매매', ('정리매매',))):
+        if v := _get(kv, *keys):
+            lines.append(f'{label}: {_trunc(v, 60)}')
+
+    if v := _get(kv, '근거규정', '근거'):
+        lines.append(f'📋 근거: {_trunc(v, 60)}')
+
+    if v := _get(kv, '5.기타', '기타'):
+        lines.extend(_parse_etc_field(v)[:4])
+
+    # KRX 기타시장안내형 폴백 — 정형 필드가 없으면 제목/내용 KV,
+    # 그마저 없으면(표 없는 산문 문서) 원문 텍스트의 '제목 :' 이후를 추출
+    if not lines:
+        title = _get(kv, '제목')
+        body  = _get(kv, '내용')
+        if not title and not body:
+            raw = kv.get('_html', '')
+            if raw:
+                no_css = re.sub(r'<(style|script)[^>]*>.*?</\1>', ' ', raw,
+                                flags=re.DOTALL | re.IGNORECASE)
+                txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', no_css)).strip()
+                m = re.search(r'제\s*목\s*[:：]\s*(.+)$', txt)
+                if m:
+                    seg = m.group(1).strip()
+                    head, _sep, rest = seg.partition(')')   # 제목은 대개 괄호로 종결
+                    if rest.strip():
+                        title, body = (head + ')').strip(), rest.strip()
+                    else:
+                        body = seg
+        if title:
+            t = _trunc_clean(re.sub(r'\s+', ' ', title), 100)
+            lines.append(f'📋 {t}')
+        if body:
+            b = _trunc_clean(re.sub(r'\s+', ' ', body), 500)
+            lines.append(f'  {b}')
+
+    return lines
+
+
 # 공시 제목 키워드 → 카테고리 파서 매핑
 # ※ 순서 중요: 구체적인 타입을 먼저, 일반적인 타입을 나중에
 _PARSER_MAP = [
@@ -2732,6 +2893,9 @@ _PARSER_MAP = [
     (['기타주요경영사항'],                   parse_misc_mgmt),
     (['임원ㆍ주요주주', '임원·주요주주'],     parse_insider_report),
     (['거래정지', '매매거래정지'],           parse_trading_halt),
+    (['상장폐지', '관리종목', '상장적격성'],   parse_market_measure),
+    (['소송'],                                parse_lawsuit),
+    (['횡령', '배임'],                         parse_embezzlement),
     (['권리락'],                             parse_ex_rights),
     (['최대주주변경'],                        parse_major_shareholder_change),
     (['주주명부폐쇄', '기준일설정'],           parse_record_date),
@@ -2777,28 +2941,31 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
     현재: 범용 파서(parse_all_fields)로 전체 필드 추출.
     추후: 카테고리별 파서로 포맷 고도화 예정.
     """
+    # 카테고리 판정용 제목 ([기재정정] 등 접두어 제거)
+    clean_nm = re.sub(r'^\[[^\]]+\]', '', report_nm).strip()
+
+    # 상세 불필요 공시 — 원문 fetch 전에 판정 (정기보고서류는 문서가 커서 fetch 자체 생략)
+    if any(skip in clean_nm for skip in _SKIP_DETAIL_TYPES):
+        PARSER_STATS['skip_type'] += 1
+        return ''
+
     html = _fetch_html(rcept_no)
     if not html:
+        PARSER_STATS['no_html'] += 1
         log.debug(f'[DART 파서] HTML 없음 ({rcept_no})')
         return ''
 
     try:
         kv = _build_kv(html)
         if not kv:
-            log.debug(f'[DART 파서] KV 없음 ({report_nm})')
-            return ''
+            # 표 없는 산문 문서(KRX 기타시장안내 등) — 조기 반환하지 않고
+            # 카테고리 파서의 _html 폴백에 기회를 준다
+            log.debug(f'[DART 파서] KV 없음 — 산문 폴백 시도 ({report_nm})')
         kv['_html'] = html        # 일부 파서에서 원문 직접 파싱 용도
         kv['_rcept_no'] = rcept_no  # API fallback용 접수번호
 
         if report_nm.startswith('[기재정정]'):
             log.debug(f'[DART 파서] 기재정정 kv 키: {list(kv.keys())[:10]}')
-
-        # 카테고리별 파서 시도 ([기재정정] 등 접두어 제거)
-        clean_nm = re.sub(r'^\[[^\]]+\]', '', report_nm).strip()
-
-        # 상세 불필요 공시 — 빈 문자열 즉시 반환
-        if any(skip in clean_nm for skip in _SKIP_DETAIL_TYPES):
-            return ''
 
         parser = None
         for keywords, fn in _PARSER_MAP:
@@ -2819,20 +2986,24 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
                 if sub:
                     lines.append('════════════')
                     lines.extend(sub)
+                PARSER_STATS['amendment'] += 1
                 return '\n'.join(lines)
 
         if parser:
             lines = parser(kv)
             if lines:
+                PARSER_STATS[parser.__name__] += 1
                 log.debug(f'[DART 파서] 카테고리 파서 사용 ({report_nm})')
                 return '\n'.join(lines)
 
         # 범용 파서 fallback
         lines = parse_all_fields(kv)
+        PARSER_STATS['fallback' if lines else 'empty'] += 1
         if not lines:
             log.debug(f'[DART 파서] 파싱 결과 없음 ({report_nm})')
         return '\n'.join(lines)
 
     except Exception as e:
+        PARSER_STATS['error'] += 1
         log.warning(f'[DART 파서] 파싱 실패 ({report_nm}): {e}')
         return ''
