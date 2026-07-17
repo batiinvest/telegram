@@ -1499,7 +1499,14 @@ def parse_preliminary_earnings(kv: dict) -> list:
         if '흑자' in v or '적자' in v:
             return v
         if _IS_PCT.match(v):
-            f = float(v)
+            try:
+                f = float(v)
+            except ValueError:   # '1.2.3' 등 _IS_PCT 오매치
+                return ''
+            # 표 구조 어긋남 방어: 증감률 자리에 금액이 잘못 매칭되면
+            # 소수점 없는 큰 정수로 나타남 → 표기 생략(금액만 표시)
+            if abs(f) >= 10000 or ('.' not in v and abs(f) >= 1000):
+                return ''
             sign = '+' if f > 0 else ''
             return f'{sign}{v}%'
         return ''
@@ -1510,8 +1517,6 @@ def parse_preliminary_earnings(kv: dict) -> list:
         # 다음 4개 items에서 값 추출
         if idx + 3 >= len(items):
             continue
-        _, curr_val = items[idx + 1] if idx + 1 < len(items) else (None, None)
-        prev_val, _ = items[idx + 1] if False else (None, None)
 
         # (당기값, 전기값) 쌍
         k1, curr = items[idx + 1]

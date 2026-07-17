@@ -56,6 +56,7 @@ URGENT_KEYWORDS = [
     "공개매수",
     "불성실공시",
     "영업정지",
+    "회생절차", "파산", "감자",
 ]
 
 MAJOR_KEYWORDS = [
@@ -69,6 +70,7 @@ MAJOR_KEYWORDS = [
     "소송", "분쟁",
     "특허", "임상",
     "사업보고서", "분기보고서", "반기보고서",
+    "영업양수", "영업양도", "주식소각", "액면", "배당",
 ]
 
 # 산업/메인 채널에서 스킵 (기업채널은 정상 발송)
@@ -158,11 +160,12 @@ def classify_disclosure(report_nm: str) -> str:
     공시 중요도 분류.
     반환: 'urgent' | 'major' | 'skip' | 'normal'
     """
-    # 스킵 여부 먼저 (기업채널은 별도 처리)
-    if any(k in report_nm for k in SKIP_FOR_BROADCAST):
-        return 'skip'
+    # 긴급 최우선 — skip 키워드와 한 제목에서 겹칠 때 긴급이 이겨야 함
+    # (키워드는 app_config에서 운영 변경되므로 겹침을 전제로 방어)
     if any(k in report_nm for k in URGENT_KEYWORDS):
         return 'urgent'
+    if any(k in report_nm for k in SKIP_FOR_BROADCAST):
+        return 'skip'
     if any(k in report_nm for k in MAJOR_KEYWORDS):
         return 'major'
     return 'normal'
@@ -177,6 +180,8 @@ class DartRoutingBot:
         self.ai_executor = ThreadPoolExecutor(max_workers=2)
         self.session = get_session()
         self._retry_counts: dict = {}   # rcept_no → 발송 전채널 실패 재시도 횟수
+        self._api_fail_streak = 0       # list.json 연속 실패 카운트 (관리자 알림용)
+        self._swept = False             # 기동 첫 사이클 복구 스윕 완료 여부
 
         # 시총 캐시 (메인 채널 필터링용)
         self._cap_cache: dict = {}   # stock_code(숫자) → market_cap
@@ -272,6 +277,196 @@ class DartRoutingBot:
             f"📈 <a href='https://finance.naver.com/item/main.nhn?code={target_code}'>네이버</a>"
         )
 
+    _MAX_PAGES         = 3    # 평시 캡 — 100건×3페이지, 분당 300건 폭주까지 커버
+    _MAX_PAGES_STARTUP = 30   # 기동 첫 사이클 캡 — 중단·장애 시간대 복구 스윕용
+
+    def _note_api_failure(self, detail: str):
+        """list.json 오류 로그 + 연속 실패 누적 시 관리자 1회 알림.
+        (구: 오류 status 무로그 break — 쿼터초과·키만료로 수집이 전면
+         중단돼도 heartbeat는 정상이라 탐지 불가했음)"""
+        self._api_fail_streak += 1
+        logging.error(f"❌ [공시] list.json 오류 ({self._api_fail_streak}연속): {detail}")
+        if self._api_fail_streak == 10:
+            try:
+                from telegram_utils import get_admin_chat_id
+                admin = get_admin_chat_id()
+                if admin:
+                    stock_api.send_telegram(
+                        admin, f"🚨 <b>[공시봇]</b> DART 수집 10분 연속 실패\n└ {detail}")
+            except Exception:
+                logging.exception("⚠️ [공시] 관리자 알림 발송 실패")
+
+    def _fetch_items(self, now) -> list:
+        """DART list.json 조회 (어제~오늘, 최신순).
+
+        - bgn_de=어제: 19시 폴링 종료 이후 접수분(저녁 정정·5%보고 등)을
+          다음날 아침 첫 사이클이 자연 수거 (구: '오늘' 고정 → 영구 누락).
+        - 페이지는 최신순 → 이미 처리한 공시가 포함된 페이지까지만 조회
+          (그보다 오래된 페이지는 기처리 영역).
+        - 기동 첫 사이클은 캡 30페이지: 재기동·장애 시간대 복구 스윕.
+        """
+        bgn_de = (now - datetime.timedelta(days=1)).strftime("%Y%m%d")
+        end_de = now.strftime("%Y%m%d")
+        max_pages = self._MAX_PAGES if self._swept else self._MAX_PAGES_STARTUP
+        self._swept = True
+
+        items = []
+        total_page = 1
+        for _page in range(1, max_pages + 1):
+            params = {
+                "crtfc_key": DART_API_KEY,
+                "bgn_de": bgn_de, "end_de": end_de,
+                "page_count": 100, "page_no": _page,
+            }
+            res = self.session.get(self.base_url, params=params, timeout=10)
+            try:
+                data = res.json()
+            except ValueError:
+                self._note_api_failure(f"비JSON 응답 (HTTP {res.status_code})")
+                break
+            status = data.get("status")
+            if status not in ("000", "013"):   # 013 = 조회 데이터 없음 (정상)
+                self._note_api_failure(f"status={status} {data.get('message', '')}")
+                break
+            self._api_fail_streak = 0
+            if status == "013":
+                break
+            page_items = data.get("list", [])
+            items.extend(page_items)
+            total_page = int(data.get("total_page", 1) or 1)
+            if _page >= total_page:
+                break
+            if any(self.history.contains(it.get("rcept_no")) for it in page_items):
+                break
+        else:
+            logging.warning(f"⚠️ [공시] 페이지 캡({max_pages}) 도달 — "
+                            f"미조회분 존재 가능 (total_page={total_page})")
+        return items
+
+    def _process_item(self, item: dict):
+        """공시 1건 처리: 필터 → 분류 → 메시지 → 라우팅 발송 → 이력 기록.
+        run() 사이클에서 항목별 try로 감싸 호출 — 한 항목의 예외가
+        같은 사이클의 나머지(더 최신) 공시 처리를 막지 않도록 격리."""
+        rcept_no   = item.get("rcept_no") or ""
+        corp_name  = item.get("corp_name") or ""
+        report_nm  = item.get("report_nm") or ""
+        stock_code = (item.get("stock_code") or "").strip()
+
+        # ① 처리 이력
+        if not rcept_no or self.history.contains(rcept_no):
+            return
+
+        # ② 비상장 제외
+        if not stock_code:
+            return
+
+        # ③ 블랙리스트 제외 (정확한 기업명)
+        if corp_name in DART_BLACKLIST:
+            self.history.add(rcept_no)
+            return
+
+        # ③-a 기업명 부분일치 필터
+        if DART_CORP_FILTER and any(k in corp_name for k in DART_CORP_FILTER):
+            self.history.add(rcept_no)
+            return
+
+        # ③-b 공시 제목 필터
+        if DART_TITLE_FILTER and any(k in report_nm for k in DART_TITLE_FILTER):
+            self.history.add(rcept_no)
+            return
+
+        is_my_stock         = (corp_name in COMPANY_CODES) or (bool(stock_code) and stock_code.split(".")[0] in CHAT_IDS_BY_CODE)
+        is_global_important = any(k in report_nm for k in GLOBAL_IMPORTANT_KEYWORDS)
+
+        # ④ 내 종목도 아니고 전체 중요 공시도 아니면 스킵
+        if not is_my_stock and not is_global_important:
+            return
+
+        # ⑤ 공시 중요도 분류
+        level = classify_disclosure(report_nm)
+
+        # ── 메시지 생성 ──
+        is_market_wide = not is_my_stock and is_global_important
+        prefix = "🔥 <b>[시장속보]</b> " if is_market_wide else ""
+        detail = get_disclosure_detail(rcept_no, report_nm)
+        msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
+
+        # ── 채널 라우팅 — 대상 확정 후 일괄 발송 (성공 여부 추적) ──
+        industry = COMPANY_TO_INDUSTRY.get(corp_name)
+        _ind_cid = INDUSTRY_CHAT_IDS.get(industry) if industry else None
+        _cid     = self._get_company_chat_id(corp_name, stock_code)
+
+        targets = []
+        if level == 'urgent':
+            # 긴급: 메인(시총 1000억↑) + 산업 + 기업
+            if self._is_main_worthy(stock_code):
+                targets.append(DEFAULT_CHAT_ID)
+            if _ind_cid:
+                targets.append(_ind_cid)
+            if _cid:
+                targets.append(_cid)
+        elif level == 'major':
+            # 중요: 산업 + 기업 (+ 시장속보/공급계약·수주는 메인, 시총 1000억↑만)
+            if _ind_cid:
+                targets.append(_ind_cid)
+            if _cid:
+                targets.append(_cid)
+            _to_main = is_market_wide or ("기재정정" not in report_nm and any(k in report_nm for k in ("공급계약", "수주")))
+            if _to_main and self._is_main_worthy(stock_code):
+                targets.append(DEFAULT_CHAT_ID)
+        elif level == 'skip':
+            # 잡공시: 기업채널만 (산업/메인 제외)
+            if _cid:
+                targets.append(_cid)
+        else:  # normal
+            # 일반: 산업 + 기업 (메인 제외)
+            if _ind_cid:
+                targets.append(_ind_cid)
+            if _cid:
+                targets.append(_cid)
+
+        # 같은 방 중복 발송 방지 (산업방=기업방 동일 설정 등) — 순서 보존 dedup
+        targets = list(dict.fromkeys(targets))
+
+        results = [stock_api.send_telegram(t, msg) for t in targets]
+
+        # 전 채널 발송 실패 → history 미기록으로 다음 폴링에서 재시도 (최대 3회)
+        if targets and not any(results):
+            _n = self._retry_counts.get(rcept_no, 0) + 1
+            self._retry_counts[rcept_no] = _n
+            if _n < 3:
+                logging.warning(f"⚠️ [공시] 전 채널 발송 실패 — 재시도 {_n}/3: {corp_name} {report_nm}")
+                return
+            logging.error(f"❌ [공시] 발송 3회 실패 — 포기: {corp_name} {report_nm}")
+        self._retry_counts.pop(rcept_no, None)
+
+        # ── AI 분석 (긴급/중요만) ── [임시 중지: 업데이트 후 재적용]
+        # Gemini 모델 폐기로 인해 분석 실패 → 임시 비활성화 (2026-06-25)
+        # 복구 시 아래 블록 주석 해제 (+ ai_worker 메시지 escape·호재/악재 표현 완화 필요)
+        # if level in ('urgent', 'major') and \
+        #    any(k in report_nm for k in AI_TRIGGER_KEYWORDS):
+        #     logging.info(f"🤖 AI 분석 큐: {corp_name}")
+        #     ai_target = self._get_company_chat_id(corp_name, stock_code) or DEFAULT_CHAT_ID
+        #     self.ai_executor.submit(
+        #         self.ai_worker, ai_target, corp_name, report_nm, rcept_no
+        #     )
+
+        # ── 발송 기록 ──
+        if _BRIDGE_OK:
+            try:
+                _bridge.log_notice(
+                    target=corp_name,
+                    content=f"[공시/{level}] {report_nm}",
+                    sent_count=len(targets),
+                    ok_count=sum(1 for r in results if r),
+                )
+            except Exception:
+                pass
+
+        self.history.add(rcept_no)
+        logging.info(f"✅ [공시/{level}] {corp_name}: {report_nm}")
+        time.sleep(1)
+
     def run(self):
         logging.info("🚀 DART Bot Started")
         loop_count = 0
@@ -283,7 +478,7 @@ class DartRoutingBot:
                     _bridge.heartbeat("dart_bot")
                 except Exception:
                     pass
-                # reload_flag 자체 폴링 제거 — watchdog이 단일 소비자,
+                # reload_flag 소비는 watchdog 단일 창구 —
                 # 필터 갱신은 config.on_reload(_load_dart_filters) 콜백으로 수신
 
             now = market_timer.get_now()
@@ -293,150 +488,20 @@ class DartRoutingBot:
 
             if 7 <= now.hour < 19:
                 try:
-                    today_str = now.strftime("%Y%m%d")
-                    # 공시 폭주 분(분당 50건 초과) 누락 방지 — 최대 3페이지(150건).
-                    # 페이지는 최신순이므로, 페이지 안에 이미 처리한 공시가 하나라도 있으면
-                    # 그보다 오래된 페이지는 볼 필요 없음 → 평시엔 기존과 동일하게 1페이지 1호출.
-                    items = []
-                    for _page in range(1, 4):
-                        params = {
-                            "crtfc_key": DART_API_KEY,
-                            "bgn_de": today_str, "end_de": today_str,
-                            "page_count": 50, "page_no": _page,
-                        }
-                        res  = self.session.get(self.base_url, params=params, timeout=10)
-                        data = res.json()
-                        if data.get("status") != "000":
-                            break
-                        page_items = data.get("list", [])
-                        items.extend(page_items)
-                        if _page >= int(data.get("total_page", 1) or 1):
-                            break
-                        if any(self.history.contains(it.get("rcept_no")) for it in page_items):
-                            break
-
-                    if items:
-                        for item in reversed(items):
-                            rcept_no   = item.get("rcept_no")
-                            corp_name  = item.get("corp_name")
-                            report_nm  = item.get("report_nm", "")
-                            stock_code = item.get("stock_code", "").strip()
-
-                            # ① 처리 이력
-                            if self.history.contains(rcept_no):
-                                continue
-
-                            # ② 비상장 제외
-                            if not stock_code:
-                                continue
-
-                            # ③ 블랙리스트 제외 (정확한 기업명)
-                            if corp_name in DART_BLACKLIST:
-                                self.history.add(rcept_no)
-                                continue
-
-                            # ③-a 기업명 부분일치 필터
-                            if DART_CORP_FILTER and any(k in corp_name for k in DART_CORP_FILTER):
-                                self.history.add(rcept_no)
-                                continue
-
-                            # ③-b 공시 제목 필터
-                            if DART_TITLE_FILTER and any(k in report_nm for k in DART_TITLE_FILTER):
-                                self.history.add(rcept_no)
-                                continue
-
-                            is_my_stock        = (corp_name in COMPANY_CODES) or (bool(stock_code) and stock_code.split(".")[0] in CHAT_IDS_BY_CODE)
-                            is_global_important = any(k in report_nm for k in GLOBAL_IMPORTANT_KEYWORDS)
-
-                            # ④ 내 종목도 아니고 전체 중요 공시도 아니면 스킵
-                            if not is_my_stock and not is_global_important:
-                                continue
-
-                            # ⑤ 공시 중요도 분류
-                            level = classify_disclosure(report_nm)
-
-                            # ── 메시지 생성 ──
-                            is_market_wide = not is_my_stock and is_global_important
-                            prefix = "🔥 <b>[시장속보]</b> " if is_market_wide else ""
-                            detail = get_disclosure_detail(rcept_no, report_nm)
-                            msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
-
-                            # ── 채널 라우팅 — 대상 확정 후 일괄 발송 (성공 여부 추적) ──
-                            industry = COMPANY_TO_INDUSTRY.get(corp_name)
-                            _ind_cid = INDUSTRY_CHAT_IDS.get(industry) if industry else None
-                            _cid     = self._get_company_chat_id(corp_name, stock_code)
-
-                            targets = []
-                            if level == 'urgent':
-                                # 긴급: 메인(시총 1000억↑) + 산업 + 기업
-                                if self._is_main_worthy(stock_code):
-                                    targets.append(DEFAULT_CHAT_ID)
-                                if _ind_cid:
-                                    targets.append(_ind_cid)
-                                if _cid:
-                                    targets.append(_cid)
-                            elif level == 'major':
-                                # 중요: 산업 + 기업 (+ 시장속보/공급계약·수주는 메인, 시총 1000억↑만)
-                                if _ind_cid:
-                                    targets.append(_ind_cid)
-                                if _cid:
-                                    targets.append(_cid)
-                                _to_main = is_market_wide or ("기재정정" not in report_nm and any(k in report_nm for k in ("공급계약", "수주")))
-                                if _to_main and self._is_main_worthy(stock_code):
-                                    targets.append(DEFAULT_CHAT_ID)
-                            elif level == 'skip':
-                                # 잡공시: 기업채널만 (산업/메인 제외)
-                                if _cid:
-                                    targets.append(_cid)
-                            else:  # normal
-                                # 일반: 산업 + 기업 (메인 제외)
-                                if _ind_cid:
-                                    targets.append(_ind_cid)
-                                if _cid:
-                                    targets.append(_cid)
-
-                            results = [stock_api.send_telegram(t, msg) for t in targets]
-
-                            # 전 채널 발송 실패 → history 미기록으로 다음 폴링에서 재시도 (최대 3회)
-                            if targets and not any(results):
-                                _n = self._retry_counts.get(rcept_no, 0) + 1
-                                self._retry_counts[rcept_no] = _n
-                                if _n < 3:
-                                    logging.warning(f"⚠️ [공시] 전 채널 발송 실패 — 재시도 {_n}/3: {corp_name} {report_nm}")
-                                    continue
-                                logging.error(f"❌ [공시] 발송 3회 실패 — 포기: {corp_name} {report_nm}")
-                            self._retry_counts.pop(rcept_no, None)
-
-                            # ── AI 분석 (긴급/중요만) ── [임시 중지: 업데이트 후 재적용]
-                            # Gemini 모델 폐기로 인해 분석 실패 → 임시 비활성화 (2026-06-25)
-                            # 복구 시 아래 블록 주석 해제
-                            # if level in ('urgent', 'major') and \
-                            #    any(k in report_nm for k in AI_TRIGGER_KEYWORDS):
-                            #     logging.info(f"🤖 AI 분석 큐: {corp_name}")
-                            #     ai_target = self._get_company_chat_id(corp_name, stock_code) or DEFAULT_CHAT_ID
-                            #     self.ai_executor.submit(
-                            #         self.ai_worker, ai_target, corp_name, report_nm, rcept_no
-                            #     )
-
-                            # ── 발송 기록 ──
-                            if _BRIDGE_OK:
-                                try:
-                                    _bridge.log_notice(
-                                        target=corp_name,
-                                        content=f"[공시/{level}] {report_nm}",
-                                        sent_count=len(targets),
-                                        ok_count=sum(1 for r in results if r),
-                                    )
-                                except Exception:
-                                    pass
-
-                            self.history.add(rcept_no)
-                            logging.info(f"✅ [공시/{level}] {corp_name}: {report_nm}")
-                            time.sleep(1)
-
+                    items = self._fetch_items(now)
+                    for item in reversed(items):
+                        try:
+                            self._process_item(item)
+                        except Exception:
+                            rn = item.get("rcept_no") or ""
+                            logging.exception(
+                                f"❌ [공시] 항목 처리 실패 — 스킵({rn}): "
+                                f"{item.get('corp_name')} {str(item.get('report_nm', ''))[:40]}")
+                            if rn:
+                                self.history.add(rn)   # 무한 재시도 차단
                     time.sleep(60)
-                except Exception as e:
-                    logging.error(f"Error: {e}")
+                except Exception:
+                    logging.exception("❌ [공시] 사이클 실패")
                     time.sleep(60)
             else:
                 time.sleep(600)
