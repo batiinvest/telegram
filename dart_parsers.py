@@ -2231,6 +2231,240 @@ def parse_market_measure(kv: dict) -> list:
     return lines
 
 
+def parse_dividend(kv: dict) -> list:
+    """현금ㆍ현물배당결정 / 금전배당결정 — 배당구분·1주당 배당금·시가배당률·기준일·지급일"""
+    lines = []
+
+    kind  = _get(kv, '1. 배당구분', '배당구분')
+    kind2 = _get(kv, '2. 배당종류', '배당종류')
+    parts = [p for p in (kind, kind2) if p]
+    if parts:
+        lines.append('💰 ' + ' · '.join(parts))
+
+    # 1주당 배당금 + 시가배당률 — 값이 '보통주식 233' 형태
+    per  = _get(kv, '1주당 배당금(원)', '1주당 배당금', '1주당배당금')
+    rate = _get(kv, '시가배당률(%)', '시가배당율(%)', '시가배당률')
+    if per:
+        m  = re.search(r'보통주[식]?\s*([\d,]+)', per) or re.search(r'([\d,]+)', per)
+        mr = (re.search(r'보통주[식]?\s*([\d.]+)', rate or '')
+              or re.search(r'([\d.]+)', rate or ''))
+        if m:
+            rate_str = f' (시가배당률 {mr.group(1)}%)' if mr else ''
+            lines.append(f'💵 1주당 {m.group(1)}원{rate_str}')
+
+    _f(lines, kv, '💰 배당총액', '배당금총액(원)', '배당금총액', fmt=_fmt_amount, suffix='원')
+    _f(lines, kv, '📦 현물자산', '현물자산의 상세내역', trunc=50)
+    _f(lines, kv, '📅 배당기준일', '배당기준일')
+    if v := _get(kv, '배당금지급 예정일자', '배당금지급 예정일', '지급예정일'):
+        lines.append(f'📅 지급예정: {_trunc(v, 40)}')
+    _f(lines, kv, '📋 결의일', '이사회결의일(결정일)', '이사회결의일')
+
+    return lines
+
+
+def parse_share_cancellation(kv: dict) -> list:
+    """주식소각결정 — 소각주식수·소각금액·취득방법·소각예정일"""
+    lines = []
+
+    # 소각 주식수: 헤더 짝밀림('1. 소각할…' → '보통주식(주)' → 수량) 구조 대응
+    cnt = None
+    for k, v in kv.items():
+        if k.startswith('_') or '정정' in k:
+            continue
+        if '보통주' in k and re.match(r'^[\d,]+$', (v or '').strip()):
+            cnt = v.strip()
+            break
+    if not cnt:
+        v = _get(kv, '소각할 주식의 종류와 수')
+        m = re.search(r'([\d,]{4,})', v or '')
+        cnt = m.group(1) if m else None
+    if cnt:
+        lines.append(f'🔥 소각주식: 보통주 {cnt}주')
+
+    _f(lines, kv, '💰 소각예정금액', '소각예정금액(원)', '소각예정금액', fmt=_fmt_amount, suffix='원')
+    _f(lines, kv, '📋 취득방법', '소각할 주식의 취득방법', '취득방법', trunc=40)
+    _f(lines, kv, '📅 소각예정일', '소각 예정일', '소각예정일')
+    _f(lines, kv, '📋 결의일', '이사회결의일(결정일)', '이사회결의일')
+
+    return lines
+
+
+def parse_capital_reduction_done(kv: dict) -> list:
+    """감자완료 — 완료일·감자비율·발행주식/자본금 전후"""
+    lines = []
+
+    _f(lines, kv, '📅 감자완료일', '감자 완료일', '감자완료일')
+
+    # 감자비율: '대주주 80' + 별도 '소액주주' 행
+    ratio = _get(kv, '감자비율(%)', '감자비율')
+    minor = _get(kv, '소액주주')
+    if ratio:
+        m = re.search(r'([\d.]+)', ratio)
+        if m:
+            if minor and re.match(r'^[\d.]+$', minor) and minor != m.group(1):
+                lines.append(f'📉 감자비율: 대주주 {m.group(1)}% · 소액주주 {minor}%')
+            else:
+                lines.append(f'📉 감자비율: {m.group(1)}%')
+
+    # 발행주식 전→후: '-보통주식(주)'(감자전) 다음 [감자전: 감자후] 숫자쌍 행
+    items = list(kv.items())
+    for idx, (k, v) in enumerate(items):
+        if k.replace(' ', '').startswith('-보통주식') and re.match(r'^[\d,]+$', (v or '').strip()):
+            pre, post = v.strip(), None
+            if idx + 1 < len(items):
+                k2, v2 = items[idx + 1]
+                if re.match(r'^[\d,]+$', k2.strip()) and re.match(r'^[\d,]+$', (v2 or '').strip()):
+                    post = v2.strip()
+            lines.append(f'📦 발행주식: {pre} → {post}주' if post else f'📦 감자전 발행주식: {pre}주')
+            break
+
+    # 자본금 전→후: '4. 자본금 변동(원)' 값(감자전)이 다음 행의 키로 반복되는 구조
+    cap_pre = _get(kv, '자본금 변동(원)', '자본금 변동')
+    if cap_pre and re.match(r'^[\d,]+$', cap_pre):
+        cap_post = (kv.get(cap_pre) or '').strip()
+        if re.match(r'^[\d,]+$', cap_post):
+            lines.append(f'💰 자본금: {_fmt_amount(cap_pre)}원 → {_fmt_amount(cap_post)}원')
+        else:
+            lines.append(f'💰 감자전 자본금: {_fmt_amount(cap_pre)}원')
+
+    _f(lines, kv, '📋 감자결정일', '감자결정 이사회결의일')
+
+    return lines
+
+
+def parse_earnings_change(kv: dict) -> list:
+    """매출액또는손익구조 30%(대규모법인 15%)이상 변경 — 당해 실적·증감률 요약.
+
+    다열 표 짝밀림 구조: ('- 매출액': 당해값) → (직전값: 증감금액) → (증감비율: 흑전여부)
+    순서 기반 추출 — 정규식 가드 실패 시 해당 필드만 생략 (지표 0개면 범용 폴백).
+    """
+    lines = []
+
+    ftype = _get(kv, '재무제표의 종류')
+    lines.append('📊 손익구조 변동' + (f' ({ftype})' if ftype else ''))
+
+    # 단위 감지 (서식 기본 천원 — '단위:원' 명시 시에만 1배)
+    unit_mult = 1000
+    for k in kv:
+        if '단위' in k and '천원' not in k and re.search(r'단위\s*[:：]\s*원', k):
+            unit_mult = 1
+            break
+
+    items = list(kv.items())
+    _NUM = re.compile(r'^-?[\d,]+$')
+    _PCT = re.compile(r'^-?\d{1,4}(\.\d+)?$')
+    LABELS = {'매출액': '매출', '영업이익': '영업이익',
+              '법인세비용차감전계속사업이익': '세전이익', '당기순이익': '순이익'}
+    seen_metric: set = set()
+
+    for idx, (k, v) in enumerate(items):
+        name = re.sub(r'^[-\s]+', '', k).strip()
+        if name not in LABELS or name in seen_metric:
+            continue
+        if not _NUM.match((v or '').replace(' ', '')):
+            continue
+        seen_metric.add(name)
+        curr = int(v.replace(',', ''))
+
+        pct = flip = ''
+        if idx + 2 < len(items):
+            k3, v3 = items[idx + 2]
+            # (증감비율: 흑전여부) 행 — 직전 행이 (직전값: 증감금액) 숫자쌍일 때만 신뢰
+            if _NUM.match(items[idx + 1][0].replace(' ', '')) and _PCT.match(k3.strip()):
+                pct = k3.strip()
+                if v3 and ('흑자' in v3 or '적자' in v3):
+                    flip = v3.strip()
+
+        amt = ('-' if curr < 0 else '') + _fmt_amount(str(abs(curr) * unit_mult))
+        line = f'  {LABELS[name]}: {amt}원'
+        extra = []
+        if pct:
+            extra.append(('+' if not pct.startswith('-') else '') + pct + '%')
+        if flip:
+            extra.append(flip)
+        if extra:
+            line += ' (' + ' · '.join(extra) + ')'
+        lines.append(line)
+
+    if len(lines) == 1:      # 지표 추출 실패 — 범용 폴백에 위임
+        return []
+
+    if v := _get(kv, '변동 주요원인'):
+        reason = _trunc_clean(re.sub(r'\s+', ' ', v), 120)
+        lines.append(f'📋 원인: {reason}')
+    _f(lines, kv, '📋 결의일', '이사회결의일(결정일)', '이사회결의일')
+
+    return lines
+
+
+def parse_conversion_adjust(kv: dict) -> list:
+    """전환/신주인수권 행사/교환 가액의 조정 — 조정전→후 가액·사유·적용일.
+
+    서식 3형 대응: ①2열(조정전/후 키에 값 직접) ②복합값('9,714 8,538')
+    ③다회차 짝밀림(가액쌍이 [조정전: 조정후] 숫자행으로 등장, 회차별 복수)
+    """
+    lines = []
+
+    def _to_int(s):
+        try:
+            return int(s.replace(',', ''))
+        except (ValueError, AttributeError):
+            return None
+
+    pairs = []           # (조정전, 조정후)
+    used_keys: set = set()
+
+    # ① 직접 키
+    pre  = _get(kv, '조정전 전환가액', '조정전 행사가액', '조정전 교환가액')
+    post = _get(kv, '조정후 전환가액', '조정후 행사가액', '조정후 교환가액')
+    m_pre  = re.search(r'([\d,]{3,})', pre or '')
+    m_post = re.search(r'([\d,]{3,})', post or '')
+    if m_pre and m_post:
+        pairs.append((m_pre.group(1), m_post.group(1)))
+
+    # ② 복합값 '조정전 조정후' — 한 셀에 두 숫자
+    if not pairs:
+        for k, v in kv.items():
+            if k.startswith('_'):
+                continue
+            m = re.fullmatch(r'([\d,]{3,})\s+([\d,]{3,})', (v or '').strip())
+            if m:
+                pairs.append((m.group(1), m.group(2)))
+                used_keys.add(k)
+                break
+
+    # ③ 다회차 짝밀림: [조정전: 조정후] 숫자행 — 전환가액 범위(100원~1000만원)만
+    if not pairs:
+        for k, v in kv.items():
+            a, b = _to_int(k.strip()), _to_int((v or '').strip())
+            if a and b and a != b and 100 <= a <= 10_000_000 and 100 <= b <= 10_000_000:
+                pairs.append((k.strip(), (v or '').strip()))
+                used_keys.add(k)
+                if len(pairs) >= 3:
+                    break
+
+    for pre_n, post_n in pairs[:3]:
+        a, b = _to_int(pre_n), _to_int(post_n)
+        if a and b and a > 0:
+            lines.append(f'💵 전환가액: {pre_n}원 → {post_n}원 ({(b - a) / a * 100:+.1f}%)')
+        else:
+            lines.append(f'💵 전환가액: {pre_n}원 → {post_n}원')
+
+    # 전환가능주식수 전→후: [전: 후] 숫자행 (1만주 이상, 가액쌍으로 안 쓴 행)
+    for k, v in kv.items():
+        if k in used_keys:
+            continue
+        a, b = _to_int(k.strip()), _to_int((v or '').strip())
+        if a and b and a != b and a >= 10_000 and b >= 10_000:
+            lines.append(f'🔢 전환가능주식: {k.strip()} → {(v or "").strip()}주')
+            break
+
+    _f(lines, kv, '📋 사유', '조정사유', trunc=70)
+    _f(lines, kv, '📅 적용일', '조정가액 적용일')
+
+    return lines
+
+
 # 공시 제목 키워드 → 카테고리 파서 매핑
 # ※ 순서 중요: 구체적인 타입을 먼저, 일반적인 타입을 나중에
 _PARSER_MAP = [
@@ -2238,6 +2472,9 @@ _PARSER_MAP = [
     (['유상증자'],                          parse_rights_offering),
     (['무상증자'],                          parse_bonus_issue),
     (['단일판매', '공급계약체결', '수주'],   parse_contract),
+    # 가액조정은 '전환사채'·'신주인수권' 키워드보다 먼저 매칭돼야 함
+    (['전환가액의조정', '전환가액조정', '행사가액의조정', '행사가액조정',
+      '교환가액의조정', '교환가액조정'],      parse_conversion_adjust),
     (['전환사채', '신주인수권부사채'],        parse_cb),
     (['투자판단관련주요경영사항'],           parse_mgmt_event),
     (['기타주요경영사항'],                   parse_misc_mgmt),
@@ -2246,6 +2483,10 @@ _PARSER_MAP = [
     (['상장폐지', '관리종목', '상장적격성'],   parse_market_measure),
     (['소송'],                                parse_lawsuit),
     (['횡령', '배임'],                         parse_embezzlement),
+    (['배당결정'],                             parse_dividend),
+    (['주식소각'],                             parse_share_cancellation),
+    (['감자완료'],                             parse_capital_reduction_done),
+    (['매출액또는손익구조', '손익구조30'],      parse_earnings_change),
     (['권리락'],                             parse_ex_rights),
     (['최대주주변경'],                        parse_major_shareholder_change),
     (['주주명부폐쇄', '기준일설정'],           parse_record_date),
