@@ -550,13 +550,17 @@ def _trunc_clean(text: str, limit: int) -> str:
 #  범용 파서 — 전체 필드 추출
 # ══════════════════════════════════════════════
 
-# 출력 제외할 키 패턴 (서명·연락처 등 노이즈)
+# 출력 제외할 키 패턴 (서명·연락처·절차성 정보 등 노이즈)
 _SKIP_KEY_PATTERNS = [
     '날인', '서명', '인(印)', '확인자', '위임장',
     '본점소재지', '법인등록번호', '사업자등록번호',
     '전화번호', '팩스번호', '홈페이지', 'E-mail',
     '작성책임자', '공시담당자', '담당부서', '대표이사',
     '주민등록번호', '주소',
+    # 투자정보 가치 없는 절차성 항목 (2026-07-17 가독성 감사)
+    '참석여부', '불참', '공정거래위원회', '공시유보', '유보사유', '대규모법인여부',
+    # 기재정정 헤더 필드 — parse_amendment가 📄/📋로 이미 표시 (sub 출력 중복 방지)
+    '정정관련', '정정사유', '정정일자',
 ]
 
 # 출력 제외할 값
@@ -572,6 +576,32 @@ _MAX_VAL_LEN = 100
 # 텔레그램 메시지 전체 최대 필드 수
 _MAX_FIELDS = 20
 
+# 값 끝 단위 라벨 — '차입금액(원)', '발행예정주식수(주)' 등 컬럼 헤더 판정용
+_UNIT_PAREN = re.compile(r'\((원|주|%|명|건|회|백만원|천원|억원)\)$')
+
+# 컬럼 헤더 어휘 — 모든 토큰이 이 어휘로만 구성된 값은 헤더로 판정
+_HEADERISH = ('사업연도', '차입전', '차입후', '병합전', '병합후', '감자전', '감자후',
+              '변경전', '변경후', '조정전', '조정후', '취득전', '취득후',
+              '시작일', '종료일', '구분', '증감금액', '증감비율',
+              '흑자적자전환여부', '당해', '직전', '발행일')
+
+
+def _is_header_val(v: str) -> bool:
+    """값이 데이터가 아니라 표의 컬럼 헤더로 보이는지 판정.
+
+    다열 표에서 [헤더행|헤더행], [값|값] 쌍이 KV로 밀려 들어오면
+    '1. 단기차입내역: 차입금액(원)', '결산기간: 당해사업연도 직전사업연도' 같은
+    무의미 라인이 생긴다 — 숫자가 전혀 없는 짧은 라벨성 값만 보수적으로 거른다.
+    """
+    if len(v) > 30 or re.search(r'\d', v):
+        return False
+    if _UNIT_PAREN.search(v):
+        return True
+    if v.endswith('여부'):    # 값이 '~여부'면 헤더 ('미해당'/'예' 등이 실제 값)
+        return True
+    toks = [t for t in v.split() if t not in ('-', '–', '—')]   # 빈칸 대시 무시
+    return bool(toks) and all(any(h in t for h in _HEADERISH) for t in toks)
+
 
 def parse_all_fields(kv: dict) -> list:
     """
@@ -584,6 +614,8 @@ def parse_all_fields(kv: dict) -> list:
     """
     lines = []
     seen_vals: set = set()
+    # 정규화 키 집합 — "값이 다른 행의 키와 동일" = 컬럼 헤더 짝밀림 판정용
+    key_set = {re.sub(r'\s+', ' ', k).strip() for k in kv if not k.startswith('_')}
 
     for k, v in kv.items():
         # 내부 키(_html·_rcept_no 등) 노출 방지
@@ -592,14 +624,35 @@ def parse_all_fields(kv: dict) -> list:
         k = re.sub(r'\s+', ' ', k).strip()
         v = re.sub(r'\s+', ' ', v).strip()
 
-        # 빈 값 / 의미없는 값 제외
-        if not v or v in _SKIP_VALUES:
+        # 빈 값 / 의미없는 값 / 대시뿐인 값('- -') 제외
+        if not v or v in _SKIP_VALUES or re.fullmatch(r'[\s\-—–~.]+', v):
             continue
         # 키가 너무 짧거나 없으면 제외
         if not k or len(k) < 2:
             continue
-        # 노이즈 키 제외
-        if any(p in k for p in _SKIP_KEY_PATTERNS):
+        # 노이즈 키 제외 (공백 변형 '참석 여부' 대응 — 공백 제거 후 매칭)
+        k_flat = re.sub(r'\s+', '', k)
+        if any(p in k_flat for p in _SKIP_KEY_PATTERNS):
+            continue
+        # 기재정정 원시 키 제외 — 변경 비교는 parse_amendment(🔧)가 담당,
+        # 원시 쌍은 짝이 어긋난 채 노출되므로 범용 출력에서 제거
+        if k.startswith(('정정전', '정정후')):
+            continue
+        # 표 짝밀림 행 제외 ①: 숫자·날짜 데이터가 키 자리로 밀린 경우
+        # ('65,000,000,000: 85,000,000,000', '2026-01-01: 2025-07-01' 등)
+        if re.match(r'^[\d,.\s\-/%()~:]+$', k):
+            continue
+        # 표 짝밀림 행 제외 ②: 값이 컬럼 헤더인 경우 ('결산기간: 당해사업연도 직전사업연도')
+        if _is_header_val(v):
+            continue
+        # 표 짝밀림 행 제외 ③: 순한글 라벨값이 다른 행의 키와 동일
+        # ('6. 합병상대회사: 회사명' — 실데이터는 '회사명: …' 행에 별도 존재)
+        # ※ 순한글 한정: 영문 회사명 등 실데이터가 짝밀림으로 키에도 들어간 경우
+        #    실데이터 행까지 지우는 오삭제 방지
+        if len(v) <= 20 and v in key_set and re.fullmatch(r'[가-힣\s()·ㆍ]+', v):
+            continue
+        # 종속회사 서식 조각 ('(회사명): 의 주요경영사항 신고')
+        if re.match(r'^의\s*주요경영사항', v):
             continue
         # 키와 값이 동일한 경우 (헤더가 KV로 잘못 추출된 경우)
         if k == v:
