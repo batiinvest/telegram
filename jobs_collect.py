@@ -927,6 +927,11 @@ def job_collect_credit_balance():
         import collect_credit_balance
         n = collect_credit_balance.run()
         logging.info(f"=== [신용잔고] 완료: {n}건 upsert ===")
+        try:
+            import credit_chart
+            credit_chart.run()   # 신규 기준일이 있을 때만 본방 차트 발송
+        except Exception as e:
+            logging.error(f"❌ [신용잔고차트] 발송 오류: {e}")
     except Exception as e:
         logging.error(f"❌ [신용잔고] 오류: {e}")
 
