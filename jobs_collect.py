@@ -919,6 +919,18 @@ def job_collect_estimates():
 
 
 @_job(holiday=True)
+def job_collect_investor_market():
+    """평일 장 마감 후 (18:20) — KIS 시장별 투자자매매동향 수집 (시황 투자자별 카드)"""
+    try:
+        logging.info("💰 [투자자동향] collect_investor_market 실행 시작")
+        import collect_investor_market
+        n = collect_investor_market.run()
+        logging.info(f"=== [투자자동향] 완료: {n}건 upsert ===")
+    except Exception as e:
+        logging.error(f"❌ [투자자동향] 오류: {e}")
+
+
+@_job(holiday=True)
 def job_collect_credit_balance():
     """평일 오전 (10:30) — KOFIA 신용공여 잔고(신용거래융자 등) 수집.
     전 영업일분이 다음날 오전 발표되므로 14일 윈도 멱등 upsert."""
