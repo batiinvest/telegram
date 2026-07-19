@@ -89,7 +89,15 @@ def job_daily_closing():
 
     # 인사 + 시장 전광판(시장폭) + 유니버스(촉매태그) 랭킹을 한 메시지로 통합 (알림 1건)
     intro = "🏁 <b>[마감 시황]</b> 오늘 하루 고생 많으셨습니다."
-    msg = f"{intro}\n\n{stock_api.get_market_scoreboard(shared_prices=prices, breadth=_breadth)}\n\n{stock_api.get_universe_ranking(shared_prices=prices, tag_map=_tags)}"
+    try:
+        _investor = stock_api.get_market_investor_summary()
+    except Exception as _ie:
+        logging.error(f"[마감] 투자자동향 오류: {_ie}")
+        _investor = ""
+    msg = f"{intro}\n\n{stock_api.get_market_scoreboard(shared_prices=prices, breadth=_breadth)}"
+    if _investor:
+        msg += f"\n\n{_investor}"
+    msg += f"\n\n{stock_api.get_universe_ranking(shared_prices=prices, tag_map=_tags)}"
     if _daily_flow:
         msg += f"\n\n{_daily_flow}"
     stock_api.send_telegram(DEFAULT_CHAT_ID, msg, keyboard=COMMON_BUTTON)

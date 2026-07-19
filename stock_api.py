@@ -907,6 +907,40 @@ def get_universe_price_map() -> dict:
     return fetch_prices_batch(list(COMPANY_CODES.values()), max_workers=BATCH_WORKERS)
 
 
+def get_market_investor_summary() -> str:
+    """코스피·코스닥 시장 전체 투자자별(개인/외국인/기관) 순매수 대금 — 마감 브리핑용.
+    KIS FHPTJ04040000 시장별 투자자매매동향(일별). *_ntby_tr_pbmn 단위=백만원,
+    당일분은 장 마감 후 제공되며 휴장일엔 직전 거래일 행이 내려온다(표시 날짜로 구분)."""
+    from format_utils import fmt_net
+    today = datetime.now().strftime("%Y%m%d")
+    lines, label_date = [], None
+    for name, iscd, iscd1 in (("코스피", "0001", "KSP"), ("코스닥", "1001", "KSQ")):
+        data = _call_kis_api(
+            tr_id="FHPTJ04040000",
+            path="quotations/inquire-investor-daily-by-market",
+            code=iscd, custtype="P",
+            extra_params={
+                "FID_COND_MRKT_DIV_CODE": "U",
+                "FID_INPUT_DATE_1": today,
+                "FID_INPUT_ISCD_1": iscd1,
+                "FID_INPUT_DATE_2": today,
+                "FID_INPUT_ISCD_2": iscd,
+            })
+        out = (data or {}).get('output') or []
+        if not out:
+            return ""          # 한쪽이라도 실패하면 섹션 통째로 생략
+        row = out[0]
+        try:
+            prsn, frgn, orgn = (int(row[k]) for k in
+                                ('prsn_ntby_tr_pbmn', 'frgn_ntby_tr_pbmn', 'orgn_ntby_tr_pbmn'))
+        except (KeyError, ValueError, TypeError):
+            return ""
+        label_date = row.get('stck_bsop_date') or label_date
+        lines.append(f"<b>{name}</b> 개인 {fmt_net(prsn)} · 외국인 {fmt_net(frgn)} · 기관 {fmt_net(orgn)}")
+    date_tag = f" ({label_date[4:6]}/{label_date[6:8]})" if label_date else ""
+    return "💰 <b>[투자자별 순매수]</b>" + date_tag + "\n" + "\n".join(lines)
+
+
 def get_market_scoreboard(shared_prices: dict = None, breadth: str = None) -> str:
     if not INDUSTRY_HIERARCHY: return "⚠️ 산업 분류 데이터가 없습니다."
 
