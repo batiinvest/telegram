@@ -133,6 +133,35 @@ def _record_job(fn_name: str, ok: bool, error=None, elapsed: float = 0.0):
         'error':   str(error)[:200] if error else None,
         'elapsed': round(elapsed, 1),
     }
+    _record_job_db(fn_name, ok, error, elapsed)
+
+
+_JOB_RUNS_DB_OK = True   # job_runs 미생성/장애 시 False — 매 잡마다 실패 로그 스팸 방지
+
+
+def _record_job_db(fn_name: str, ok: bool, error, elapsed: float):
+    """잡 결과를 job_runs 테이블에 영속 기록 (best-effort).
+    인메모리 _JOB_RESULTS는 재시작에 날아가므로 운영요약·freshness·재처리는 이쪽 기준."""
+    global _JOB_RUNS_DB_OK
+    if not (_BRIDGE_OK and _JOB_RUNS_DB_OK):
+        return
+    try:
+        now = datetime.datetime.now().astimezone()
+        _bridge._get_client().table('job_runs').insert({
+            'run_date':    now.date().isoformat(),
+            'job_name':    fn_name,
+            'started_at':  (now - datetime.timedelta(seconds=elapsed)).isoformat(),
+            'finished_at': now.isoformat(),
+            'ok':          ok,
+            'error':       str(error)[:500] if error else None,
+            'elapsed_sec': round(elapsed, 1),
+        }).execute()
+    except Exception as e:
+        if 'PGRST205' in str(e):
+            _JOB_RUNS_DB_OK = False
+            logging.warning("⚠️ [job_runs] 테이블 미생성 — sql/job_runs.sql 실행 전까지 기록 생략")
+        else:
+            logging.debug(f"[job_runs] 기록 실패: {e}")
 
 
 def _notify_job_failure(fn_name: str, error):

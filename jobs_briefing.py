@@ -144,19 +144,42 @@ def job_pro_channel_check():
 
 @_job()
 def job_daily_ops_summary():
-    """매일 19:50 — 오늘 잡 실행 결과 요약을 관리자 방으로 발송 (운영 가시성)."""
+    """매일 19:50 — 오늘 잡 실행 결과 요약을 관리자 방으로 발송 (운영 가시성).
+    job_runs(DB)가 1순위 — 재시작해도 하루치가 보존됨. 미생성이면 인메모리 폴백."""
     today = datetime.date.today().isoformat()
-    rows = [(k, v) for k, v in sorted(_JOB_RESULTS.items()) if v.get('date') == today]
-    if not rows:
+    runs = {}   # job_name → 마지막 실행 {'time','ok','error','elapsed','recovered'}
+    try:
+        db_rows = (_bridge._get_client().table('job_runs')
+                   .select('job_name,ok,error,elapsed_sec,finished_at')
+                   .eq('run_date', today).order('finished_at').execute().data or [])
+        for r in db_rows:
+            prev = runs.get(r['job_name'])
+            runs[r['job_name']] = {
+                'time':      (r.get('finished_at') or '')[11:16],
+                'ok':        r['ok'],
+                'error':     r.get('error'),
+                'elapsed':   r.get('elapsed_sec') or 0,
+                'recovered': bool(prev and not prev['ok'] and r['ok']),
+            }
+    except Exception:
+        pass
+    if not runs:
+        runs = {k: dict(v, recovered=False)
+                for k, v in _JOB_RESULTS.items() if v.get('date') == today}
+    if not runs:
         return
-    fails = [(k, v) for k, v in rows if not v['ok']]
-    slows = [(k, v) for k, v in rows if v['ok'] and v['elapsed'] >= 300]
-    lines = [f"🗒 <b>[운영 요약] {today}</b> — 실행 {len(rows)}개 / 실패 {len(fails)}개"]
+    items = sorted(runs.items())
+    fails = [(k, v) for k, v in items if not v['ok']]
+    slows = [(k, v) for k, v in items if v['ok'] and v['elapsed'] >= 300]
+    recov = [k for k, v in items if v.get('recovered')]
+    lines = [f"🗒 <b>[운영 요약] {today}</b> — 실행 {len(runs)}개 / 실패 {len(fails)}개"]
     for k, v in fails:
         lines.append(f"❌ {v['time']} {k}: {v['error']}")
+    for k in recov:
+        lines.append(f"♻️ {k}: 실패 후 재처리 성공")
     for k, v in slows:
         lines.append(f"🐢 {v['time']} {k}: {v['elapsed']:.0f}초 소요")
-    if not fails and not slows:
+    if not fails and not slows and not recov:
         lines.append("✅ 전 잡 정상")
     target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
     stock_api.send_telegram(target, "\n".join(lines))

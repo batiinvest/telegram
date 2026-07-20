@@ -1105,3 +1105,45 @@ def job_watchlist_alert():
 
     except Exception as e:
         logging.error(f"❌ [관심가알림] 오류: {e}")
+
+
+# ── 실패 잡 자동 재처리 (job_runs 기반) ──────────────────────────────
+
+# 멱등 잡만 — upsert·자체 중복가드가 있어 재실행해도 데이터·발송이 중복되지 않는 잡.
+# 신고가(무가드 텔레그램 발송)·추정실적(테이블 생성 전 API 낭비)은 의도적으로 제외.
+_RETRYABLE_JOBS = {
+    'job_leading_stocks':           job_leading_stocks,
+    'job_sector_summary':           job_sector_summary,
+    'job_collect_investor_trend':   job_collect_investor_trend,
+    'job_collect_investor_market':  job_collect_investor_market,
+    'job_market_summary':           job_market_summary,
+    'job_collect_us_etf':           job_collect_us_etf,
+    'job_collect_analyst_opinions': job_collect_analyst_opinions,
+    'job_collect_credit_balance':   job_collect_credit_balance,
+}
+
+
+@_job(key='auto_retry', holiday=True)
+def job_retry_failed():
+    """평일 19:25 — 오늘 마지막 실행이 실패한 멱등 잡을 1회 재실행.
+    19:00 freshness 알림 후·19:50 운영요약 전이라 재처리 결과가 요약에 반영된다."""
+    if not _BRIDGE_OK:
+        return
+    try:
+        sb = _bridge._get_client()
+        today = datetime.date.today().isoformat()
+        rows = (sb.table('job_runs').select('job_name,ok,finished_at')
+                .eq('run_date', today).order('finished_at').execute().data or [])
+    except Exception as e:
+        logging.warning(f"[재처리] job_runs 조회 불가 — 스킵: {str(e)[:120]}")
+        return
+    last = {}
+    for r in rows:
+        last[r['job_name']] = r['ok']
+    targets = [n for n, ok in last.items() if not ok and n in _RETRYABLE_JOBS]
+    if not targets:
+        logging.info("[재처리] 재실행 대상 없음")
+        return
+    logging.info(f"[재처리] {len(targets)}개 재실행: " + ", ".join(targets))
+    for name in targets:
+        _RETRYABLE_JOBS[name]()

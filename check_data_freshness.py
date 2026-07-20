@@ -69,6 +69,18 @@ try:
                 sigs[k] = sigs.get(k,0)+1
 except Exception as e: lines.append(f"로그 읽기 오류: {e}")
 lines.append(f"오늘 로그 ERROR: {err}건")
+
+# 4) job_runs 잡 최종실패 (테이블 있으면)
+try:
+    _jr = (sb.table('job_runs').select('job_name,ok,finished_at')
+           .eq('run_date', today).order('finished_at').execute().data or [])
+    _last = {}
+    for _r in _jr: _last[_r['job_name']] = _r['ok']
+    _jfails = sorted(k for k, v in _last.items() if not v)
+    lines.append(f"잡 실행: {len(_last)}개 / 최종실패 {len(_jfails)}개")
+    for _k in _jfails: issues.append(f"잡 최종실패: {_k}")
+except Exception:
+    lines.append("잡 실행: job_runs 미생성 (sql/job_runs.sql 실행 필요)")
 if err >= 20:
     top = sorted(sigs.items(), key=lambda x:-x[1])[:3]
     issues.append("로그 ERROR 급증 "+str(err)+"건 — "+", ".join(f"{k}×{v}" for k,v in top))
