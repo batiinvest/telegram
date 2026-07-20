@@ -33,7 +33,7 @@ lines.append(f"기준 거래일(market_data 최신): {ref}")
 for t, label in [('macro_data','매크로'),('sector_daily_summary','섹터요약'),
                  ('leading_stocks','주도주'),('daily_disclosures','공시')]:
     lt = latest(t)
-    if lt != ref: issues.append(f"{label}({t}) 지연: 최신 {lt} (기준 {ref})")
+    if lt < ref: issues.append(f"{label}({t}) 지연: 최신 {lt} (기준 {ref})")
     lines.append(f"  {label:<10} 최신={lt}")
 
 um = latest('us_market')

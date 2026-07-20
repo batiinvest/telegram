@@ -950,14 +950,12 @@ def job_collect_credit_balance():
 
 @_job(holiday=True)
 def job_leading_stocks():
-    """평일 장 마감 후 (17:30) — 주도주 탐색기 스코어 계산 및 저장"""
-    try:
-        logging.info("🚀 [주도주] leading_stocks_generator 실행 시작")
-        from leading_stocks_generator import run as run_leading
-        run_leading()
-        logging.info("✅ [주도주] 생성 완료")
-    except Exception as e:
-        logging.error(f"❌ [주도주] 생성 오류: {e}")
+    """평일 장 마감 후 (17:30) — 주도주 탐색기 스코어 계산 및 저장.
+    예외를 여기서 삼키면 0건 저장이 성공으로 위장됨(07-14·16 실측) — _job이 기록·알림."""
+    logging.info("🚀 [주도주] leading_stocks_generator 실행 시작")
+    from leading_stocks_generator import run as run_leading
+    run_leading()
+    logging.info("✅ [주도주] 생성 완료")
 
 
 @_job(holiday=True)

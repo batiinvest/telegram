@@ -159,8 +159,10 @@ def calc_scores(history: list[dict], target_date: str, ind_map: dict) -> list[di
 
     trading_days = sorted(by_date.keys())
     if not trading_days or trading_days[-1] != target_date:
-        log.warning(f'target_date({target_date})가 최신 거래일이 아님')
-        return []
+        raise RuntimeError(
+            f'target_date({target_date})가 조회 데이터 최신 거래일'
+            f'({trading_days[-1] if trading_days else "없음"})과 불일치 — 조회 불완전 의심'
+        )
 
     today_rows = by_date[target_date]
     today_idx  = len(trading_days) - 1
