@@ -74,6 +74,8 @@ def job_daily_closing():
     prices = stock_api.get_universe_price_map()
 
     # 마감 무버 촉매 태그 + 시장폭 계산 — 실패해도 브리핑은 진행
+    # (_sbc 선초기화 — 클라이언트 획득 실패 시에도 아래 섹션들이 NameError 없이 스킵되도록)
+    _sbc = None
     try:
         _sbc = _bridge._get_client()
         _tags = stock_api.get_catalyst_tags(_sbc)
@@ -98,9 +100,17 @@ def job_daily_closing():
         logging.error(f"[마감] 투자자동향 오류: {_ie}")
         _investor = ""
 
-    # ① 시장 전체 시황
+    # ① 시장 전체 시황 — 판단(요약) 먼저, 근거 데이터 뒤
     intro = "🏁 <b>[마감 시황]</b> 오늘 하루 고생 많으셨습니다."
-    msg = f"{intro}\n\n" + stock_api.get_market_scoreboard(
+    msg = intro
+    try:
+        _judgment = stock_api.get_market_judgment_summary(_sbc)
+    except Exception as _je:
+        logging.error(f"[마감] 시장판단 오류: {_je}")
+        _judgment = ""
+    if _judgment:
+        msg += f"\n\n{_judgment}"
+    msg += "\n\n" + stock_api.get_market_scoreboard(
         shared_prices=prices, breadth=_breadth, section="index")
     if _investor:
         msg += f"\n\n{_investor}"
@@ -112,6 +122,13 @@ def job_daily_closing():
     msg2 = "🎯 <b>[관심종목 마감]</b> 바티인베스트가 보는 종목들입니다.\n\n"
     msg2 += stock_api.get_market_scoreboard(shared_prices=prices, section="sector")
     msg2 += f"\n\n{stock_api.get_universe_ranking(shared_prices=prices, tag_map=_tags)}"
+    try:
+        _leaders = stock_api.get_leading_stocks_summary(_sbc)
+    except Exception as _le:
+        logging.error(f"[마감] 주도주 오류: {_le}")
+        _leaders = ""
+    if _leaders:
+        msg2 += f"\n\n{_leaders}"
     if _uni_flow:
         msg2 += f"\n\n{_uni_flow}"
     stock_api.send_telegram(DEFAULT_CHAT_ID, msg2, keyboard=COMMON_BUTTON)

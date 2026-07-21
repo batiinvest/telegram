@@ -1584,6 +1584,87 @@ def get_catalyst_tags(sb_client) -> dict:
     return tags
 
 
+def _summary_list(v) -> list:
+    """market_investment_summary 의 배열 컬럼은 JSON 문자열로 이중 저장돼 있다."""
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str) and v.strip():
+        try:
+            out = json.loads(v)
+            return out if isinstance(out, list) else []
+        except Exception:
+            return []
+    return []
+
+
+def get_market_judgment_summary(sb_client, market_date: str = None) -> str:
+    """market_summary_generator(18:30)가 만든 당일 시장 판단 — 마감 브리핑 ① 시황용.
+    프론트 '오늘의 시황' 카드와 같은 출처(market_investment_summary, 단일 출처 유지).
+    브리핑은 생성 직후(18:30:0x)에 시작하지만, 생성이 실패해 전일 행만 남은 경우
+    낡은 판단이 나가지 않도록 당일 행이 없으면 섹션을 통째로 생략한다."""
+    today = market_date or datetime.now().strftime('%Y-%m-%d')
+    try:
+        res = (sb_client.table('market_investment_summary')
+               .select('market_date,one_line_summary,risk_factors')
+               .eq('market_type', 'KR').eq('market_date', today).limit(1).execute())
+        row = (res.data or [None])[0]
+    except Exception as e:
+        logging.error(f"[시장판단] 조회 실패: {e}")
+        return ""
+    if not row:
+        logging.info(f"[시장판단] {today} 행 없음 — 섹션 생략")
+        return ""
+
+    def _esc(t):
+        return html.escape(str(t or ''), quote=False)
+
+    summary = _esc(row.get('one_line_summary'))
+    if not summary:
+        return ""
+    lines = ["🧭 <b>[오늘의 판단]</b>", summary]
+    risks = _summary_list(row.get('risk_factors'))[:3]
+    if risks:
+        lines.append("")
+        lines.append("⚠️ <b>리스크</b>")
+        lines += [_esc(r) for r in risks]
+    return "\n".join(lines)
+
+
+def get_leading_stocks_summary(sb_client, top_n: int = 5) -> str:
+    """주도주 탐색기(17:30 leading_stocks_generator) 상위 종목 — 마감 브리핑 ② 관심종목용.
+    total_score = 가격모멘텀25 + 거래대금15 + 수급30 + 업종강도20 + 신고가근접10 (100점 만점).
+    당일 등락률 기준인 유니버스 랭킹과 달리 5~60일 추세를 본다."""
+    try:
+        dres = (sb_client.table('leading_stocks').select('base_date')
+                .order('base_date', desc=True).limit(1).execute())
+        if not dres.data:
+            return ""
+        latest = dres.data[0]['base_date']
+        rows = (sb_client.table('leading_stocks')
+                .select('rank,corp_name,industry,total_score,price_chg_5d')
+                .eq('base_date', latest).order('rank').limit(top_n).execute().data or [])
+    except Exception as e:
+        logging.error(f"[주도주] 조회 실패: {e}")
+        return ""
+    if not rows:
+        return ""
+
+    from format_utils import fmt_change_pct
+
+    def _esc(t):
+        return html.escape(str(t or ''), quote=False)
+
+    date_tag = f" ({latest[5:7]}/{latest[8:10]})" if len(latest) >= 10 else ""
+    lines = [f"🔥 <b>[주도주 Top{len(rows)}]</b>{date_tag}"]
+    for r in rows:
+        chg = r.get('price_chg_5d')
+        chg_s = f" · 5일 {fmt_change_pct(chg)}" if chg is not None else ""
+        lines.append(f"{r.get('rank')}. <b>{_esc(r.get('corp_name'))}</b> "
+                     f"({_esc(r.get('industry'))}) {r.get('total_score')}점{chg_s}")
+    lines.append("<i>* 모멘텀·거래대금·수급·업종강도·신고가근접 100점 만점</i>")
+    return "\n".join(lines)
+
+
 def get_daily_flow_summary(sb_client, monitored_only: bool = False) -> str:
     """
     오늘(최신 거래일) 외국인·기관 순매수/순매도 Top3 — 마감 브리핑용.
