@@ -24,7 +24,7 @@ begin
   for r in
     select i.indexrelid::regclass::text as idx,
            (select con.conname from pg_constraint con
-             where con.conindexid = i.indexrelid) as con
+             where con.conindid = i.indexrelid) as con
     from pg_index i
     where i.indrelid = 'public.market_data'::regclass
       and i.indisunique
