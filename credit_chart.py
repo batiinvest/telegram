@@ -59,10 +59,14 @@ def _render_png(rows) -> bytes:
     fig.patch.set_facecolor(BG)
     ax.set_facecolor(BG)
     ax2 = ax.twinx()
-    ax.plot(dates, [r['loan_kospi'] / 1e6 for r in rows], color=C_KOSPI, lw=2)
-    ax2.plot(dates, [r['loan_kosdaq'] / 1e6 for r in rows], color=C_KOSDAQ, lw=2)
+    l1, = ax.plot(dates, [r['loan_kospi'] / 1e6 for r in rows], color=C_KOSPI, lw=2, label='KOSPI (left)')
+    l2, = ax2.plot(dates, [r['loan_kosdaq'] / 1e6 for r in rows], color=C_KOSDAQ, lw=2, label='KOSDAQ (right)')
     ax.set_ylabel('KOSPI (trn KRW)', color=C_KOSPI, fontsize=9)
     ax2.set_ylabel('KOSDAQ (trn KRW)', color=C_KOSDAQ, fontsize=9)
+    leg = ax.legend(handles=[l1, l2], loc='upper left', fontsize=9,
+                    facecolor=BG, edgecolor=GRID, framealpha=0.85)
+    for txt, c in zip(leg.get_texts(), (C_KOSPI, C_KOSDAQ)):
+        txt.set_color(c)
     ax.tick_params(colors=C_KOSPI, labelsize=9)
     ax2.tick_params(colors=C_KOSDAQ, labelsize=9)
     ax.tick_params(axis='x', colors=TXT)
