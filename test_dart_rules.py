@@ -93,6 +93,18 @@ eq(targets("major", "소송등의제기ㆍ신청", cap_large=True), [IND, COMP],
 eq(targets("urgent", ind="@same", comp="@same"), [MAIN, "@same"], "동일 채널 dedup")
 eq(targets("normal", ind=None), [COMP], "산업방 없음")
 
+# 기재정정 — major는 시장속보 메인 제외, urgent는 메인 유지
+eq(targets("major", "[기재정정]무상증자결정", market_wide=True), [IND, COMP],
+   "major 기재정정 시장속보 메인 제외")
+eq(targets("major", "[기재정정]단일판매ㆍ공급계약체결", market_wide=True), [IND, COMP],
+   "major 기재정정 공급계약 시장속보 메인 제외")
+eq(targets("major", "[기재정정]유상증자결정", market_wide=True, cap_large=True), [IND, COMP],
+   "major 기재정정 대형주 메인 제외")
+eq(targets("major", "무상증자결정", market_wide=True), [IND, COMP, MAIN],
+   "major 정정아님 시장속보 메인 유지 (회귀 가드)")
+eq(targets("urgent", "[기재정정]주권매매거래정지", market_wide=True), [MAIN, IND, COMP],
+   "urgent 기재정정 메인 유지")
+
 
 # ══════════════════════════════════════════════
 if FAIL:
@@ -100,4 +112,4 @@ if FAIL:
     for f in FAIL:
         print(" -", f)
     raise SystemExit(1)
-print(f"✅ test_dart_rules OK — classify {len(CLASSIFY_CASES)} + routing 17 케이스 통과")
+print(f"✅ test_dart_rules OK — classify {len(CLASSIFY_CASES)} + routing 22 케이스 통과")

@@ -127,11 +127,16 @@ def decide_targets(level: str, *, main_chat: str, ind_chat: str | None,
             targets.append(ind_chat)
         if comp_chat:
             targets.append(comp_chat)
-        to_main = is_market_wide or (
-            "기재정정" not in report_nm
+        # major 기재정정은 메인(시장속보) 제외 — 정정은 '새 속보'가 아니라
+        # 과거 공시의 정정이라 시장속보 프레임과 맞지 않고, 비보유 종목이면
+        # 원공시 맥락도 없음. 보유 종목 공급계약 정정을 빼던 규칙을 시장속보에도 통일.
+        # (urgent 정정은 사안 자체가 중대하므로 urgent 분기에서 그대로 메인 유지)
+        is_amend = "기재정정" in report_nm
+        to_main = (is_market_wide and not is_amend) or (
+            not is_amend
             and any(k in report_nm for k in ("공급계약", "수주")))
         # 시총 가중: 대형주(1조↑)의 구조적 이벤트(증자·합병 등)는 메인 포함
-        if not to_main and cap_ok_large and "기재정정" not in report_nm \
+        if not to_main and cap_ok_large and not is_amend \
                 and any(k in report_nm for k in MAIN_MAJOR_KEYWORDS):
             to_main = True
         if to_main and cap_ok_main:
