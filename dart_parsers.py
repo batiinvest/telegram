@@ -392,29 +392,54 @@ def _parse_numbered_body(text: str, max_items: int = 8, val_limit: int = 300) ->
     return items
 
 
-def _parse_clinical_result(text: str, max_sections: int = 5, sec_limit: int = 600) -> list:
-    """임상시험결과 '결과값'을 '- 섹션명:' 단위로 분리해 bullet로 반환.
+def _clinical_bullet(label: str, content: str, sec_limit: int) -> str:
+    """임상 결과 섹션 1개를 bullet로 포맷 (라벨 정리 + 용량행 세로정렬)."""
+    label = re.sub(r'\s*\([^)]*\)\s*$', '', label).strip()   # 라벨 뒤 영문 괄호 제거
+    content = re.sub(r'^-\s*', '', content).strip()          # 선두 대시 불릿 제거
+    content = _trunc_clean(content, sec_limit)
+    # 용량행·위약 앞 개행 → 용량반응/약동학 표를 세로 정렬.
+    # 단 콤마·여는괄호 뒤(문장 내 인라인 '(TG-C: x, 위약: y)')는 제외 — 통계 서술을
+    # 괄호 중간에서 끊지 않도록. 실제 표 행(직전이 값·글자로 끝남)에서만 개행.
+    content = re.sub(r'(?<![,(\s])\s+(?=(?:\d[\d,]*\s*mg|위약)\s*:)', '\n      ', content)
+    return f'  • {label}: {content}'
 
-    예) '- 항바이러스 활성: ... - 안전성, 내약성: ... - 약동학: ...'
-    → 섹션별 라인. 섹션 헤더가 없으면 빈 리스트(호출측에서 단순 truncate fallback).
-    본문 내 인라인 콜론('200 mg:', 'Dose:')은 앞에 ' - '가 없어 오분리되지 않음.
-    결과는 핵심 정보라 섹션당 넉넉히(600자) 표시하고, 용량행('N mg:')·'위약:'은
-    개행+들여쓰기해 용량반응·약동학 표를 세로로 정렬(가독성).
+
+def _parse_clinical_result(text: str, max_sections: int = 5, sec_limit: int = 600) -> list:
+    """임상시험결과 '결과값'을 섹션 단위로 분리해 bullet로 반환.
+
+    두 서식 지원:
+      ①  '[1차 평가변수(Co-Primary Endpoint)] ... [안전성(Safety)] ...'  (대괄호 헤더)
+      ②  '- 항바이러스 활성: ... - 안전성, 내약성: ...'                    (대시 콜론)
+    ①을 우선 시도 — 핵심 결론(예: 유효성 입증 실패)이 첫 섹션 맨 앞으로 올라와
+    통짜 truncate 폴백보다 가독성이 크게 개선됨. 둘 다 실패 시 빈 리스트(호출측 fallback).
+    본문 내 인라인 콜론('200 mg:', 'Dose:')은 오분리되지 않음.
     """
     text = re.sub(r'\s+', ' ', text).strip()
+
+    # ── ① 대괄호 헤더: 텍스트가 '[섹션]'으로 시작할 때만 (인라인 [주] 오분리 방지) ──
+    br = re.split(r'\[([^\]]{2,40})\]\s*', text)
+    if len(br) >= 3 and len(br[0].strip()) < 10:
+        lines = []
+        for i in range(1, len(br), 2):
+            content = br[i + 1].strip() if i + 1 < len(br) else ''
+            if not content:
+                continue
+            lines.append(_clinical_bullet(br[i], content, sec_limit))
+            if len(lines) >= max_sections:
+                break
+        if lines:
+            return lines
+
+    # ── ② 대시 콜론 헤더 ──
     parts = re.split(r'(?:^|\s)-\s+([가-힣][가-힣,·\s]{0,14}):\s+', text)
     if len(parts) < 3:   # 섹션 헤더 못 찾음
         return []
     lines = []
     for i in range(1, len(parts), 2):
-        label = parts[i].strip()
         content = parts[i + 1].strip() if i + 1 < len(parts) else ''
         if not content:
             continue
-        content = _trunc_clean(content, sec_limit)
-        # 용량행·위약 앞 개행 → 표 형태로 세로 정렬
-        content = re.sub(r'\s+(?=(?:\d[\d,]*\s*mg|위약)\s*:)', '\n      ', content)
-        lines.append(f'  • {label}: {content}')
+        lines.append(_clinical_bullet(parts[i], content, sec_limit))
         if len(lines) >= max_sections:
             break
     return lines

@@ -105,6 +105,16 @@ eq(targets("major", "무상증자결정", market_wide=True), [IND, COMP, MAIN],
 eq(targets("urgent", "[기재정정]주권매매거래정지", market_wide=True), [MAIN, IND, COMP],
    "urgent 기재정정 메인 유지")
 
+# 임상시험결과 — 대형주(1조↑)면 메인 추가, 계획승인·개시는 제외
+eq(targets("major", "투자판단관련주요경영사항(임상시험결과)", cap_large=True), [IND, COMP, MAIN],
+   "major 대형주 임상시험결과 메인 추가")
+eq(targets("major", "투자판단관련주요경영사항(임상시험결과)"), [IND, COMP],
+   "major 소형주 임상시험결과 메인 제외")
+eq(targets("major", "투자판단관련주요경영사항(임상시험계획승인신청)", cap_large=True), [IND, COMP],
+   "major 대형주 임상 계획승인 메인 제외 (결과 아님)")
+eq(targets("major", "[기재정정]투자판단관련주요경영사항(임상시험결과)", cap_large=True), [IND, COMP],
+   "major 임상시험결과 기재정정 메인 제외")
+
 
 # ══════════════════════════════════════════════
 if FAIL:
@@ -112,4 +122,4 @@ if FAIL:
     for f in FAIL:
         print(" -", f)
     raise SystemExit(1)
-print(f"✅ test_dart_rules OK — classify {len(CLASSIFY_CASES)} + routing 22 케이스 통과")
+print(f"✅ test_dart_rules OK — classify {len(CLASSIFY_CASES)} + routing 26 케이스 통과")
