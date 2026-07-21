@@ -560,13 +560,17 @@ def fetch_investor_one(code: str) -> Optional[dict]:
         return None
 
 
-def collect_investor_trend(all_listed: bool = False, max_workers: int = 5) -> tuple:
+def collect_investor_trend(all_listed: bool = False, max_workers: int = 5,
+                           extra_turnover_min: int = None) -> tuple:
     """종목별 외국인·기관 순매수(수량)를 inquire-investor 로 확정 수집 →
     market_data.foreign_net_buy / institution_net_buy 갱신.
 
     - all_listed=False(기본): 모니터링 종목만(is_monitored). 산업별 수급동향·
       sector_daily_summary 가 모니터링 종목 기준이라 충분하고, 전체 상장사(2600+)는
       호출량이 커서 기본 제외.
+    - extra_turnover_min: 지정 시 비모니터링 종목 중 최신 거래일 거래대금(종가×거래량)이
+      이 값 이상인 종목을 추가 수집. |순매수대금| ≤ 거래대금 이므로 마감 브리핑
+      순매수 Top 랭킹에서 이 값 이상의 종목은 누락되지 않는다(전 종목 수집 대비 저비용).
     - 갱신 대상 거래일은 KIS 가 반환한 stck_bsop_date 로 매칭 → 호출 시점(장중/마감직후)에
       관계없이 올바른 행만 갱신(해당 행 없으면 스킵).
     반환: (updated, failed)
@@ -584,11 +588,37 @@ def collect_investor_trend(all_listed: bool = False, max_workers: int = 5) -> tu
             seen.add(c)
             codes.append(c)
 
+    base_n = len(codes)
+    extra_n = 0
+    if extra_turnover_min and not all_listed:
+        try:
+            dres = (sb.table("market_data").select("base_date")
+                      .order("base_date", desc=True).limit(1).execute())
+            latest = dres.data[0]["base_date"] if dres.data else None
+            if latest:
+                rows = _fetch_all_pages(
+                    sb.table("market_data").select("stock_code,price,volume").eq("base_date", latest)
+                )
+                for r in rows:
+                    c = (r.get("stock_code") or "").split(".")[0]
+                    if not c or c in seen:
+                        continue
+                    if (r.get("price") or 0) * (r.get("volume") or 0) >= extra_turnover_min:
+                        seen.add(c)
+                        codes.append(c)
+                        extra_n += 1
+        except Exception as e:
+            log.warning(f"[투자자수급] 거래대금 상위 종목 확장 실패 — 모니터링 종목만 수집: {e}")
+
     if not codes:
         log.info("[투자자수급] 대상 종목 없음 — 스킵")
         return 0, 0
 
-    log.info(f"[투자자수급] {len(codes)}개 종목 외국인·기관 순매수 수집 시작")
+    if extra_n:
+        log.info(f"[투자자수급] 모니터링 {base_n} + 거래대금 상위 {extra_n} = {len(codes)}개 종목 "
+                 f"외국인·기관 순매수 수집 시작")
+    else:
+        log.info(f"[투자자수급] {len(codes)}개 종목 외국인·기관 순매수 수집 시작")
 
     results, failed = [], 0
     with ThreadPoolExecutor(max_workers=max_workers) as ex:

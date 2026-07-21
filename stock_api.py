@@ -1571,7 +1571,10 @@ def get_daily_flow_summary(sb_client) -> str:
     """
     오늘(최신 거래일) 외국인·기관 순매수/순매도 Top3 — 마감 브리핑용.
     market_data.foreign_net_buy/institution_net_buy(주식수) × price = 순매수대금(원).
-    18:30 마감 시점은 16:45 잠정 수급 기준.
+    18:15 job_collect_investor_trend_ranked 가 확정 정산한 값을 사용하며, 모집단은
+    모니터링 종목 + 당일 거래대금 RANK_TURNOVER_MIN 이상 종목.
+    |순매수대금| ≤ 거래대금 이므로 그 임계 이상 종목은 랭킹에서 누락되지 않는다
+    (Top3 최소 금액이 임계 미만이면 각주로 고지). 우선주·ETF 는 companies 밖이라 제외.
     """
     try:
         from db_utils import fetch_all_pages
@@ -1618,13 +1621,28 @@ def get_daily_flow_summary(sb_client) -> str:
                 lines.append(f"  {x['name']} {_amt(x[key])}")
         return "\n".join(lines)
 
-    return "\n".join([
-        "💰 <b>[오늘의 수급]</b>",
-        _block("🔺 <b>외국인 순매수</b>", _top('f', True), 'f'),
-        _block("🔻 <b>외국인 순매도</b>", _top('f', False), 'f'),
-        _block("🔺 <b>기관 순매수</b>", _top('i', True), 'i'),
-        _block("🔻 <b>기관 순매도</b>", _top('i', False), 'i'),
-    ])
+    blocks = [
+        ("🔺 <b>외국인 순매수</b>", _top('f', True),  'f'),
+        ("🔻 <b>외국인 순매도</b>", _top('f', False), 'f'),
+        ("🔺 <b>기관 순매수</b>",   _top('i', True),  'i'),
+        ("🔻 <b>기관 순매도</b>",   _top('i', False), 'i'),
+    ]
+    date_tag = f" ({latest[5:7]}/{latest[8:10]})" if len(latest) >= 10 else ""
+    lines = ["💰 <b>[오늘의 수급]</b>" + date_tag]
+    lines += [_block(lb, items, k) for lb, items, k in blocks]
+
+    # 랭킹 모집단은 거래대금 RANK_TURNOVER_MIN 이상 — Top3 최소 금액이 그 아래로 내려간
+    # 한산한 날은 미수집 종목이 순위에 낄 수 있어 기준을 명시한다.
+    try:
+        from config import RANK_TURNOVER_MIN
+    except Exception:
+        RANK_TURNOVER_MIN = 0
+    note = "* 순매매량 × 종가 기준"
+    ranked = [abs(x[k]) for _, items, k in blocks for x in items if x['name']]
+    if RANK_TURNOVER_MIN and ranked and min(ranked) < RANK_TURNOVER_MIN:
+        note += f" · 거래대금 {RANK_TURNOVER_MIN // 100_000_000:,}억 이상 종목 기준"
+    lines.append(f"<i>{note}</i>")
+    return "\n".join(lines)
 
 
 def get_weekly_flow_summary(sb_client) -> str:
@@ -1656,6 +1674,21 @@ def get_weekly_flow_summary(sb_client) -> str:
     except Exception as e:
         logging.error(f"[주간수급] 조회 실패: {e}")
         return "❌ 주간 수급 데이터 조회 실패"
+
+    if not rows:
+        return "⚠️ 주간 수급 데이터 없음"
+
+    # 모니터링 종목으로 한정 — 18:15 랭킹 확장(거래대금 상위 비모니터링 종목)은 거래대금이
+    # 임계를 넘은 날에만 수급이 채워져, 주간 합산에 섞이면 부분합으로 과소집계된다.
+    try:
+        mon_rows = fetch_all_pages(
+            sb_client.table('companies').select('code').eq('is_monitored', True)
+        ) if fetch_all_pages else []
+        monitored = {(r.get('code') or '').split('.')[0] for r in mon_rows}
+        if monitored:
+            rows = [r for r in rows if r['stock_code'] in monitored]
+    except Exception as e:
+        logging.warning(f"[주간수급] 모니터링 목록 조회 실패 — 전체 행으로 집계: {e}")
 
     if not rows:
         return "⚠️ 주간 수급 데이터 없음"
@@ -1701,7 +1734,7 @@ def get_weekly_flow_summary(sb_client) -> str:
 
     msg = (
         f"💰 <b>[주간 스마트머니 동향]</b>\n"
-        f"({week_str} 누적)\n"
+        f"({week_str} 누적 · 관심종목 기준)\n"
         f"════════════\n"
         f"🔺 <b>외국인 순매수 Top5</b>\n"
     )

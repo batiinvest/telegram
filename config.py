@@ -22,6 +22,10 @@ KIS_APP_KEY = os.getenv("KIS_APP_KEY")
 KIS_APP_SECRET = os.getenv("KIS_APP_SECRET")
 KIS_BASE_URL = "https://openapi.koreainvestment.com:9443"
 
+# 수급 랭킹 모집단 임계 — 당일 거래대금이 이 값 이상인 비모니터링 종목까지 수급 수집.
+# |순매수대금| ≤ 거래대금 이므로, 이 값 이상의 순매수는 랭킹에서 누락되지 않는다.
+RANK_TURNOVER_MIN = 100 * 10**8   # 100억원
+
 # AI 분석 (Gemini)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 

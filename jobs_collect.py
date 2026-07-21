@@ -895,6 +895,25 @@ def job_collect_investor_trend():
 
 
 @_job(holiday=True)
+def job_collect_investor_trend_ranked():
+    """평일 18:15 — 수급 확정 정산 + 마감 브리핑 랭킹용 모집단 확장.
+    모니터링 312종목에 더해 당일 거래대금이 RANK_TURNOVER_MIN 이상인 비모니터링 종목까지
+    수집한다. |순매수대금| ≤ 거래대금 이므로 18:30 "오늘의 수급" Top3가 시장 전체 기준이 된다.
+    (16:45 잡은 모니터링 종목만 — 17:15 sector_daily_summary가 is_monitored 기준이라 불필요)"""
+    if not _COLLECTOR_OK:
+        logging.warning("[투자자수급] 수집 모듈 없음 — 스킵")
+        return
+    try:
+        import collect_market
+        from config import RANK_TURNOVER_MIN
+        updated, failed = collect_market.collect_investor_trend(
+            all_listed=False, extra_turnover_min=RANK_TURNOVER_MIN)
+        logging.info(f"=== [투자자수급·랭킹] 완료: {updated}개 갱신 / 미수집 {failed} ===")
+    except Exception as e:
+        logging.error(f"❌ [투자자수급·랭킹] 오류: {e}")
+
+
+@_job(holiday=True)
 def job_sector_summary():
     """평일 장 마감 후 (17:15) — 산업별 일별 요약 집계 (sector_daily_summary)"""
     try:
@@ -1116,6 +1135,7 @@ _RETRYABLE_JOBS = {
     'job_leading_stocks':           job_leading_stocks,
     'job_sector_summary':           job_sector_summary,
     'job_collect_investor_trend':   job_collect_investor_trend,
+    'job_collect_investor_trend_ranked': job_collect_investor_trend_ranked,
     'job_collect_investor_market':  job_collect_investor_market,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,

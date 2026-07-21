@@ -35,6 +35,7 @@ from jobs_collect import (
     job_collect_macro, job_collect_analyst_opinions, job_collect_foreign_institution,
     job_collect_new_high, job_collect_us_etf, job_collect_market,
     job_collect_market_closing, job_short_surge, job_collect_investor_trend,
+    job_collect_investor_trend_ranked,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
     job_collect_credit_balance,
     job_collect_investor_market, job_retry_failed,
@@ -132,7 +133,7 @@ def run_scheduler():
     schedule.every().day.at("16:20").do(_threaded(job_collect_us_etf)) # US ETF 수집 (미장 전일 종가)
     schedule.every().day.at("17:20").do(job_collect_new_high)          # 신고가 종목 수집 (장마감 확정 수집 17:00 이후 — market_data 기준)
     schedule.every().day.at("16:45").do(job_collect_investor_trend)    # 종목별 외국인·기관 순매수 확정 (sector_summary 전)
-    schedule.every().day.at("18:15").do(job_collect_investor_trend)    # 종목별 수급 확정 정산 (KRX 확정 후 — 당일 최종값 반영)
+    schedule.every().day.at("18:15").do(job_collect_investor_trend_ranked)  # 수급 확정 정산 + 거래대금 상위 종목 확장 (18:30 브리핑 Top3를 시장 전체 기준으로)
     schedule.every().day.at("17:00").do(job_collect_market_closing)    # 장 마감 확정치 수집 (외국인 집계 완료 후)
     schedule.every().day.at("17:05").do(job_short_surge)               # 공매도 수집 + 5일 평균 대비 2배 급증 알림
     schedule.every().day.at("17:15").do(job_sector_summary)            # 산업별 일별 요약 집계
