@@ -941,13 +941,13 @@ def get_market_investor_summary() -> str:
     return "💰 <b>[투자자별 순매수]</b>" + date_tag + "\n" + "\n".join(lines)
 
 
-def get_market_scoreboard(shared_prices: dict = None, breadth: str = None) -> str:
+def get_market_scoreboard(shared_prices: dict = None, breadth: str = None,
+                          section: str = "all") -> str:
+    """section='all'(기본) 지수+시장폭+섹터 랭킹 / 'index' 지수+시장폭만 / 'sector' 섹터 랭킹만.
+    마감 브리핑을 시황·관심종목 2개 메시지로 나누면서 추가 — 섹터 랭킹은 관심종목
+    시총가중 평균이라 관심종목 메시지로 간다. 점심 브리핑·명령어는 'all' 그대로."""
     if not INDUSTRY_HIERARCHY: return "⚠️ 산업 분류 데이터가 없습니다."
 
-    # 1. 지수 조회
-    kospi = get_index_status("0001")
-    kosdaq = get_index_status("1001")
-    
     from format_utils import fmt_change_pct
     def fmt_idx(data, name):
         if not data: return f"{name} (데이터 없음)"
@@ -955,11 +955,27 @@ def get_market_scoreboard(shared_prices: dict = None, breadth: str = None) -> st
         icon = "🔺" if r > 0 else "🔻" if r < 0 else "➖"
         return f"<b>{name}</b> {p:,.2f} ({icon}{fmt_change_pct(r)})"
 
-    market_summary = (
-        f"📊 <b>[지수]</b>\n"
-        f"{fmt_idx(kospi, '1. 코스피')}\n"
-        f"{fmt_idx(kosdaq, '2. 코스닥')}\n"
-    )
+    # 1. 지수 조회 — 섹터 전용 호출은 지수를 쓰지 않으므로 KIS 2콜 생략
+    if section == "sector":
+        market_summary = ""
+    else:
+        kospi = get_index_status("0001")
+        kosdaq = get_index_status("1001")
+        market_summary = (
+            f"📊 <b>[지수]</b>\n"
+            f"{fmt_idx(kospi, '1. 코스피')}\n"
+            f"{fmt_idx(kosdaq, '2. 코스닥')}\n"
+        )
+
+    from managers import market_timer
+    time_str = "장중 추정" if market_timer.is_market_open() else "마감 확정"
+    _breadth = f"{breadth}\n" if breadth else ""
+    _head = (f"🔭 <b>[바티인베스트 시장 전광판]</b>\n"
+             f"({datetime.now().strftime('%H:%M')} {time_str} 기준)\n"
+             f"════════════\n")
+
+    if section == "index":
+        return f"{_head}{market_summary}{_breadth}".rstrip("\n")
 
     # 2. 섹터별 평균 수익률 계산
     all_target_codes = []
@@ -999,19 +1015,20 @@ def get_market_scoreboard(shared_prices: dict = None, breadth: str = None) -> st
 
     sector_data.sort(key=lambda x: x['rate'], reverse=True)
 
-    from managers import market_timer
-    time_str = "장중 추정" if market_timer.is_market_open() else "마감 확정"
-
-    _breadth = f"{breadth}\n" if breadth else ""
-    msg = (
-        f"🔭 <b>[바티인베스트 시장 전광판]</b>\n"
-        f"({datetime.now().strftime('%H:%M')} {time_str} 기준)\n"
-        f"════════════\n"
-        f"{market_summary}"
-        f"{_breadth}"
-        f"════════════\n"
-        f"🏭 <b>[섹터 랭킹]</b>\n"
-    )
+    if section == "sector":
+        msg = (
+            f"🏭 <b>[섹터 랭킹]</b>\n"
+            f"({datetime.now().strftime('%H:%M')} {time_str} 기준)\n"
+            f"════════════\n"
+        )
+    else:
+        msg = (
+            f"{_head}"
+            f"{market_summary}"
+            f"{_breadth}"
+            f"════════════\n"
+            f"🏭 <b>[섹터 랭킹]</b>\n"
+        )
 
     for i, sec in enumerate(sector_data):
         rank = i + 1
@@ -1567,9 +1584,11 @@ def get_catalyst_tags(sb_client) -> dict:
     return tags
 
 
-def get_daily_flow_summary(sb_client) -> str:
+def get_daily_flow_summary(sb_client, monitored_only: bool = False) -> str:
     """
     오늘(최신 거래일) 외국인·기관 순매수/순매도 Top3 — 마감 브리핑용.
+    monitored_only=True 면 관심종목(is_monitored)으로 한정 — 마감 브리핑 2번째
+    메시지(관심종목)용. 기본(False)은 시장 전체 기준으로 첫 메시지(시황)에 쓴다.
     market_data.foreign_net_buy/institution_net_buy(주식수) × price = 순매수대금(원).
     18:15 job_collect_investor_trend_ranked 가 확정 정산한 값을 사용하며, 모집단은
     모니터링 종목 + 당일 거래대금 RANK_TURNOVER_MIN 이상 종목.
@@ -1588,10 +1607,16 @@ def get_daily_flow_summary(sb_client) -> str:
             return ""
         latest = dres.data[0]['base_date']
         qb = sb_client.table('market_data') \
-            .select('corp_name,foreign_net_buy,institution_net_buy,price') \
+            .select('stock_code,corp_name,foreign_net_buy,institution_net_buy,price') \
             .eq('base_date', latest) \
             .not_.is_('foreign_net_buy', 'null')
         rows = fetch_all_pages(qb) if fetch_all_pages else (qb.execute().data or [])
+        if monitored_only:
+            mon_qb = sb_client.table('companies').select('code').eq('is_monitored', True)
+            mon_rows = fetch_all_pages(mon_qb) if fetch_all_pages else (mon_qb.execute().data or [])
+            monitored = {(r.get('code') or '').split('.')[0] for r in mon_rows}
+            if monitored:
+                rows = [r for r in rows if r.get('stock_code') in monitored]
     except Exception as e:
         logging.error(f"[오늘의수급] 조회 실패: {e}")
         return ""
@@ -1628,7 +1653,8 @@ def get_daily_flow_summary(sb_client) -> str:
         ("🔻 <b>기관 순매도</b>",   _top('i', False), 'i'),
     ]
     date_tag = f" ({latest[5:7]}/{latest[8:10]})" if len(latest) >= 10 else ""
-    lines = ["💰 <b>[오늘의 수급]</b>" + date_tag]
+    title = "💰 <b>[관심종목 수급]</b>" if monitored_only else "💰 <b>[오늘의 수급]</b>"
+    lines = [title + date_tag]
     lines += [_block(lb, items, k) for lb, items, k in blocks]
 
     # 랭킹 모집단은 거래대금 RANK_TURNOVER_MIN 이상 — Top3 최소 금액이 그 아래로 내려간
@@ -1639,7 +1665,7 @@ def get_daily_flow_summary(sb_client) -> str:
         RANK_TURNOVER_MIN = 0
     note = "* 순매매량 × 종가 기준"
     ranked = [abs(x[k]) for _, items, k in blocks for x in items if x['name']]
-    if RANK_TURNOVER_MIN and ranked and min(ranked) < RANK_TURNOVER_MIN:
+    if not monitored_only and RANK_TURNOVER_MIN and ranked and min(ranked) < RANK_TURNOVER_MIN:
         note += f" · 거래대금 {RANK_TURNOVER_MIN // 100_000_000:,}억 이상 종목 기준"
     lines.append(f"<i>{note}</i>")
     return "\n".join(lines)

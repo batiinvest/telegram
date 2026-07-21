@@ -80,27 +80,41 @@ def job_daily_closing():
         _breadth = stock_api.get_market_breadth(_sbc)
         _flow = stock_api.get_flow_map(_sbc)
         _daily_flow = stock_api.get_daily_flow_summary(_sbc)
+        _uni_flow = stock_api.get_daily_flow_summary(_sbc, monitored_only=True)
     except Exception as _te:
         logging.error(f"[마감] 촉매태그/시장폭/수급 오류: {_te}")
         _tags = None
         _breadth = None
         _flow = None
         _daily_flow = None
+        _uni_flow = None
 
-    # 인사 + 시장 전광판(시장폭) + 유니버스(촉매태그) 랭킹을 한 메시지로 통합 (알림 1건)
-    intro = "🏁 <b>[마감 시황]</b> 오늘 하루 고생 많으셨습니다."
+    # 마감 브리핑은 2개 메시지로 분리 — ①시장 전체 시황 ②관심종목.
+    # 지수·시장폭·투자자별 순매수·수급 Top3는 시장 전체 데이터, 섹터 랭킹·유니버스
+    # 랭킹은 관심종목 시총가중/등락률이라 출처 기준으로 갈랐다.
     try:
         _investor = stock_api.get_market_investor_summary()
     except Exception as _ie:
         logging.error(f"[마감] 투자자동향 오류: {_ie}")
         _investor = ""
-    msg = f"{intro}\n\n{stock_api.get_market_scoreboard(shared_prices=prices, breadth=_breadth)}"
+
+    # ① 시장 전체 시황
+    intro = "🏁 <b>[마감 시황]</b> 오늘 하루 고생 많으셨습니다."
+    msg = f"{intro}\n\n" + stock_api.get_market_scoreboard(
+        shared_prices=prices, breadth=_breadth, section="index")
     if _investor:
         msg += f"\n\n{_investor}"
-    msg += f"\n\n{stock_api.get_universe_ranking(shared_prices=prices, tag_map=_tags)}"
     if _daily_flow:
         msg += f"\n\n{_daily_flow}"
-    stock_api.send_telegram(DEFAULT_CHAT_ID, msg, keyboard=COMMON_BUTTON)
+    stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
+
+    # ② 관심종목
+    msg2 = "🎯 <b>[관심종목 마감]</b> 바티인베스트가 보는 종목들입니다.\n\n"
+    msg2 += stock_api.get_market_scoreboard(shared_prices=prices, section="sector")
+    msg2 += f"\n\n{stock_api.get_universe_ranking(shared_prices=prices, tag_map=_tags)}"
+    if _uni_flow:
+        msg2 += f"\n\n{_uni_flow}"
+    stock_api.send_telegram(DEFAULT_CHAT_ID, msg2, keyboard=COMMON_BUTTON)
 
     _broadcast_to_industries(
         stock_api.get_industry_theme_ranking, prices,
