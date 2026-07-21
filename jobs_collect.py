@@ -774,7 +774,8 @@ def _check_market_warnings():
         if not new_alerts:
             return
 
-        target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
+        # 시장 전체 정보 → 메인채팅방 발송 (개인/관리자방 아님)
+        target = DEFAULT_CHAT_ID
 
         def _chg_str(a):
             r = a.get('price_change_rate') or 0
