@@ -25,7 +25,12 @@ def latest(table, col='base_date'):
     r = sb.table(table).select(col).order(col, desc=True).limit(1).execute()
     return ((r.data or [{}])[0].get(col) or '')[:10] if r.data else ''
 
-issues = []; lines = []
+# 알려진 미해결 이슈 — 매일 같은 알림이 반복되면 진짜 이상을 가린다.
+# 본문 🚨에서 분리해 하단에 참고로만 싣고, 이것뿐이면 발송 자체를 생략한다.
+# short_selling_history: KRX가 비로그인 다운로드를 전면 차단(LOGOUT) — 수집처 교체 대기.
+KNOWN_TABLES = {'short_selling_history'}
+
+issues = []; known = []; lines = []
 ref = latest('market_data')
 lines.append(f"기준 거래일(market_data 최신): {ref}")
 
@@ -52,10 +57,10 @@ lines.append(f"  상장사     updated_at={cu}")
 lines.append("당일 건수:")
 for t, label, mn, mx in [('market_data','시장데이터',2000,6000),
         ('short_selling_history','공매도',50,600),('sector_daily_summary','섹터요약',7,20),
-        ('leading_stocks','주도주',30,60),('daily_disclosures','공시',5,800),('macro_data','매크로',1,5)]:
-    c = cnt(t, base_date=ref); flag=''
-    if c < mn: flag=' ⚠️적음'; issues.append(f"{label}({t}) 건수 {c} < {mn} ({ref})")
-    elif c > mx: flag=' ⚠️많음'; issues.append(f"{label}({t}) 건수 {c} > {mx} ({ref})")
+        ('leading_stocks','주도주',30,60),('daily_disclosures','공시',5,1500),('macro_data','매크로',1,5)]:
+    c = cnt(t, base_date=ref); flag=''; bucket = known if t in KNOWN_TABLES else issues
+    if c < mn: flag=' ⚠️적음'; bucket.append(f"{label}({t}) 건수 {c} < {mn} ({ref})")
+    elif c > mx: flag=' ⚠️많음'; bucket.append(f"{label}({t}) 건수 {c} > {mx} ({ref})")
     lines.append(f"  {label:<10} {c}건 (기대 {mn}~{mx}){flag}")
 
 # 3) 오늘 로그 ERROR 스캔
@@ -85,14 +90,19 @@ if err >= 20:
     top = sorted(sigs.items(), key=lambda x:-x[1])[:3]
     issues.append("로그 ERROR 급증 "+str(err)+"건 — "+", ".join(f"{k}×{v}" for k,v in top))
 
-report = f"[{stamp}] 데이터점검 — 이상 {len(issues)}건\n" + "\n".join(lines)
+report = f"[{stamp}] 데이터점검 — 이상 {len(issues)}건 (알려진 {len(known)}건)\n" + "\n".join(lines)
 print(report)
 if issues:
     print("⚠️ ISSUES:")
     for i in issues: print("  - "+i)
+if known:
+    print("ℹ️ 알려진 미해결:")
+    for i in known: print("  - "+i)
 
 if issues and TG_TOKEN and ADMIN_CHAT:
     m = f"🚨 <b>[BatiInvest 데이터 이상]</b> {today}\n" + "════════════" + "\n" + "\n".join("• "+i for i in issues)
+    if known:
+        m += "\n\nℹ️ <i>알려진 미해결</i>\n" + "\n".join("• "+i for i in known)
     try:
         requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
                       json={'chat_id':ADMIN_CHAT,'text':m,'parse_mode':'HTML'}, timeout=15)

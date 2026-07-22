@@ -153,6 +153,26 @@ MEANINGFUL_KEYWORDS = [
 ]
 
 
+# ── 무음 실패 관리자 알림 (공시봇 main._note_api_failure 패턴) ────────────────
+# 구: 키 전량 소진·401 무효화로 종일 0건이어도 스레드는 살아 있어
+#     워치독·운영요약 어디에도 안 잡혔다.
+_ADMIN_ALERTED: set = set()
+
+
+def _alert_admin_once(tag: str, msg: str):
+    key = (datetime.date.today().isoformat(), tag)
+    if key in _ADMIN_ALERTED:
+        return
+    _ADMIN_ALERTED.add(key)
+    try:
+        from telegram_utils import get_admin_chat_id
+        admin = get_admin_chat_id()
+        if admin:
+            stock_api.send_telegram(admin, msg)
+    except Exception:
+        logging.exception("⚠️ [뉴스] 관리자 알림 발송 실패")
+
+
 class NaverNewsBot:
     def __init__(self):
         self.base_url = "https://openapi.naver.com/v1/search/news.json"
@@ -174,6 +194,7 @@ class NaverNewsBot:
         self.api_keys    = NAVER_KEYS  # config에서 미설정 슬롯 필터링됨 — 빈 리스트 가능
         self.current_key = self.api_keys[0] if self.api_keys else {"id": "", "secret": ""}
         self.consecutive_429 = 0
+        self._auth_fail_streak = 0   # 401/403 연속 — 전 키 소진 시 관리자 알림
         self._update_session_headers()
 
         KST = datetime.timezone(datetime.timedelta(hours=9))
@@ -203,6 +224,9 @@ class NaverNewsBot:
 
         stock_api.send_telegram(DEFAULT_CHAT_ID,
             "⛔ <b>[뉴스 봇 일시정지]</b>\nAPI 한도 소진. 내일 0시 5분 재가동.")
+        _alert_admin_once('news_quota',
+            f"⛔ <b>[뉴스봇]</b> 네이버 API 한도 전 키 소진 — "
+            f"{reset_time.strftime('%m-%d %H:%M')}까지 수집 정지")
         while seconds_until_reset > 0:
             time.sleep(min(600, seconds_until_reset))
             seconds_until_reset -= 600
@@ -321,6 +345,7 @@ class NaverNewsBot:
             res = self.session.get(url, timeout=3)
             if res.status_code == 200:
                 self.consecutive_429 = 0
+                self._auth_fail_streak = 0
                 return res.json().get('items', [])
             elif res.status_code == 429:
                 self.consecutive_429 += 1
@@ -336,6 +361,12 @@ class NaverNewsBot:
                     f"⚠️ [뉴스] API {res.status_code} (key#{self.key_index + 1}): {res.text[:100]}"
                 )
                 if res.status_code in (401, 403):
+                    self._auth_fail_streak += 1
+                    if self._auth_fail_streak >= max(len(self.api_keys), 1):
+                        _alert_admin_once('news_auth',
+                            f"🚨 <b>[뉴스봇]</b> 네이버 API 인증 실패({res.status_code})가 "
+                            f"전 키({len(self.api_keys)}개)에 연속 발생 — 뉴스 수집 중단 상태\n"
+                            f"└ {res.text[:120]}")
                     self._rotate_key()
                     time.sleep(0.5)
                 return []
@@ -358,6 +389,8 @@ class NaverNewsBot:
         if not self.api_keys:
             # 키 없이 돌면 401 무한 루프 + 워치독 재시작 반복 → 대기 모드로 고정
             logging.critical("⛔ 네이버 API 키 없음 (NAVER_ID_1~10 미설정) — 뉴스봇 대기 모드")
+            _alert_admin_once('news_nokey',
+                "🚨 <b>[뉴스봇]</b> 네이버 API 키 없음(NAVER_ID_1~10 미설정) — 대기 모드로 고정됨")
             while True:
                 time.sleep(3600)
         logging.info("🚀 News Bot Started with Optimized Filtering")

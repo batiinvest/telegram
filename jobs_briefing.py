@@ -11,7 +11,9 @@ import stock_api
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, COMMON_BUTTON
 from job_infra import (_job, _log_notice, _bridge, _JOB_RESULTS,
-                       _broadcast_to_industries, _broadcast_to_companies)
+                       _broadcast_to_industries, _broadcast_to_companies,
+                       mark_failed, get_missing_jobs)
+from managers import pop_send_failures
 
 # ✅ 프로 채널 관리 모듈
 try:
@@ -62,6 +64,7 @@ def job_naver_report():
         _log_notice(DEFAULT_CHAT_ID, "[네이버 리포트] 발송")
     except Exception as e:
         logging.error(f"네이버 리포트 발송 에러: {e}")
+        mark_failed(e)
 
 
 @_job("closing", holiday=True)
@@ -90,6 +93,7 @@ def job_daily_closing():
         _flow = None
         _daily_flow = None
         _uni_flow = None
+        mark_failed(_te)
 
     # 마감 브리핑은 2개 메시지로 분리 — ①시장 전체 시황 ②관심종목.
     # 지수·시장폭·투자자별 순매수·수급 Top3는 시장 전체 데이터, 섹터 랭킹·유니버스
@@ -99,6 +103,7 @@ def job_daily_closing():
     except Exception as _ie:
         logging.error(f"[마감] 투자자동향 오류: {_ie}")
         _investor = ""
+        mark_failed(_ie)
 
     # ① 시장 전체 시황 — 판단(요약) 먼저, 근거 데이터 뒤
     intro = "🏁 <b>[마감 시황]</b> 오늘 하루 고생 많으셨습니다."
@@ -108,6 +113,7 @@ def job_daily_closing():
     except Exception as _je:
         logging.error(f"[마감] 시장판단 오류: {_je}")
         _judgment = ""
+        mark_failed(_je)
     if _judgment:
         msg += f"\n\n{_judgment}"
     msg += "\n\n" + stock_api.get_market_scoreboard(
@@ -127,6 +133,7 @@ def job_daily_closing():
     except Exception as _le:
         logging.error(f"[마감] 주도주 오류: {_le}")
         _leaders = ""
+        mark_failed(_le)
     if _leaders:
         msg2 += f"\n\n{_leaders}"
     if _uni_flow:
@@ -153,6 +160,7 @@ def job_kind_ir():
         _kind_ir.run_kind_ir_job()
     except Exception as e:
         logging.error(f"❌ [KIND IR] 오류: {e}")
+        mark_failed(e)
 
 
 @_job()
@@ -171,12 +179,24 @@ def job_pro_channel_check():
         )
     except Exception as e:
         logging.error(f"❌ [프로채널] 만료 체크 오류: {e}")
+        mark_failed(e)
+
+
+def _hhmm(ts) -> str:
+    """job_runs.finished_at(timestamptz)은 PostgREST가 UTC로 돌려준다 — KST로 변환.
+    구: 문자열을 그대로 잘라 써서 요약 시각이 9시간 밀려 표시됐다."""
+    try:
+        return datetime.datetime.fromisoformat(ts).astimezone().strftime('%H:%M')
+    except Exception:
+        return (ts or '')[11:16]
 
 
 @_job()
 def job_daily_ops_summary():
     """매일 19:50 — 오늘 잡 실행 결과 요약을 관리자 방으로 발송 (운영 가시성).
-    job_runs(DB)가 1순위 — 재시작해도 하루치가 보존됨. 미생성이면 인메모리 폴백."""
+    job_runs(DB)가 1순위 — 재시작해도 하루치가 보존됨. 미생성이면 인메모리 폴백.
+    실행분뿐 아니라 **아예 안 돈 잡**(스케줄 누락·스케줄러 정지)과 텔레그램 발송
+    영구실패 채널도 함께 보고한다."""
     today = datetime.date.today().isoformat()
     runs = {}   # job_name → 마지막 실행 {'time','ok','error','elapsed','recovered'}
     try:
@@ -186,7 +206,7 @@ def job_daily_ops_summary():
         for r in db_rows:
             prev = runs.get(r['job_name'])
             runs[r['job_name']] = {
-                'time':      (r.get('finished_at') or '')[11:16],
+                'time':      _hhmm(r.get('finished_at')),
                 'ok':        r['ok'],
                 'error':     r.get('error'),
                 'elapsed':   r.get('elapsed_sec') or 0,
@@ -197,20 +217,33 @@ def job_daily_ops_summary():
     if not runs:
         runs = {k: dict(v, recovered=False)
                 for k, v in _JOB_RESULTS.items() if v.get('date') == today}
-    if not runs:
+
+    missing, disabled = get_missing_jobs(set(runs))
+    send_fails = pop_send_failures()
+    if not runs and not missing:
         return
+
     items = sorted(runs.items())
     fails = [(k, v) for k, v in items if not v['ok']]
     slows = [(k, v) for k, v in items if v['ok'] and v['elapsed'] >= 300]
     recov = [k for k, v in items if v.get('recovered')]
-    lines = [f"🗒 <b>[운영 요약] {today}</b> — 실행 {len(runs)}개 / 실패 {len(fails)}개"]
+    head = f"🗒 <b>[운영 요약] {today}</b> — 실행 {len(runs)}개 / 실패 {len(fails)}개"
+    if missing:
+        head += f" / 미실행 {len(missing)}개"
+    lines = [head]
     for k, v in fails:
         lines.append(f"❌ {v['time']} {k}: {v['error']}")
+    for k, at in missing:
+        lines.append(f"🕳 미실행 {k}" + (f" (예정 {at})" if at else ""))
     for k in recov:
         lines.append(f"♻️ {k}: 실패 후 재처리 성공")
     for k, v in slows:
         lines.append(f"🐢 {v['time']} {k}: {v['elapsed']:.0f}초 소요")
-    if not fails and not slows and not recov:
+    for cid, rec in sorted(send_fails.items(), key=lambda x: -x[1]['count']):
+        lines.append(f"📵 발송실패 {cid} ×{rec['count']} — {rec['reason']}")
+    if disabled:
+        lines.append("⏸ 비활성: " + ", ".join(disabled))
+    if not fails and not slows and not recov and not missing and not send_fails:
         lines.append("✅ 전 잡 정상")
     target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
     stock_api.send_telegram(target, "\n".join(lines))
@@ -225,6 +258,7 @@ def job_saturday_main_ranking():
         _log_notice(DEFAULT_CHAT_ID, "[토요일] 주간 랭킹 발송")
     except Exception as e:
         logging.error(f"주간 메인 랭킹 에러: {e}")
+        mark_failed(e)
 
 
 @_job("saturday")
@@ -238,6 +272,7 @@ def job_saturday_flow_summary():
         _log_notice(DEFAULT_CHAT_ID, "[토요일] 주간 수급 요약 발송")
     except Exception as e:
         logging.error(f"❌ [주간수급] 오류: {e}")
+        mark_failed(e)
 
 
 @_job("saturday")

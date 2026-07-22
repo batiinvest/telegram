@@ -124,6 +124,75 @@ def _is_enabled(job_key: str) -> bool:
 _JOB_RESULTS: dict = {}    # fn 이름 → {'date','time','ok','error','elapsed'}
 _FAIL_ALERTED: set = set() # (date, fn 이름) — 동일 잡 실패 알림 하루 1회 제한
 
+# 잡 본문이 예외를 자체 처리(로그만)하고 정상 반환해도 실패로 기록하기 위한 마커.
+# 스레드 로컬 — _threaded 잡이 병렬 실행돼도 서로 섞이지 않는다.
+_JOB_LOCAL = threading.local()
+
+_JOB_GUARDS: dict = {}     # fn 이름 → {'key','holiday','weekday_only'} (데코레이션 시점 등록)
+_EXPECTED_JOBS: dict = {}  # fn 이름 → {'at':'HH:MM','day':'every'|'saturday'|...}
+
+
+def mark_failed(reason):
+    """잡 본문이 예외를 삼키더라도 이 잡을 '실패'로 기록시킨다. 흐름은 그대로 진행.
+
+    구: 대부분의 잡이 `except Exception as e: logging.error(...)`로 삼켜서
+        수집이 통째로 실패해도 job_runs에 ok=true로 남고 운영요약이 "전 잡 정상"을 찍었다.
+    """
+    fails = getattr(_JOB_LOCAL, 'failures', None)
+    if fails is not None:
+        fails.append(str(reason)[:200])
+
+
+def set_expected_jobs(jobs):
+    """run_all이 스케줄 등록 직후 호출 — schedule.Job 목록에서 잡 이름·예정시각·요일 추출.
+    같은 잡이 여러 번 등록되면 가장 이른 시각을 기준으로 삼는다(그 시각이 지났으면 실행됐어야 함)."""
+    _EXPECTED_JOBS.clear()
+    for j in jobs:
+        jf = getattr(j, 'job_func', None)
+        name = getattr(jf, '__name__', None) or getattr(getattr(jf, 'func', None), '__name__', None)
+        if not name:
+            continue
+        at = j.at_time.strftime('%H:%M') if getattr(j, 'at_time', None) else ''
+        day = getattr(j, 'start_day', None) or 'every'
+        cur = _EXPECTED_JOBS.get(name)
+        if cur is None or (at and cur['at'] and at < cur['at']):
+            _EXPECTED_JOBS[name] = {'at': at, 'day': day}
+    logging.info(f"🗓 [스케줄] 기대 잡 {len(_EXPECTED_JOBS)}개 등록 (미실행 탐지용)")
+
+
+def get_missing_jobs(ran) -> tuple:
+    """(미실행, 비활성) — 오늘 예정시각이 지났는데 실행 기록이 없는 잡.
+    가드(주말/휴장일/DB토글)는 데코레이터 등록값으로 판정 — 재시작에 영향받지 않는다."""
+    if not _EXPECTED_JOBS:
+        return [], []
+    now = datetime.datetime.now()
+    wd = now.strftime('%A').lower()
+    now_hhmm = now.strftime('%H:%M')
+    is_weekend = now.weekday() >= 5
+    try:
+        holiday = market_timer.is_kr_holiday()
+    except Exception:
+        holiday = False
+    missing, disabled = [], []
+    for name, meta in sorted(_EXPECTED_JOBS.items()):
+        if name in ran:
+            continue
+        if meta['day'] != 'every' and meta['day'] != wd:
+            continue
+        if meta['at'] and meta['at'] > now_hhmm:
+            continue
+        g = _JOB_GUARDS.get(name, {})
+        if g.get('weekday_only') and is_weekend:
+            continue
+        if g.get('holiday') and holiday:
+            continue
+        k = g.get('key')
+        if k and not _is_enabled(k):
+            disabled.append(name)
+            continue
+        missing.append((name, meta['at']))
+    return missing, disabled
+
 
 def _record_job(fn_name: str, ok: bool, error=None, elapsed: float = 0.0):
     _JOB_RESULTS[fn_name] = {
@@ -186,6 +255,10 @@ def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
         weekday_only: True면 주말 스킵 (holiday보다 느슨한 조건)
     """
     def decorator(fn):
+        _JOB_GUARDS[fn.__name__] = {
+            'key': key, 'holiday': holiday, 'weekday_only': weekday_only,
+        }
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             if weekday_only and datetime.datetime.now().weekday() >= 5:
@@ -196,14 +269,27 @@ def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
                 logging.info(f"⏸ [{key}] 비활성화 (DB 설정)")
                 return
             start = time.time()
+            # 중첩 잡(job_collect_market_closing → job_watchlist_alert)이 실재하므로
+            # 바깥 잡의 실패 목록을 보존했다가 finally에서 되돌린다.
+            prev = getattr(_JOB_LOCAL, 'failures', None)
+            _JOB_LOCAL.failures = []
             try:
                 result = fn(*args, **kwargs)
-                _record_job(fn.__name__, True, elapsed=time.time() - start)
+                fails = _JOB_LOCAL.failures
+                if fails:
+                    err = ' | '.join(fails)[:400]
+                    logging.error(f"❌ [{fn.__name__}] 실패 감지 (본문 자체처리): {err}")
+                    _record_job(fn.__name__, False, err, time.time() - start)
+                    _notify_job_failure(fn.__name__, err)
+                else:
+                    _record_job(fn.__name__, True, elapsed=time.time() - start)
                 return result
             except Exception as e:
                 logging.error(f"❌ [{fn.__name__}] 잡 실행 실패: {e}", exc_info=True)
                 _record_job(fn.__name__, False, e, time.time() - start)
                 _notify_job_failure(fn.__name__, e)
+            finally:
+                _JOB_LOCAL.failures = prev
         return wrapper
     return decorator
 

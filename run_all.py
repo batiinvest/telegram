@@ -29,7 +29,7 @@ except ImportError as e:
     print(f"❌ 필수 파일이 누락되었습니다: {e}")
     sys.exit(1)
 
-from job_infra import _bridge, _BRIDGE_OK
+from job_infra import _bridge, _BRIDGE_OK, set_expected_jobs
 from jobs_collect import (
     job_sync_listed_companies, job_cleanup_market_data, job_collect_financials,
     job_collect_macro, job_collect_analyst_opinions, job_collect_foreign_institution,
@@ -162,6 +162,9 @@ def run_scheduler():
     schedule.every().saturday.at("11:00").do(job_saturday_flow_summary)   # 주간 수급 요약
     schedule.every().sunday.at("10:00").do(job_sunday_industry_recap)
     schedule.every().sunday.at("10:30").do(job_sunday_company_diagnosis)
+
+    # 등록된 잡 목록 스냅샷 — 19:50 운영요약의 '미실행' 판정 기준
+    set_expected_jobs(schedule.get_jobs())
 
     loop_count = 0
     while True:

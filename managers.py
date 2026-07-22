@@ -253,6 +253,7 @@ class KisAuthManager:
             
             if not access_token:
                 logging.error(f"❌ 토큰 발급 실패: {data}")
+                _note_kis_token_failure(str(data)[:150])
                 return None
                 
             # KIS 실제 응답 키는 access_token_token_expired ('token_token_expired'는 과거 오타
@@ -276,10 +277,13 @@ class KisAuthManager:
             self.cached_token = access_token
             self.token_expiry = expired_dt
             logging.info("✅ 새 토큰 발급 및 저장 완료")
+            _KIS_TOKEN_FAIL['streak'] = 0
+            _KIS_TOKEN_FAIL['alerted'] = False
             return access_token
 
         except Exception as e:
             logging.error(f"❌ 토큰 요청 에러: {e}")
+            _note_kis_token_failure(str(e)[:150])
             return None
 
     def kis_get(self, tr_id: str, path: str, params: Dict,
@@ -337,6 +341,46 @@ class KisAuthManager:
 # ==========================================
 # 🤖 [Manager] 텔레그램 봇 관리자
 # ==========================================
+# ── 텔레그램 발송 영구실패 집계 (400/403/401 — 재시도 무의미) ────────────────
+# 구: 로그만 남아 채널 하나가 통째로 끊겨도(강퇴·chat not found) 관리자가 몰랐다.
+# 여기서 직접 알림을 보내지 않는다 — 발송 장애 중 알림 발송은 재귀. 19:50 운영요약이 읽어간다.
+_SEND_FAILURES: dict = {}
+
+
+def note_send_failure(chat_id, reason: str):
+    rec = _SEND_FAILURES.setdefault(str(chat_id), {'count': 0, 'reason': ''})
+    rec['count'] += 1
+    rec['reason'] = str(reason)[:100]
+
+
+def pop_send_failures() -> dict:
+    """집계 반환 후 비움 (운영요약이 하루 1회 호출)."""
+    snap = dict(_SEND_FAILURES)
+    _SEND_FAILURES.clear()
+    return snap
+
+
+# ── KIS 토큰 발급 연속 실패 알림 ─────────────────────────────────────────────
+# 토큰이 안 나오면 시세감시·수집 전체가 멈추는데 기존엔 logging.error 한 줄뿐이었다.
+_KIS_TOKEN_FAIL = {'streak': 0, 'alerted': False}
+
+
+def _note_kis_token_failure(detail: str):
+    _KIS_TOKEN_FAIL['streak'] += 1
+    if _KIS_TOKEN_FAIL['streak'] >= 3 and not _KIS_TOKEN_FAIL['alerted']:
+        _KIS_TOKEN_FAIL['alerted'] = True
+        try:
+            from telegram_utils import get_admin_chat_id
+            admin = get_admin_chat_id()
+            if admin:
+                telegram_bot.send_message(
+                    admin,
+                    "🚨 <b>[KIS]</b> 토큰 발급 3회 연속 실패 — 시세·수집 전면 중단 위험\n"
+                    f"└ {detail}")
+        except Exception:
+            logging.exception("⚠️ [KIS] 토큰 실패 알림 발송 실패")
+
+
 class TelegramBotManager:
     MAX_LEN = 4000   # 텔레그램 한도 4096 — HTML 태그 여유분 감안한 보수적 분할 기준
 
@@ -397,6 +441,7 @@ class TelegramBotManager:
             except Exception as e:
                 # global_session이 연결 계층 재시도를 이미 수행한 뒤의 실패
                 logging.error(f"⚠️ 텔레그램 연결 에러 ({chat_id}): {e}")
+                note_send_failure(chat_id, f"연결 에러: {e}")
                 return False
 
             if res.status_code == 200:
@@ -422,16 +467,20 @@ class TelegramBotManager:
             if res.status_code in (400, 403):
                 # chat not found / bot kicked / user blocked 등 — 재시도 무의미
                 logging.error(f"❌ 텔레그램 영구 실패 ({chat_id}, {res.status_code}): {res.text[:200]}")
+                note_send_failure(chat_id, f"{res.status_code} {res.text[:80]}")
                 return False
 
             if res.status_code == 401:
                 logging.critical("🚨 텔레그램 토큰 인증 실패(401) — TELEGRAM_BOT_TOKEN 확인 필요")
+                note_send_failure(chat_id, "401 봇 토큰 인증 실패")
                 return False
 
             logging.error(f"⚠️ 텔레그램 전송 실패 ({chat_id}, {res.status_code}): {res.text[:200]}")
+            note_send_failure(chat_id, f"{res.status_code} {res.text[:80]}")
             return False
 
         logging.error(f"❌ 텔레그램 발송 포기 ({chat_id}) — 재시도 초과")
+        note_send_failure(chat_id, "재시도 초과 (429/타임아웃)")
         return False
 
 # ==========================================

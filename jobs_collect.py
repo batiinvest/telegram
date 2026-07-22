@@ -17,7 +17,7 @@ from db_utils import fetch_all_pages
 from format_utils import fmt_change_pct
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, CHAT_IDS_BY_CODE
-from job_infra import _job, _is_enabled, _log_notice, _bridge, _BRIDGE_OK
+from job_infra import _job, _is_enabled, _log_notice, _bridge, _BRIDGE_OK, mark_failed
 
 # ✅ 재무/시장 데이터 수집 + 상장사 동기화
 try:
@@ -51,6 +51,7 @@ def job_sync_listed_companies():
         _log_notice("system", "[상장사동기화] 완료")
     except Exception as e:
         logging.error(f"❌ [상장사동기화] 오류: {e}")
+        mark_failed(e)
 
 
 @_job()
@@ -94,6 +95,7 @@ def job_cleanup_market_data():
         logging.info(f"🗑️ [정리] market_data 정리 완료 — 모니터링 {KEEP_MON}일 / 전체 {KEEP_ALL}일 보존")
     except Exception as e:
         logging.error(f"❌ [정리] market_data 정리 오류: {e}")
+        mark_failed(e)
 
 
 def _preprocess_disclosures(all_disc_records: list, sb) -> list:
@@ -490,6 +492,7 @@ def job_collect_financials():
 
     except Exception as e:
         logging.error(f"❌ [재무수집] 오류: {e}")
+        mark_failed(e)
 
 
 def job_save_grade_history(year: str = None, quarter: str = None):
@@ -560,6 +563,7 @@ def job_save_grade_history(year: str = None, quarter: str = None):
 
     except Exception as e:
         logging.error(f"❌ [등급이력] 오류: {e}")
+        mark_failed(e)
 
 
 def job_save_trend_flags(year: str = None, quarter: str = None):
@@ -574,6 +578,7 @@ def job_save_trend_flags(year: str = None, quarter: str = None):
         logging.info(f"📈 [추세신호] {year} {quarter} 완료 — 경고 {flagged}개")
     except Exception as e:
         logging.error(f"❌ [추세신호] 오류: {e}")
+        mark_failed(e)
 
 
 @_job()
@@ -604,6 +609,7 @@ def job_collect_macro():
                 logging.info("📊 [매크로 브리핑] 메인 채널 발송 완료")
     except Exception as e:
         logging.error(f"매크로 데이터 수집 실패: {e}")
+        mark_failed(e)
 
 
 @_job(weekday_only=True)
@@ -616,6 +622,7 @@ def job_collect_analyst_opinions():
         logging.info(f"📋 [투자의견] 완료: {saved}건 저장")
     except Exception as e:
         logging.error(f"❌ [투자의견] 수집 실패: {e}")
+        mark_failed(e)
 
 
 @_job(weekday_only=True)
@@ -628,6 +635,7 @@ def job_collect_foreign_institution():
         logging.info(f"=== 수급 수집 완료: 외국인 {len(result['frgn_buy'])}개 / 기관 {len(result['orgn_buy'])}개 / 동시매수 {len(result['both_buy'])}개 ===")
     except Exception as e:
         logging.error(f"❌ 수급 수집 실패: {e}")
+        mark_failed(e)
 
 
 @_job(weekday_only=True)
@@ -641,6 +649,7 @@ def job_collect_new_high():
         _alert_new_high(rows)
     except Exception as e:
         logging.error(f"❌ 신고가 수집 실패: {e}")
+        mark_failed(e)
 
 
 def _alert_new_high(rows: list):
@@ -709,6 +718,7 @@ def job_collect_us_etf():
         logging.info("=== US ETF 수집 완료 ===")
     except Exception as e:
         logging.error(f"❌ US ETF 수집 실패: {e}")
+        mark_failed(e)
 
 
 @_job()
@@ -726,6 +736,7 @@ def job_collect_market():
         _log_notice("system", f"[시장수집] 완료 ({ok}개)")
     except Exception as e:
         logging.error(f"❌ [시장수집] 오류: {e}")
+        mark_failed(e)
 
 
 def _check_market_warnings():
@@ -839,6 +850,7 @@ def job_collect_market_closing():
             logging.error(f"❌ [수익률] 계산 오류: {_re}")
     except Exception as e:
         logging.error(f"❌ [시장수집-전체] 오류: {e}")
+        mark_failed(e)
 
     # 시장 수집 완료 후 관심가/목표가 도달 알림 (장 마감 기준)
     job_watchlist_alert()
@@ -875,6 +887,7 @@ def job_short_surge():
         logging.info(f"📉 [공매도급증] 알림 발송 완료 ({len(surges)}건)")
     except Exception as e:
         logging.error(f"❌ [공매도급증] job 실패: {e}")
+        mark_failed(e)
 
 
 @_job(holiday=True)
@@ -892,6 +905,7 @@ def job_collect_investor_trend():
         logging.info(f"=== [투자자수급] 완료: {updated}개 갱신 / 미수집 {failed} ===")
     except Exception as e:
         logging.error(f"❌ [투자자수급] 오류: {e}")
+        mark_failed(e)
 
 
 @_job(holiday=True)
@@ -911,6 +925,7 @@ def job_collect_investor_trend_ranked():
         logging.info(f"=== [투자자수급·랭킹] 완료: {updated}개 갱신 / 미수집 {failed} ===")
     except Exception as e:
         logging.error(f"❌ [투자자수급·랭킹] 오류: {e}")
+        mark_failed(e)
 
 
 @_job(holiday=True)
@@ -923,6 +938,7 @@ def job_sector_summary():
         logging.info("✅ [섹터요약] 완료")
     except Exception as e:
         logging.error(f"❌ [섹터요약] 오류: {e}")
+        mark_failed(e)
 
 
 @_job(holiday=True)
@@ -936,6 +952,7 @@ def job_collect_estimates():
         logging.info(f"=== [추정실적] 완료: 커버 {covered}종목 / 갱신감지 {revisions}건 ===")
     except Exception as e:
         logging.error(f"❌ [추정실적] 오류: {e}")
+        mark_failed(e)
 
 
 @_job(holiday=True)
@@ -948,6 +965,7 @@ def job_collect_investor_market():
         logging.info(f"=== [투자자동향] 완료: {n}건 upsert ===")
     except Exception as e:
         logging.error(f"❌ [투자자동향] 오류: {e}")
+        mark_failed(e)
 
 
 @_job(holiday=True)
@@ -967,6 +985,7 @@ def job_collect_credit_balance():
             logging.error(f"❌ [신용잔고차트] 발송 오류: {e}")
     except Exception as e:
         logging.error(f"❌ [신용잔고] 오류: {e}")
+        mark_failed(e)
 
 
 @_job(holiday=True)
@@ -990,6 +1009,7 @@ def job_market_summary():
         logging.info("✅ [시장요약] 완료")
     except Exception as e:
         logging.error(f"❌ [시장요약] 오류: {e}")
+        mark_failed(e)
 
 
 @_job()
@@ -1126,6 +1146,7 @@ def job_watchlist_alert():
 
     except Exception as e:
         logging.error(f"❌ [관심가알림] 오류: {e}")
+        mark_failed(e)
 
 
 # ── 실패 잡 자동 재처리 (job_runs 기반) ──────────────────────────────
@@ -1158,6 +1179,7 @@ def job_retry_failed():
                 .eq('run_date', today).order('finished_at').execute().data or [])
     except Exception as e:
         logging.warning(f"[재처리] job_runs 조회 불가 — 스킵: {str(e)[:120]}")
+        mark_failed(e)
         return
     last = {}
     for r in rows:
