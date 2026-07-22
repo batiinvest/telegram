@@ -1735,9 +1735,25 @@ def get_daily_flow_summary(sb_client, monitored_only: bool = False) -> str:
         ("🔺 <b>기관 순매수</b>",   _top('i', True),  'i'),
         ("🔻 <b>기관 순매도</b>",   _top('i', False), 'i'),
     ]
+
+    # 양대 주체가 같이 산 종목 — 한쪽만 산 것보다 신호가 강하다.
+    # 합계 10억 미만은 사실상 0(소수점 절사 시 "+0억")이라 제외.
+    MIN_BOTH = 10 * 100_000_000
+    both = [x for x in flows
+            if x['f'] > 0 and x['i'] > 0 and x['name'] and (x['f'] + x['i']) >= MIN_BOTH]
+    both.sort(key=lambda x: x['f'] + x['i'], reverse=True)
+
     date_tag = f" ({latest[5:7]}/{latest[8:10]})" if len(latest) >= 10 else ""
     title = "💰 <b>[관심종목 수급]</b>" if monitored_only else "💰 <b>[오늘의 수급]</b>"
     lines = [title + date_tag]
+    if both:
+        lines.append("🔥 <b>외국인·기관 동반 순매수</b>")
+        for x in both[:3]:
+            # 합계는 표시값(억 절사)끼리 더한다 — floor(a+b) != floor(a)+floor(b)라
+            # 원 단위로 더하면 화면에서 1억 어긋나 보인다(776+62인데 839로 표기).
+            _tot = (x['f'] // 100_000_000 + x['i'] // 100_000_000) * 100_000_000
+            lines.append(f"  {x['name']} {_amt(_tot)} "
+                         f"(외국인 {_amt(x['f'])} · 기관 {_amt(x['i'])})")
     lines += [_block(lb, items, k) for lb, items, k in blocks]
 
     # 랭킹 모집단은 거래대금 RANK_TURNOVER_MIN 이상 — Top3 최소 금액이 그 아래로 내려간
