@@ -52,6 +52,7 @@ THR_VIX_HIGH =  25
 THR_VIX_FEAR =  20
 THR_US10Y    =  4.5
 THR_S5       =  1.5   # 5일 누적 강세/약세 임계 — 프론트 market-insight.js S5와 동일
+THR_TURN     =  1.0   # 직전 해외 세션이 이만큼 이상 같은 방향이면 '엇갈림' → '전환 관찰'로 완화
 
 # ⚠️ 아래 두 상수는 DB 조회 실패 시 폴백 — 실제 값은 run() 시작 시
 # us_etf_map 테이블(단일 출처, 프론트 loadUskrMap과 동일)에서 갱신된다.
@@ -138,11 +139,17 @@ def fetch_market_summary(target_date: str) -> list:
         return []
 
 
-def fetch_us_etf(target_date: str) -> dict:
+def fetch_us_etf(target_date: str, kr_days: list = None) -> dict:
     """
-    us_market 테이블에서 최근 5거래일 US ETF 산업 평균 등락률 조회.
-    반환: { industry: { d1: 당일 평균, d5: 5일 복리 누적 } }
+    us_market 테이블에서 해외 ETF 산업 평균 등락률 조회.
+    반환: { industry: { d1: 최신 세션 평균, d5: 창 전체 복리 누적 } }
     d5 = 일별 등가중 평균의 복리 누적 — 프론트 buildInsightData(market-insight.js)와 동일 기준.
+
+    kr_days를 주면 **시차 정렬**한다: 한국 D일 장은 직전 해외 세션에 반응하므로,
+    해외 창을 [한국 창 첫날 직전 세션 ~ 한국 창 마지막날 직전 세션]으로 맞춘다.
+    (연휴로 한국이 쉬는 동안의 해외 세션도 포함 — 한 한국 세션에 해외 2개가 매핑될 수 있다)
+    구: 양쪽 다 "최근 5거래일"을 그냥 겹쳐 비교 → 한국 창에만 당일이 들어가고 해외는
+        한 세션 뒤처진 채 비교돼, 같은 정보 구간이 아닌 것을 대조했다.
     """
     if not sb:
         return {}
@@ -151,7 +158,13 @@ def fetch_us_etf(target_date: str) -> dict:
         rows = res.data or []
         if not rows:
             return {}
-        last5 = sorted({r["base_date"] for r in rows})[-5:]
+        all_days = sorted({r["base_date"] for r in rows})
+        if kr_days:
+            prior = [d for d in all_days if d < kr_days[0]]
+            start = prior[-1] if prior else all_days[0]
+            last5 = [d for d in all_days if start <= d < kr_days[-1]] or all_days[-5:]
+        else:
+            last5 = all_days[-5:]
         result = {}
         for ind in KR_INDUSTRIES:
             tickers = USKR_MAP.get(ind, [])
@@ -225,10 +238,11 @@ def fetch_industry_trend(target_date: str, days: int = 5) -> dict:
 
         # 최근 5거래일 (오래된 -> 최신) — 복리 누적 순서 보장
         last5 = sorted(day_ind_chg.keys())[-5:]
-        result = {}
+        result = {"_days": last5}   # 해외 창 시차 정렬용 (fetch_us_etf가 참조)
         for ind in KR_INDUSTRIES:
             d1 = None
             cum = 100.0
+            cum_x = 100.0     # 최신일 제외 누적 — 5일 성과가 하루에서 나왔는지 판별용
             has_any = False
             for dt in last5:
                 vals = day_ind_chg[dt].get(ind, [])
@@ -239,8 +253,11 @@ def fetch_industry_trend(target_date: str, days: int = 5) -> dict:
                 has_any = True
                 if dt == last5[-1]:
                     d1 = avg
+                else:
+                    cum_x *= (1 + avg / 100)
             d5 = round(cum - 100, 2) if has_any else None
-            result[ind] = {"d1": d1, "d5": d5}
+            result[ind] = {"d1": d1, "d5": d5,
+                           "d5x": round(cum_x - 100, 2) if has_any else None}
         return result
     except Exception as e:
         log.warning(f"[fetch_industry_trend] {e}")
@@ -250,6 +267,16 @@ def fetch_industry_trend(target_date: str, days: int = 5) -> dict:
 # ════════════════════════════════════════════════════════════
 # 분석 로직
 # ════════════════════════════════════════════════════════════
+
+def _josa(word: str, with_batchim: str, without: str) -> str:
+    """받침 유무로 조사 선택 — '로봇이/반도체가', '로봇은/반도체는'."""
+    if not word:
+        return without
+    ch = word[-1]
+    if '가' <= ch <= '힣':
+        return with_batchim if (ord(ch) - 0xAC00) % 28 else without
+    return without
+
 
 def _fmt(v) -> str:
     if v is None:
@@ -323,21 +350,41 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
     )
     top_tv = [r["corp_name"] for r in tv_rows[:5]]
 
-    # ── US 크로스 신호 — 5일 누적 기준(단일일 노이즈 제거, 프론트 S5와 동일) ──
-    sync_up, lag_inds, decouple_risk, sync_down = [], [], [], []
+    # ── 해외 크로스 신호 — 5일 누적 기준(단일일 노이즈 제거, 프론트 S5와 동일) ──
+    # 창은 fetch_us_etf에서 시차 정렬됨(한국 D ↔ 직전 해외 세션).
+    # 최근 방향 가드: 5일은 엇갈려도 **한국이 이미 반응한 직전 해외 세션**이 같은 방향이면
+    # '엇갈림'이 아니라 따라잡기 초입일 수 있다 → turn_watch로 분리해 단정을 피한다.
+    sync_up, lag_inds, decouple_risk, sync_down, turn_watch = [], [], [], [], []
+    kr_only_down, kr_only_up = [], []
     for ind in KR_INDUSTRIES:
         us5 = (us_etf.get(ind) or {}).get("d5")
         kr5 = ind_trend.get(ind, {}).get("d5")
         if us5 is None or kr5 is None:
             continue
+        us1 = (us_etf.get(ind) or {}).get("d1")
+        kr1 = ind_trend.get(ind, {}).get("d1")
+        kr5x = ind_trend.get(ind, {}).get("d5x")
+        sig = {"ind": ind, "us": us5, "kr": kr5, "us1": us1, "kr1": kr1, "kr5x": kr5x}
         if us5 >= THR_S5 and kr5 <= -THR_S5:
-            lag_inds.append({"ind": ind, "us": us5, "kr": kr5})
+            if us1 is not None and kr1 is not None and us1 <= -THR_TURN and kr1 < 0:
+                turn_watch.append(dict(sig, dir="down"))   # 해외도 직전 세션 하락 → 후행 기대 약화
+            else:
+                lag_inds.append(sig)
         elif us5 <= -THR_S5 and kr5 >= THR_S5:
-            decouple_risk.append({"ind": ind, "us": us5, "kr": kr5})
+            if us1 is not None and kr1 is not None and us1 >= THR_TURN and kr1 > 0:
+                turn_watch.append(dict(sig, dir="up"))     # 해외도 직전 세션 반등 → 따라잡기 가능성
+            else:
+                decouple_risk.append(sig)
         elif us5 >= THR_S5 and kr5 >= THR_S5:
-            sync_up.append({"ind": ind, "us": us5, "kr": kr5})
+            sync_up.append(sig)
         elif us5 <= -THR_S5 and kr5 <= -THR_S5:
-            sync_down.append({"ind": ind, "us": us5, "kr": kr5})
+            sync_down.append(sig)
+        # 해외는 보합권인데 한국만 움직인 구간 — 시차 정렬 후 '동반'에서 빠지는 부분.
+        # 업종별로 나열하면 소음이라 아래에서 시장 단위로 묶어 한 줄로 보고한다.
+        elif kr5 <= -THR_S5:
+            kr_only_down.append(sig)
+        elif kr5 >= THR_S5:
+            kr_only_up.append(sig)
 
     # ── 공시 분석 ──
     from collections import Counter
@@ -375,14 +422,14 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
     defensive = kr_avg <= -2.0 or vix >= THR_VIX_HIGH
     key_points = []
     if lag_inds:
-        inds = " / ".join(f"{x['ind']}(미국 5일 {_fmt(x['us'])}→한국 5일 {_fmt(x['kr'])})" for x in lag_inds[:2])
-        if defensive:
-            key_points.append(f"후행 관찰 후보: {inds} — 급락 진정·수급 유입 확인 후 진입 검토")
-        else:
-            key_points.append(f"후행 선점 후보: {inds} — 수급 유입 시 진입 검토")
+        x = lag_inds[0]
+        key_points.append(
+            f"{x['ind']}: 해외가 먼저 올랐습니다 — 최근 5일 해외 {_fmt(x['us'])}, 한국 {_fmt(x['kr'])}. "
+            + ("급락이 진정되는지 먼저 확인할 구간입니다" if defensive
+               else "국내 수급이 따라붙는지 확인할 구간입니다"))
     if len(sync_up) >= 2:
         inds = " · ".join(x["ind"] for x in sync_up[:3])
-        key_points.append(f"미·한 5일 동반 강세: {inds} — " + ("반등 확인 후 재평가" if defensive else "추세 추종 검토"))
+        key_points.append(f"{inds}: 해외와 한국이 같이 오르고 있습니다 (최근 5일 동반 상승)")
     if hgpr_count >= 3:
         nm = " · ".join(hgpr_names[:2])
         key_points.append(f"52주 신고가 {hgpr_count}개 — {nm}{'등' if hgpr_count > 2 else ''}")
@@ -390,6 +437,11 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
         key_points.append(f"외국인 순매수 집중: {' · '.join(top_frgn[:2])}")
     if top_tv:
         key_points.append(f"거래대금 상위: {' · '.join(top_tv[:3])}")
+    if len(kr_only_up) >= 3:
+        inds = " · ".join(x["ind"] for x in kr_only_up[:3])
+        key_points.append(
+            f"🇰🇷 한국이 해외보다 강합니다 — {len(kr_only_up)}개 업종에서 해외는 보합권인데 "
+            f"한국만 최근 5일 상승 ({inds} 등)")
     if not key_points:
         key_points.append("뚜렷한 기회 신호 없음")
 
@@ -405,10 +457,21 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
         risk_factors.append(f"⚠️ VIX {vix:.0f} 주의 구간")
     if decouple_risk:
         r = decouple_risk[0]
-        risk_factors.append(f"⚡ 디커플링: {r['ind']}(한국 5일 {_fmt(r['kr'])} / 미국 5일 {_fmt(r['us'])})")
+        # 5일 성과가 사실상 최근 하루에서 나온 경우 — 추세로 오해하지 않도록 명시
+        onedy = ""
+        if r.get("kr5x") is not None and r.get("kr1") is not None and r["kr5x"] <= 0:
+            onedy = f" 5일 상승분은 대부분 최근 하루({_fmt(r['kr1'])})에서 나왔습니다."
+        risk_factors.append(
+            f"⚡ {r['ind']}{_josa(r['ind'], '은', '는')} 한국만 올랐습니다 — "
+            f"최근 5일 한국 {_fmt(r['kr'])}, 해외 {_fmt(r['us'])}.{onedy} 되돌림 위험을 함께 보세요")
     if sync_down:
         inds = " · ".join(x["ind"] for x in sync_down[:3])
-        risk_factors.append(f"🔻 미·한 5일 동반 약세: {inds}")
+        risk_factors.append(f"🔻 {inds}: 해외와 한국이 같이 밀리고 있습니다 (최근 5일 동반 하락)")
+    if len(kr_only_down) >= 3:
+        inds = " · ".join(x["ind"] for x in kr_only_down[:3])
+        risk_factors.append(
+            f"🇰🇷 한국이 해외보다 부진합니다 — {len(kr_only_down)}개 업종에서 해외는 보합권인데 "
+            f"한국만 최근 5일 하락 ({inds} 등)")
     if us10y >= THR_US10Y:
         risk_factors.append(f"📊 미 10년 금리 {us10y:.3f}% — 고금리 부담")
     if usd_krw and usd_krw >= 1450:
@@ -418,6 +481,16 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
 
     # ④ 확인할 이벤트
     watch_events = []
+    # 5일은 엇갈렸지만 직전 해외 세션이 같은 방향 — 단정 대신 "하루 더 확인"
+    for t in turn_watch[:2]:
+        if t["dir"] == "up":
+            watch_events.append(
+                f"🔄 {t['ind']}: 최근 5일은 한국 {_fmt(t['kr'])} / 해외 {_fmt(t['us'])}로 엇갈렸지만, "
+                f"직전 해외 세션이 {_fmt(t['us1'])}였습니다 — 따라잡기인지 하루 더 확인")
+        else:
+            watch_events.append(
+                f"🔄 {t['ind']}: 해외 5일 {_fmt(t['us'])}이지만 직전 세션은 {_fmt(t['us1'])}였습니다 — "
+                f"국내가 따라 오를 근거가 약해졌는지 확인")
     if disc_count > 0:
         cats = " · ".join(top_cats)
         watch_events.append(f"📋 오늘 공시 {disc_count}건 ({cats})")
@@ -431,24 +504,41 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
 
     # ⑤ 한 줄 요약 — 급락일이 최우선 (레짐 게이트와 동일 모순 방지)
     if kr_avg <= -2.0:
-        strategy = "당일 급락 — 저가 매수 자제, 후속 하락·반대매매 소화 확인 우선"
+        strategy = "당일 급락, 저가 매수를 자제하고 후속 하락·반대매매 소화를 먼저 확인"
     elif vix >= THR_VIX_HIGH:
-        strategy = f"VIX {vix:.0f} 공포 구간 — 추격 금지, 현금 비중 점검"
+        strategy = f"VIX {vix:.0f} 공포 구간, 추격을 멈추고 현금 비중 점검"
     elif market_regime == "risk-off":
-        strategy = "리스크오프 — 방어 포지션 유지, 낙폭 과대 관찰"
+        strategy = "위험 회피 국면, 방어적으로 보며 낙폭 과대 업종 관찰"
     elif lag_inds:
-        inds = "·".join(x["ind"] for x in lag_inds[:2])
-        strategy = f"후행 업종({inds}) 선점 기회 점검"
+        x = lag_inds[0]
+        strategy = (f"{x['ind']}{_josa(x['ind'], '은', '는')} 해외가 먼저 올랐습니다"
+                    f"(해외 5일 {_fmt(x['us'])}), 국내 수급이 따라붙는지 확인")
     elif len(sync_up) >= 2:
         inds = "·".join(x["ind"] for x in sync_up[:2])
-        strategy = f"미·한 동반 강세 — 강세 업종({inds}) 집중 대응"
+        strategy = f"해외와 한국이 같이 오르는 중입니다({inds})"
     elif decouple_risk:
-        inds = "·".join(x["ind"] for x in decouple_risk[:2])
-        strategy = f"디커플링({inds}) 차익 실현 검토"
+        r = decouple_risk[0]
+        strategy = (f"{r['ind']}{_josa(r['ind'], '은', '는')} 한국만 올랐습니다"
+                    f"(해외 5일 {_fmt(r['us'])}), 되돌림 위험 점검")
+    elif turn_watch:
+        t = turn_watch[0]
+        strategy = ((f"{t['ind']}{_josa(t['ind'], '은', '는')} 해외와 5일 방향이 엇갈렸지만 "
+                     f"직전 해외 세션이 {_fmt(t['us1'])}, 하루 더 확인")
+                    if t["dir"] == "up" else
+                    (f"{t['ind']} 해외 반등세가 꺾였습니다({_fmt(t['us1'])}), 국내 추격 근거 약화"))
     else:
-        strategy = "혼조 국면 — 추격보다 관찰, 후행 업종 선별 대응"
+        strategy = "해외와 뚜렷한 방향 차이는 없습니다, 업종별 선별 대응"
 
-    top_ind_str = f", {kr_sorted[0][0]} 주도" if kr_sorted else ""
+    # 주도 업종은 '당일', 크로스 신호는 '5일' — 같은 문장에서 기간이 달라
+    # 모순처럼 읽히던 문제를 '오늘은'+수치 명시로 해소.
+    # 급락일엔 1등도 마이너스라 '주도'가 오독을 부른다 → '버팀'/생략으로 구분.
+    top_ind_str = ""
+    if kr_sorted:
+        _ti, _tc = kr_sorted[0]
+        if _tc > 0 and kr_avg > -2.0:
+            top_ind_str = f" · 오늘은 {_ti}({_fmt(_tc)}){_josa(_ti, '이', '가')} 주도"
+        elif _tc > 0:
+            top_ind_str = f" · {_ti}({_fmt(_tc)})만 버팀"
     one_line_summary = f"코스피 {_fmt(kospi_chg)} {kr_label}{top_ind_str} — {strategy}"
 
     return {
@@ -513,8 +603,8 @@ def run(target_date: Optional[str] = None):
         return False
 
     market_rows = fetch_market_summary(target_date)
-    us_etf      = fetch_us_etf(target_date)
     ind_trend   = fetch_industry_trend(target_date)
+    us_etf      = fetch_us_etf(target_date, kr_days=ind_trend.get("_days"))
     discs       = fetch_disclosures(target_date)
 
     log.info(
