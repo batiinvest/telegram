@@ -190,7 +190,18 @@ def parse_contract(kv: dict) -> list:
         lines.append(f'🏢 상대방: {party_clean}{region_str}')
 
     # 계약금액 + 매출비중 — '정정전/후' 복합값(금액 비율)에서 각각 분리
-    amount = _get(kv, '계약금액(원)', '계약금액', '공급금액', '수주금액', '거래금액')
+    # ※ '계약금액 총액' 최우선: 조건부 계약 서식은 [확정 계약금액 0 / 조건부 계약금액 N /
+    #    계약금액 총액 N] 구조라, '계약금액' 부분일치가 '확정 계약금액'(0)에 먼저 걸려
+    #    "0원"으로 오표기되던 버그(2026-07-22 스트라드비젼 실사례).
+    amount = _get(kv, '계약금액 총액', '계약금액(원)', '계약금액',
+                  '공급금액', '수주금액', '거래금액')
+    # 조건부 계약 여부 — 확정금액이 0이고 조건부 금액이 있으면 미확정 리스크 고지
+    _fixed_amt = _get(kv, '확정 계약금액')
+    _cond_amt  = _get(kv, '조건부 계약금액')
+    cond_note = (' · 조건부계약'
+                 if _cond_amt and _fixed_amt
+                 and re.fullmatch(r'0+', _fixed_amt.replace(',', '').strip() or 'x')
+                 else '')
     ratio  = _get(kv, '매출액대비(%)', '최근매출액대비', '매출액 대비')
     if amount:
         # 복합값 "523,270,000,000 6.02" → 앞부분(금액)만 추출
@@ -212,7 +223,7 @@ def parse_contract(kv: dict) -> list:
             m_ratio = re.search(r'\s+([\d.]+)$', amount.strip())
             ratio_clean = (m_ratio.group(1) + '%') if m_ratio else ''
         ratio_str = f' (매출대비 {ratio_clean.rstrip("%")}%)' if ratio_clean else ''
-        lines.append(f'💰 계약금액: {_fmt_amount(amt_clean)}원{ratio_str}')
+        lines.append(f'💰 계약금액: {_fmt_amount(amt_clean)}원{ratio_str}{cond_note}')
 
     # 계약기간 — 각주 필터링, 날짜만 추출
     # 기재정정 복합값 "2025-04-15 2029-04-30" 대응: 날짜 두 개 모두 추출

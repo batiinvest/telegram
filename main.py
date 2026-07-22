@@ -174,6 +174,9 @@ class DartRoutingBot:
 
     def _build_msg(self, corp_name, report_nm, rcept_no, stock_code, prefix="", detail=""):
         emoji       = self.get_emoji(report_nm)
+        # 배지와 같은 이모지면 생략 ("🚨[긴급] 🚨[기업명]" 중복 방지)
+        if emoji and emoji in prefix:
+            emoji = ""
         link        = f"http://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
         target_code = COMPANY_CODES.get(corp_name, stock_code)
         price_info  = stock_api.get_stock_price(target_code)
@@ -185,8 +188,9 @@ class DartRoutingBot:
         detail_block = f"\n\n{detail_esc}" if detail_esc else ""
         # DART report_nm에 과도한 공백이 포함되는 경우 정규화
         report_nm_clean = html.escape(re.sub(r'\s+', ' ', report_nm).strip(), quote=False)
+        head = f"{prefix}{emoji} " if emoji else prefix
         return (
-            f"{prefix}{emoji} <b>[{corp_esc}]</b>\n"
+            f"{head}<b>[{corp_esc}]</b>\n"
             f"{stock_msg}{report_nm_clean}{detail_block}\n"
             f"🔗 <a href='{link}'>공시 원문</a> | "
             f"📈 <a href='https://finance.naver.com/item/main.nhn?code={target_code}'>네이버</a>"
@@ -317,12 +321,18 @@ class DartRoutingBot:
 
         # ── 메시지 생성 ──
         is_market_wide = not is_my_stock and is_global_important
-        prefix = "🔥 <b>[시장속보]</b> " if is_market_wide else ""
-        # 등급 배지 — 긴급/주요 공시가 일반 공시와 한눈에 구분되도록
-        if level == 'urgent':
-            prefix += "🚨 <b>[긴급]</b> "
+        # 배지는 하나만 — 시장속보와 등급을 겹쳐 붙이면 제목 앞이
+        # "🔥[시장속보] 📌[주요] 📈" 3중이 돼 가독성이 떨어짐.
+        # 시장속보 자체가 '전체 중요 공시'라 주요 배지는 흡수하고, 긴급만 병기.
+        if is_market_wide:
+            prefix = ("🚨 <b>[속보·긴급]</b> " if level == 'urgent'
+                      else "🔥 <b>[시장속보]</b> ")
+        elif level == 'urgent':
+            prefix = "🚨 <b>[긴급]</b> "
         elif level == 'major':
-            prefix += "📌 <b>[주요]</b> "
+            prefix = "📌 <b>[주요]</b> "
+        else:
+            prefix = ""
         detail = get_disclosure_detail(rcept_no, report_nm)
         if audit_note:
             detail = f"{audit_note}\n{detail}".strip()
