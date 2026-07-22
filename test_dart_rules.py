@@ -117,6 +117,55 @@ eq(targets("major", "[기재정정]투자판단관련주요경영사항(임상�
 
 
 # ══════════════════════════════════════════════
+#  3. 운영값(app_config) 드리프트 점검
+# ══════════════════════════════════════════════
+# 위 케이스는 모두 '코드 기본값' 기준이다. 실운영은 app_config 값이 코드 기본값을
+# 덮어쓰므로, 둘이 어긋나면 테스트는 통과해도 운영 동작은 다르다.
+#   실제 사고(2026-07-22): app_config dart_urgent에서 횡령·배임이 빠져 있어
+#   테스트는 "횡령ㆍ배임=urgent" 통과, 운영은 normal로 분류 → 메인 미발송.
+# 코드 기본 키워드가 운영값에서 빠졌으면 실패 처리한다. 의도적으로 뺀 경우라면
+# 코드 기본값에서도 제거해 단일 출처를 유지할 것.
+# DB 접근 불가 환경에서는 조용히 건너뜀.
+import dart_rules as _R
+
+_DEFAULTS = {
+    'dart_urgent':     list(_R.URGENT_KEYWORDS),
+    'dart_major':      list(_R.MAJOR_KEYWORDS),
+    'dart_skip':       list(_R.SKIP_FOR_BROADCAST),
+    'dart_major_main': list(_R.MAIN_MAJOR_KEYWORDS),
+}
+_LIVE = None
+try:
+    from supabase_bridge import bridge as _b
+    if _b._get_client():
+        _R.load_dart_filters()
+        _LIVE = {
+            'dart_urgent':     _R.URGENT_KEYWORDS,
+            'dart_major':      _R.MAJOR_KEYWORDS,
+            'dart_skip':       _R.SKIP_FOR_BROADCAST,
+            'dart_major_main': _R.MAIN_MAJOR_KEYWORDS,
+        }
+except Exception as e:
+    print(f"ℹ️  app_config 미접근 — 드리프트 점검 생략 ({type(e).__name__})")
+
+if _LIVE is not None:
+    # 커버리지 판정: 분류는 부분일치(k in report_nm)라, 운영값에 더 짧은 키워드가
+    # 있으면 긴 코드 기본값은 이미 커버됨(예: 운영 '소유상황보고' ⊃ 코드
+    # '임원ㆍ주요주주특정증권등소유상황보고서') → 누락으로 보지 않는다.
+    def _covered(word: str, live: list) -> bool:
+        return any(l in word for l in live)
+
+    drift = {k: [w for w in _DEFAULTS[k] if not _covered(w, _LIVE[k])]
+             for k in _DEFAULTS}
+    drift = {k: v for k, v in drift.items() if v}
+    if drift:
+        for k, miss in drift.items():
+            FAIL.append(f"app_config '{k}'에 코드 기본 키워드 누락: {', '.join(miss)}")
+    else:
+        print("✅ app_config 드리프트 없음 — 코드 기본 키워드 전부 운영값에 포함")
+
+
+# ══════════════════════════════════════════════
 if FAIL:
     print(f"❌ FAIL {len(FAIL)}건")
     for f in FAIL:
