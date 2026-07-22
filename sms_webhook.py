@@ -51,7 +51,8 @@ try:
     _FLASK_OK = True
 except ImportError:
     _FLASK_OK = False
-    log.warning("Flask 없음 — pip install flask")
+    # flask는 선택 의존 — SMS 입금 자동처리를 안 쓰면 미설치가 정상 상태다.
+    log.info("SMS 웹훅 비활성 — flask 미설치 (현재 미사용)")
 
 try:
     from sms_parser import parse_deposit
@@ -318,7 +319,7 @@ def create_app() -> 'Flask':
 def run_server(host: str = '0.0.0.0', port: int = PORT):
     """Flask 서버를 시작합니다 (블로킹)."""
     if not _FLASK_OK:
-        log.error("Flask 없음 — pip install flask 후 재시작")
+        log.info("SMS 웹훅 비활성 — flask 미설치 (현재 미사용)")
         return
     app = create_app()
     log.info(f"🌐 [SMS 웹훅] 서버 시작 — http://{host}:{port}/sms")

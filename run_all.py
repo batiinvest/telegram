@@ -232,9 +232,12 @@ def main():
     t_scheduler = threading.Thread(target=run_scheduler,   name="Thread-Sched", daemon=True)
 
     # SMS 웹훅 서버 (입금 자동 처리)
-    if _SMS_WH_OK:
+    if _SMS_WH_OK and getattr(_sms_wh, '_FLASK_OK', False):
         _sms_wh.start_thread()
         logging.info("🌐 [SMS] 웹훅 서버 기동 (포트 5001)")
+    else:
+        # 기동 로그만 찍고 스레드는 즉시 죽던 구간 — 미사용이면 스폰 자체를 생략
+        logging.info("⏸ [SMS] 웹훅 비활성 (flask 미설치 — 현재 미사용)")
 
     # 봇 명령어 수신은 realtime_alert.py의 telegram_listener에서 처리
     # (getUpdates 중복 호출 방지 — bot_commands._handle을 직접 호출하는 방식으로 통합)
