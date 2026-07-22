@@ -1605,7 +1605,7 @@ def get_market_judgment_summary(sb_client, market_date: str = None) -> str:
     today = market_date or datetime.now().strftime('%Y-%m-%d')
     try:
         res = (sb_client.table('market_investment_summary')
-               .select('market_date,one_line_summary,risk_factors')
+               .select('market_date,one_line_summary,watch_events')
                .eq('market_type', 'KR').eq('market_date', today).limit(1).execute())
         row = (res.data or [None])[0]
     except Exception as e:
@@ -1622,11 +1622,13 @@ def get_market_judgment_summary(sb_client, market_date: str = None) -> str:
     if not summary:
         return ""
     lines = ["🧭 <b>[오늘의 판단]</b>", summary]
-    risks = _summary_list(row.get('risk_factors'))[:3]
-    if risks:
+    # 마감(18:30) 시점엔 '지금 팔아라'식 리스크 고지가 이미 늦다 — 밤사이~내일 아침에
+    # 유효한 것만 체크포인트로. 리스크 배지는 상시 열람하는 웹 카드(risk_factors)가 담당.
+    checks = _summary_list(row.get('watch_events'))[:3]
+    if checks:
         lines.append("")
-        lines.append("⚠️ <b>리스크</b>")
-        lines += [_esc(r) for r in risks]
+        lines.append("🔎 <b>내일 체크포인트</b>")
+        lines += [_esc(c) for c in checks]
     return "\n".join(lines)
 
 

@@ -102,14 +102,20 @@ def refresh_industry_config():
 # ════════════════════════════════════════════════════════════
 
 def fetch_macro(target_date: str) -> dict:
-    """macro_data 테이블에서 최신 1건 조회."""
+    """macro_data 테이블에서 최신 1건 조회.
+    금리·환율은 '수준'이 아니라 '변화'일 때만 체크포인트에 올리므로 직전 행도 함께 담는다
+    (_prev 키). 실측상 환율 1450원↑은 31일 연속, 금리 4.5%↑는 15거래일 연속이라
+    수준 기준으로는 매일 같은 문장이 나갔다."""
     if not sb:
         return {}
     try:
         res = sb.table("macro_data").select("*") \
             .lte("base_date", target_date) \
-            .order("base_date", desc=True).limit(1).execute()
-        return (res.data or [{}])[0]
+            .order("base_date", desc=True).limit(2).execute()
+        rows = res.data or [{}]
+        cur = rows[0]
+        cur["_prev"] = rows[1] if len(rows) > 1 else {}
+        return cur
     except Exception as e:
         log.warning(f"[fetch_macro] {e}")
         return {}
@@ -479,8 +485,15 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
     if not risk_factors:
         risk_factors.append("✅ 현재 주요 리스크 신호 없음")
 
-    # ④ 확인할 이벤트
+    # ④ 내일 체크포인트 (마감 브리핑에 나가는 섹션)
+    # 마감 시점엔 '지금 팔아라'가 아니라 '내일 뭘 볼까'가 유효하다.
+    # 오늘로 끝나는 회고성 항목(공시 건수)과 매일 같은 매크로 수준은 넣지 않는다.
     watch_events = []
+    # 내일 아침까지 영향이 이어지는 리스크는 맨 앞
+    if kr_avg <= -2.0:
+        watch_events.append("🚨 오늘 급락 — 내일 반대매매 물량·후속 하락 여부부터 확인")
+    if vix >= THR_VIX_HIGH:
+        watch_events.append(f"🚨 VIX {vix:.0f} 공포 구간 — 변동성이 이어지는지 확인")
     # 5일은 엇갈렸지만 직전 해외 세션이 같은 방향 — 단정 대신 "하루 더 확인"
     for t in turn_watch[:2]:
         if t["dir"] == "up":
@@ -491,16 +504,22 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
             watch_events.append(
                 f"🔄 {t['ind']}: 해외 5일 {_fmt(t['us'])}이지만 직전 세션은 {_fmt(t['us1'])}였습니다 — "
                 f"국내가 따라 오를 근거가 약해졌는지 확인")
-    if disc_count > 0:
-        cats = " · ".join(top_cats)
-        watch_events.append(f"📋 오늘 공시 {disc_count}건 ({cats})")
-    if sp500_fut_chg is not None:
-        dir_str = "상승" if sp500_fut_chg >= 0.3 else ("하락" if sp500_fut_chg <= -0.3 else "보합")
-        watch_events.append(f"🇺🇸 S&P500 선물 {_fmt(sp500_fut_chg)} {dir_str}")
-    if vix:
-        watch_events.append(f"📊 VIX {vix:.1f}, 미 10년 금리 {us10y:.3f}%")
+    # 보합(±0.3% 이내)은 체크포인트가 아니다 — 방향이 있을 때만
+    if sp500_fut_chg is not None and abs(sp500_fut_chg) >= 0.3:
+        dir_str = "상승" if sp500_fut_chg > 0 else "하락"
+        watch_events.append(f"🇺🇸 오늘 밤 S&P500 선물 {_fmt(sp500_fut_chg)} {dir_str} — 내일 갭 방향 참고")
+    # 매크로는 '수준'이 아니라 '변화'일 때만 — 매일 같은 값은 배경이지 체크포인트가 아니다
+    _prev = macro.get("_prev") or {}
+    _p10y = _prev.get("us10y")
+    if us10y and _p10y and abs(us10y - _p10y) >= 0.10:
+        watch_events.append(
+            f"📊 미 10년 금리 {us10y:.3f}% ({'+' if us10y > _p10y else ''}{us10y - _p10y:.3f}%p) — 하루 새 큰 폭 변동")
+    _pfx = _prev.get("usd_krw")
+    if usd_krw and _pfx and abs(usd_krw - _pfx) >= 15:
+        watch_events.append(
+            f"💱 환율 {usd_krw:,.0f}원 ({'+' if usd_krw > _pfx else ''}{usd_krw - _pfx:,.0f}원) — 하루 새 큰 폭 변동")
     if not watch_events:
-        watch_events.append("확인 이벤트 없음")
+        watch_events.append("✅ 내일 특별히 챙길 신호는 없습니다")
 
     # ⑤ 한 줄 요약 — 급락일이 최우선 (레짐 게이트와 동일 모순 방지)
     if kr_avg <= -2.0:
