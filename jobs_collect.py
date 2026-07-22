@@ -952,8 +952,9 @@ def job_collect_investor_market():
 
 @_job(holiday=True)
 def job_collect_credit_balance():
-    """평일 오전 (10:30) — KOFIA 신용공여 잔고(신용거래융자 등) 수집.
-    전 영업일분이 다음날 오전 발표되므로 14일 윈도 멱등 upsert."""
+    """평일 저녁 (19:00, +10:30 보정) — KOFIA 신용공여 잔고(신용거래융자 등) 수집.
+    직전 영업일분이 당일 오후 발표되므로(2026-07-22 실측) 저녁 실행이 본 수집,
+    발표가 밀린 날은 다음날 10:30 보정 실행이 회수한다. 14일 윈도 멱등 upsert."""
     try:
         logging.info("💳 [신용잔고] collect_credit_balance 실행 시작")
         import collect_credit_balance
