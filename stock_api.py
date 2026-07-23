@@ -468,7 +468,8 @@ def get_stock_detail(code: str, name: str = None, flow_map: dict = None) -> Opti
             )
 
         header = f"<b>[{name}]</b>\n" if name else ""
-        _flow = flow_map.get(code) if flow_map else None
+        _fe = flow_map.get(code) if flow_map else None
+        _flow = _fe.get("text") if _fe else None
         flow_line = f"💰 <b>오늘 수급:</b> {_flow} (잠정)\n" if _flow else ""
 
         return (
@@ -1276,10 +1277,10 @@ def get_industry_theme_ranking(industry_name: str, shared_prices: dict = None,
             limit_tag = " 상한가" if _sign == "1" else " 하한가" if _sign == "5" else ""
             msg += f"  └ {s_name} {s_icon}{fmt_change_pct(s_rate)}{limit_tag} ({cap_str})\n"
             # 확정 수급 — flow_map은 마감 브리핑에서만 전달(장중엔 미확정이라 생략).
-            # 급등을 외국인·기관 중 누가 사고 파는지가 산업방 핵심 정보.
-            _fl = flow_map.get(stock["code"]) if flow_map else None
-            if _fl:
-                msg += f"     💰 {_fl}\n"
+            # 외국인·기관 중 한쪽이라도 ±10억 이상일 때만 표시(소액 노이즈 제거).
+            _fe = flow_map.get(stock["code"]) if flow_map else None
+            if _fe and (abs(_fe["f"]) >= 10 or abs(_fe["i"]) >= 10):
+                msg += f"     💰 {_fe['text']}\n"
             
         msg += "\n"
     msg += f"════════════"
@@ -1515,7 +1516,8 @@ def get_market_breadth(sb_client) -> str:
 
 
 def get_flow_map(sb_client) -> dict:
-    """관리종목 당일(최신) 외국인·기관 순매수 한 줄 {code: '외국인 +120억 · 기관 -80억'} — 종목상세용(잠정)."""
+    """관리종목 당일(최신) 외국인·기관 순매수 {code: {"text": '외국인 +120억 · 기관 -80억',
+    "f": 120, "i": -80}} — 종목상세·산업 테마용(단위=억원). text=표시용, f/i=임계 필터용."""
     from db_utils import fetch_all_pages
     try:
         dres = sb_client.table('market_data').select('base_date') \
@@ -1534,7 +1536,8 @@ def get_flow_map(sb_client) -> dict:
         price = r.get('price') or 0
         f = (r.get('foreign_net_buy') or 0) * price // 100_000_000
         i = (r.get('institution_net_buy') or 0) * price // 100_000_000
-        out[r['stock_code']] = f"외국인 {'+' if f >= 0 else ''}{f:,}억 · 기관 {'+' if i >= 0 else ''}{i:,}억"
+        text = f"외국인 {'+' if f >= 0 else ''}{f:,}억 · 기관 {'+' if i >= 0 else ''}{i:,}억"
+        out[r['stock_code']] = {"text": text, "f": f, "i": i}
     return out
 
 
