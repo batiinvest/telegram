@@ -1971,11 +1971,20 @@ def parse_share_pledge(kv: dict) -> list:
         lines.append(f'🏢 담보제공자: {provider}')
 
     # 보유 지분
-    shares = _get(kv, '소유 주식 수(주)', '소유주식수(주)')
-    ratio  = _get(kv, '지분율(%)', '지분율')
+    # 다중섹션 폼('담보권 전부 실행시')에서는 standalone 지분율이 잔여지분 비율과
+    # 뒤섞여 오표기됨(현재 보유주식수에 실행후 지분율이 붙어 최대주주가 0.13%인 듯).
+    # → 이 경우 지분율 대신 담보 실행시 잔여주식을 표시(최대주주변경 리스크가 핵심).
+    shares   = _get(kv, '소유 주식 수(주)', '소유주식수(주)')
+    exec_raw = _get(kv, '담보권 전부 실행시')
+    exec_m   = re.search(r'[\d,]{3,}', exec_raw) if exec_raw else None
     if shares:
-        ratio_str = f' ({ratio}%)' if ratio else ''
-        lines.append(f'📊 보유지분: {int(shares.replace(",", "")):,}주{ratio_str}')
+        if exec_m:
+            lines.append(f'📊 보유주식: {int(shares.replace(",", "")):,}주'
+                         f' → 담보실행시 {int(exec_m.group(0).replace(",", "")):,}주')
+        else:
+            ratio = _get(kv, '지분율(%)', '지분율')
+            ratio_str = f' ({ratio}%)' if ratio else ''
+            lines.append(f'📊 보유지분: {int(shares.replace(",", "")):,}주{ratio_str}')
 
     # 채무금액 / 담보설정금액
     debt = _get(kv, '2. 채무(차입)금액 총액(원)', '채무(차입)금액 총액(원)', '채무금액')
@@ -1995,9 +2004,19 @@ def parse_share_pledge(kv: dict) -> list:
     if kind:
         lines.append(f'📋 담보종류: {kind}')
 
-    # 담보제공기간
+    # 담보제공기간 — '시작일'/'종료일' 키가 헤더 텍스트를 값으로 갖는 경우가 있어
+    # (다중담보 표: '시작일' => '종료일') 날짜 패턴 값만 채택. 실패 시 KV의
+    # 날짜쌍 행('2026-07-15' => '2027-07-15')에서 첫 쌍 폴백.
+    _DATE = re.compile(r'\d{4}-\d{2}-\d{2}')
     start = _get(kv, '시작일', '담보제공기간시작일')
     end   = _get(kv, '종료일', '담보제공기간종료일')
+    start = start if start and _DATE.search(start) else None
+    end   = end   if end   and _DATE.search(end)   else None
+    if not (start and end):
+        for k, v in kv.items():
+            if _DATE.fullmatch(k.strip()) and v and _DATE.fullmatch(v.strip()):
+                start, end = start or k.strip(), v.strip()
+                break
     if start and end:
         lines.append(f'📅 담보기간: {start} ~ {end}')
     elif start or end:
@@ -2524,6 +2543,9 @@ _PARSER_MAP = [
     (['감자완료'],                             parse_capital_reduction_done),
     (['매출액또는손익구조', '손익구조30'],      parse_earnings_change),
     (['권리락'],                             parse_ex_rights),
+    # 주식담보제공은 최대주주변경보다 먼저 — '최대주주변경을수반하는주식담보제공…'
+    # 제목이 최대주주변경 파서(변경전/후 최대주주 값 없음→빈 결과)로 새던 문제.
+    (['주식담보제공'],                         parse_share_pledge),
     (['최대주주변경'],                        parse_major_shareholder_change),
     (['주주명부폐쇄', '기준일설정'],           parse_record_date),
     (['전환청구권', '신주인수권', '교환청구권행사'], parse_rights_exercise),
@@ -2545,7 +2567,7 @@ _PARSER_MAP = [
     (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
     (['대량보유상황보고서'],                      parse_large_holding_report),
     (['공개매수결과보고서', '공개매수청약'],       parse_tender_offer_result),
-    (['주식담보제공'],                             parse_share_pledge),
+    # (['주식담보제공'], …) 는 위 최대주주변경 앞으로 이동함
 ]
 
 # 상세 파싱 불필요 공시 유형 — 헤더만 표시 (parse_all_fields fallback 방지)
