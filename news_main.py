@@ -20,7 +20,6 @@ import hashlib
 from email.utils import parsedate_to_datetime
 from typing import Set, Dict, List, Tuple
 from collections import deque
-from difflib import SequenceMatcher
 
 from managers import market_timer, HistoryManager, get_session
 import stock_api
@@ -38,25 +37,33 @@ except Exception:
     _BRIDGE_OK = False
 
 
+# 중복 판정 유사도 임계 (어절+문자 bigram 자카드). app_config 'news_dup_similarity'로 조정 가능.
+DUP_SIM_THRESHOLD = 0.45
+# 이벤트키 중복은 제목이 이 정도는 겹쳐야 인정 — 순수 키워드 충돌(예: ETF'상장' vs ADR'상장') 오탐 방지. 고정.
+DUP_EVENT_GATE = 0.30
+
+
 def _load_news_filters():
     """
     app_config에서 스팸패턴/실질보도 키워드 로드.
     DB에 없는 기본값은 최초 1회 시드 후 로드.
     """
-    global SPAM_PATTERNS, _SPAM_RE, MEANINGFUL_KEYWORDS, LOW_TRUST_SOURCES
+    global SPAM_PATTERNS, _SPAM_RE, MEANINGFUL_KEYWORDS, LOW_TRUST_SOURCES, DUP_SIM_THRESHOLD
     if not _BRIDGE_OK:
         return
     _bridge.seed_defaults({
         "news_spam_patterns":       "\n".join(SPAM_PATTERNS),
         "news_meaningful_keywords": ",".join(MEANINGFUL_KEYWORDS),
         "news_low_trust_sources":   ",".join(LOW_TRUST_SOURCES),
+        "news_dup_similarity":      str(DUP_SIM_THRESHOLD),
     })
     try:
         client = _bridge._get_client()
         if not client:
             return
         res = client.table('app_config').select('key,value').in_(
-            'key', ['news_spam_patterns', 'news_meaningful_keywords', 'news_low_trust_sources']
+            'key', ['news_spam_patterns', 'news_meaningful_keywords',
+                    'news_low_trust_sources', 'news_dup_similarity']
         ).execute()
         cfg = {r['key']: r['value'] for r in (res.data or [])}
 
@@ -78,6 +85,15 @@ def _load_news_filters():
             if sources:
                 LOW_TRUST_SOURCES = sources
                 logging.info(f"✅ [뉴스봇] 신뢰도 낮은 출처 {len(LOW_TRUST_SOURCES)}개 DB에서 로드")
+
+        if cfg.get('news_dup_similarity'):
+            try:
+                v = float(cfg['news_dup_similarity'])
+                if 0 < v <= 1:
+                    DUP_SIM_THRESHOLD = v
+                    logging.info(f"✅ [뉴스봇] 중복 유사도 임계 {DUP_SIM_THRESHOLD} DB에서 로드")
+            except (TypeError, ValueError):
+                pass
     except Exception as e:
         logging.warning(f"⚠️ [뉴스봇] 필터 키워드 DB 로드 실패 (기본값 사용): {e}")
 
@@ -178,13 +194,14 @@ class NaverNewsBot:
         self.base_url = "https://openapi.naver.com/v1/search/news.json"
         self.history  = HistoryManager("sent_news.txt", max_len=3000)
 
-        # 중복 감지용 메모리: {정규화된_제목_해시: 발송시각}
-        self._title_cache: Dict[str, tuple] = {}   # {hash: (정규화제목, 발송시각)}
+        # 중복 감지용 메모리 — 종목별 분리. {종목명: [(제목해시, 정규화제목, 발송시각, 시그니처집합)]}
+        # (구: 전 종목 공통 dict + 최근 200개 슬라이스 → 발송량 많은 종목 이력이 희석됐다)
+        self._title_cache: Dict[str, list] = {}
         self._title_cache_ttl = datetime.timedelta(hours=24)  # 24시간 내 동일 제목 중복
-        self._title_sim_threshold = 0.75  # 제목 유사도 중복 임계 (SequenceMatcher ratio)
 
-        # 이벤트 기반 중복: {종목명+이벤트키: 발송시각}
-        self._event_cache: Dict[str, datetime.datetime] = {}
+        # 이벤트 기반 중복: {종목명+이벤트키: (발송시각, 시그니처집합)}
+        # 시그니처를 함께 보관 — 같은 이벤트 키라도 제목이 최소한 겹칠 때만 중복 처리(순수 키워드 충돌 방지)
+        self._event_cache: Dict[str, tuple] = {}
         self._event_cache_ttl = datetime.timedelta(hours=6)  # 같은 이벤트 6시간 내 재발송 방지
 
         self._send_retry: Dict[str, int] = {}  # link → 전채널 발송 실패 재시도 횟수
@@ -203,6 +220,9 @@ class NaverNewsBot:
 
         # DB에서 필터 키워드 로드 (코드 기본값 덮어쓰기)
         _load_news_filters()
+
+        # 봇 재시작에도 중복 캐시가 유지되도록 최근 24h 발송이력을 notice_history에서 복원
+        self._rehydrate_cache()
 
     def _update_session_headers(self):
         self.session.headers.update({
@@ -273,16 +293,36 @@ class NaverNewsBot:
     def _title_hash(self, title: str) -> str:
         return hashlib.md5(self._normalize_title(title).encode()).hexdigest()
 
+    def _sig(self, norm_title: str, company: str) -> set:
+        """
+        유사도용 시그니처 — 종목명을 제외한 어절 + 각 어절의 문자 2-gram 집합.
+        SequenceMatcher(문자열 정렬)보다 한국어 어순 뒤바뀜·조사 차이에 강하다.
+        """
+        words = [w for w in norm_title.split() if w and w != company.lower()]
+        s = set(words)
+        for w in words:
+            for i in range(len(w) - 1):
+                s.add(w[i:i+2])
+        return s
+
+    @staticmethod
+    def _jaccard(a: set, b: set) -> float:
+        return len(a & b) / len(a | b) if a and b else 0.0
+
     # ──────────────────────────────────────────
     #  4. 이벤트 키 추출 (같은 이벤트 반복 방지)
     # ──────────────────────────────────────────
     def _extract_event_key(self, company: str, title: str) -> str:
         """
         제목에서 핵심 이벤트 키워드를 추출해 이벤트 키 생성.
+        - 공백 제거 후 매칭 → '공급 계약' = '공급계약'
+        - 키워드 길이 내림차순 매칭 → '공급계약'이 '계약'보다 우선
+        - 제목만 사용(본문은 부수 단어로 엉뚱한 키를 유발)
         예: "삼성전자 반도체 공급계약" → "삼성전자_공급계약"
         """
-        for kw in MEANINGFUL_KEYWORDS:
-            if kw in title:
+        compact = re.sub(r'\s+', '', title)
+        for kw in sorted(MEANINGFUL_KEYWORDS, key=len, reverse=True):
+            if re.sub(r'\s+', '', kw) in compact:
                 return f"{company}_{kw}"
         return ""
 
@@ -292,48 +332,102 @@ class NaverNewsBot:
     def is_duplicate(self, title: str, desc: str, company: str, link: str) -> bool:
         now = datetime.datetime.now()
 
-        # 캐시 정리 (메모리 절약)
-        self._title_cache = {
-            k: v for k, v in self._title_cache.items()
-            if now - v[1] < self._title_cache_ttl
-        }
+        # 종목별 캐시 정리 (TTL) — 해당 종목 이력만 훑는다(전 종목 200개 슬라이스 폐기)
+        clist = [e for e in self._title_cache.get(company, [])
+                 if now - e[2] < self._title_cache_ttl]
+        self._title_cache[company] = clist
         self._event_cache = {
             k: v for k, v in self._event_cache.items()
-            if now - v < self._event_cache_ttl
+            if now - v[0] < self._event_cache_ttl
         }
 
+        norm_new = self._normalize_title(title)
+        t_hash   = self._title_hash(title)
+        sig_new  = self._sig(norm_new, company)
+
         # (a) 정확한 URL 중복 → history에서 처리
-        # (b) 제목 해시 중복 (숫자/단위 달라도 같은 기사)
-        t_hash = self._title_hash(title)
-        if t_hash in self._title_cache:
+        # (b) 제목 해시 중복 (숫자/단위 달라도 같은 기사) — 같은 종목 내
+        if any(e[0] == t_hash for e in clist):
             logging.debug(f"🔍 제목 해시 중복: {title}")
             return True
 
-        # (c) 제목 유사도 중복 (정규화 제목 vs 최근 200개, SequenceMatcher ≥ 임계)
-        norm_new = self._normalize_title(title)
+        # (c) 제목 유사도 중복 — 같은 종목 24h 이력과 자카드 비교
         if norm_new and len(norm_new.split()) >= 4:   # 짧은 제목은 유사도 오탐 방지(정확 해시만)
-            for _norm_cached, _ts in list(self._title_cache.values())[-200:]:
-                if _norm_cached and SequenceMatcher(None, norm_new, _norm_cached).ratio() >= self._title_sim_threshold:
-                    logging.debug(f"🔍 제목 유사도 중복(≥{self._title_sim_threshold}): {title}")
+            for e in clist:
+                if e[3] and self._jaccard(sig_new, e[3]) >= DUP_SIM_THRESHOLD:
+                    logging.debug(f"🔍 제목 유사도 중복(≥{DUP_SIM_THRESHOLD}): {title}")
                     return True
 
         # (d) 이벤트 키 중복 (같은 종목 + 같은 이벤트 타입 6시간 내)
-        event_key = self._extract_event_key(company, title + " " + desc)
+        #     단, 제목이 최소한 겹칠 때만(DUP_EVENT_GATE) — 순수 키워드 충돌 오탐 방지
+        event_key = self._extract_event_key(company, title)
         if event_key and event_key in self._event_cache:
-            logging.debug(f"🔍 이벤트 중복 ({self._event_cache_ttl}): {event_key}")
-            return True
+            _ts, sig_old = self._event_cache[event_key]
+            if self._jaccard(sig_new, sig_old) >= DUP_EVENT_GATE:
+                logging.debug(f"🔍 이벤트 중복 ({self._event_cache_ttl}): {event_key}")
+                return True
 
         return False
 
     def _register_sent(self, title: str, desc: str, company: str):
-        """발송 후 캐시에 등록"""
-        now = datetime.datetime.now()
-        t_hash = self._title_hash(title)
-        self._title_cache[t_hash] = (self._normalize_title(title), now)
+        """발송 후 종목별 캐시에 등록"""
+        now     = datetime.datetime.now()
+        norm_t  = self._normalize_title(title)
+        t_hash  = self._title_hash(title)
+        sig     = self._sig(norm_t, company)
+        self._title_cache.setdefault(company, []).append((t_hash, norm_t, now, sig))
 
-        event_key = self._extract_event_key(company, title + " " + desc)
+        event_key = self._extract_event_key(company, title)
         if event_key:
-            self._event_cache[event_key] = now
+            self._event_cache[event_key] = (now, sig)
+
+    def _rehydrate_cache(self):
+        """
+        봇 재시작 시 중복 캐시 소실 방지 — 최근 24h '뉴스' 발송이력을
+        notice_history에서 읽어 종목별 제목/이벤트 캐시를 복원한다.
+        (구: 순수 메모리 dict라 재시작마다 초기화 → 같은 기사 재발송이 최다 원인)
+        """
+        if not _BRIDGE_OK:
+            return
+        try:
+            client = _bridge._get_client()
+            if not client:
+                return
+            since = (datetime.datetime.now(datetime.timezone.utc)
+                     - self._title_cache_ttl).isoformat()
+            res = (client.table('notice_history')
+                   .select('target,content,created_at')
+                   .like('content', '[뉴스] %')
+                   .gte('created_at', since)
+                   .order('created_at', desc=False)   # 시간순 — 이벤트 캐시에 최신이 남도록
+                   .execute())
+            n = 0
+            for row in (res.data or []):
+                company = row.get('target') or ''
+                content = row.get('content') or ''
+                if content.startswith('[뉴스]'):
+                    content = content[len('[뉴스]'):].strip()
+                title = content
+                if not company or not title:
+                    continue
+                try:
+                    # DB는 UTC — 서버(KST) 나이브 now()와 맞추기 위해 로컬 나이브로 변환
+                    ts = datetime.datetime.fromisoformat(
+                        row['created_at']).astimezone().replace(tzinfo=None)
+                except Exception:
+                    continue
+                norm_t = self._normalize_title(title)
+                sig    = self._sig(norm_t, company)
+                self._title_cache.setdefault(company, []).append(
+                    (self._title_hash(title), norm_t, ts, sig))
+                ek = self._extract_event_key(company, title)
+                if ek:
+                    self._event_cache[ek] = (ts, sig)
+                n += 1
+            logging.info(f"♻️ [뉴스봇] 중복 캐시 복원: {n}건 "
+                         f"({len(self._title_cache)}개 종목)")
+        except Exception as e:
+            logging.warning(f"⚠️ [뉴스봇] 캐시 복원 실패 (빈 캐시로 시작): {e}")
 
     # ──────────────────────────────────────────
     #  6. 뉴스 검색
