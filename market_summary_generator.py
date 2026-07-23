@@ -392,6 +392,15 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
         elif kr5 >= THR_S5:
             kr_only_up.append(sig)
 
+    # 디커플·후행 신호는 '심각도'(한국-해외 5일 갭)순으로 정렬 — 헤드라인/전략이
+    # 목록 선언순(임의)이 아니라 가장 극단적인 업종을 가리키게 한다.
+    # 예: 신재생(한국 +9.2 vs 해외 -3.4)이 로봇(+4.1 vs -2.3)보다 앞선다.
+    decouple_risk.sort(key=lambda s: (s["kr"] or 0) - (s["us"] or 0), reverse=True)
+    lag_inds.sort(key=lambda s: (s["us"] or 0) - (s["kr"] or 0), reverse=True)
+    # 당일 주도 업종이 곧 최대 디커플 종목인지 — 어투 결정에 사용
+    _lead_ind = kr_sorted[0][0] if kr_sorted else None
+    lead_is_decouple = bool(decouple_risk) and _lead_ind == decouple_risk[0]["ind"]
+
     # ── 공시 분석 ──
     from collections import Counter
     disc_count = len(discs)
@@ -494,6 +503,13 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
         watch_events.append("🚨 오늘 급락 — 내일 반대매매 물량·후속 하락 여부부터 확인")
     if vix >= THR_VIX_HIGH:
         watch_events.append(f"🚨 VIX {vix:.0f} 공포 구간 — 변동성이 이어지는지 확인")
+    # 디커플(한국만 강세)은 오늘 헤드라인 리스크 → 내일 체크포인트로도 이어간다.
+    # (헤드라인은 '되돌림 위험'인데 체크포인트는 '볼 것 없음'이 되는 모순 방지)
+    if decouple_risk:
+        _d = decouple_risk[0]
+        watch_events.append(
+            f"🔄 {_d['ind']}: 한국만 5일 {_fmt(_d['kr'])}(해외 {_fmt(_d['us'])}) — "
+            f"해외와 격차가 좁혀지는지(되돌림) 확인")
     # 5일은 엇갈렸지만 직전 해외 세션이 같은 방향 — 단정 대신 "하루 더 확인"
     for t in turn_watch[:2]:
         if t["dir"] == "up":
@@ -537,8 +553,13 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
         strategy = f"해외와 한국이 같이 오르는 중입니다({inds})"
     elif decouple_risk:
         r = decouple_risk[0]
-        strategy = (f"{r['ind']}{_josa(r['ind'], '은', '는')} 한국만 올랐습니다"
-                    f"(해외 5일 {_fmt(r['us'])}), 되돌림 위험 점검")
+        if lead_is_decouple:
+            # 주도 업종=디커플 1순위 → top_ind_str가 이미 '급등·되돌림'을 말함.
+            # 전략은 같은 업종을 반복하지 않고 대응 태도만 (중복 회피).
+            strategy = "성급한 추격보다 하루 더 확인"
+        else:
+            strategy = (f"{r['ind']}{_josa(r['ind'], '은', '는')} 한국만 올랐습니다"
+                        f"(해외 5일 {_fmt(r['us'])}), 되돌림 위험 점검")
     elif turn_watch:
         t = turn_watch[0]
         strategy = ((f"{t['ind']}{_josa(t['ind'], '은', '는')} 해외와 5일 방향이 엇갈렸지만 "
@@ -554,7 +575,10 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
     top_ind_str = ""
     if kr_sorted:
         _ti, _tc = kr_sorted[0]
-        if _tc > 0 and kr_avg > -2.0:
+        if _tc > 0 and kr_avg > -2.0 and lead_is_decouple:
+            # 주도 업종이 곧 최대 디커플 — '주도'로 칭찬하면 급등 추격을 부추긴다
+            top_ind_str = f" · 오늘은 {_ti}({_fmt(_tc)}) 급등, 되돌림 주의"
+        elif _tc > 0 and kr_avg > -2.0:
             top_ind_str = f" · 오늘은 {_ti}({_fmt(_tc)}){_josa(_ti, '이', '가')} 주도"
         elif _tc > 0:
             top_ind_str = f" · {_ti}({_fmt(_tc)})만 버팀"
