@@ -582,7 +582,10 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
             top_ind_str = f" · 오늘은 {_ti}({_fmt(_tc)}){_josa(_ti, '이', '가')} 주도"
         elif _tc > 0:
             top_ind_str = f" · {_ti}({_fmt(_tc)})만 버팀"
-    one_line_summary = f"코스피 {_fmt(kospi_chg)} {kr_label}{top_ind_str} — {strategy}"
+    # 코스피·코스닥 둘 다 표기 — 코스닥이 더 강한/약한 날(예: 코스피 +4.4% vs 코스닥 +5.2%)
+    # 코스피만 보이면 시장을 과소·오표현한다. 강세/약세 라벨은 두 지수 평균(kr_avg) 기준.
+    one_line_summary = (f"코스피 {_fmt(kospi_chg)} · 코스닥 {_fmt(kosdaq_chg)} "
+                        f"{kr_label}{top_ind_str} — {strategy}")
 
     return {
         "flow_summary":    flow_summary,
