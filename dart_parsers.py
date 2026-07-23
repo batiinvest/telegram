@@ -1818,6 +1818,53 @@ def parse_amendment(kv: dict) -> list:
     return lines
 
 
+def parse_tender_offer(kv: dict) -> list:
+    """공개매수신고서/공고 — 매수자·대상·목적·가격·수량·기간·주관사.
+
+    구(舊): 전용 파서 없어 parse_all_fields 폴백 → '금융위원회 귀중'·전자공시 URL·
+    체크박스(■□) 등 노이즈 벽. 핵심 필드는 표준 라벨로 깔끔히 키 접근됨.
+    특히 목적의 ■ 체크 항목(상장폐지 등)이 투자 판단의 핵심."""
+    lines = ['📢 공개매수']
+
+    buyer = _get(kv, '공 개 매 수 자', '공개매수자')
+    if buyer:
+        buyer = re.sub(r'^성\s*명\s*[:：]\s*', '', buyer)
+        buyer = re.split(r'\s*[■□]', buyer)[0].strip()   # 체크박스 이후 절단
+        lines.append(f'🏢 매수자: {_trunc(buyer, 30)}')
+
+    if v := _get(kv, '공개매수 대상회사명', '대상회사명'):
+        lines.append(f'🎯 대상: {_trunc(v, 30)}')
+
+    # 목적 — ■ 체크된 항목만 추출 (상장폐지·경영권안정·M&A·지주회사요건충족 등)
+    if purpose := _get(kv, '공개매수 목적', '공개매수목적'):
+        checked = re.findall(r'■\s*([가-힣A-Za-z&]+)', purpose)
+        if checked:
+            lines.append(f'📋 목적: {" · ".join(checked)}')
+
+    if price := _get(kv, '매수 가격', '매수가격'):
+        m = re.search(r'([\d,]+)\s*원', price)
+        if m:
+            lines.append(f'💵 매수가격: {m.group(1)}원')
+
+    if qty := _get(kv, '매수 예정 수량(비율)', '매수 예정 수량', '매수예정수량'):
+        ms = re.search(r'([\d,]{4,})\s*주', qty)
+        mr = re.search(r'([\d.]+)\s*%', qty)
+        if ms:
+            rr = f' ({mr.group(1)}%)' if mr else ''
+            lines.append(f'🔢 매수예정: {ms.group(1)}주{rr}')
+
+    if period := _get(kv, '공개매수기간'):
+        period = re.sub(r'\s+', ' ', period)
+        lines.append(f'📅 기간: {_trunc(period, 55)}')
+
+    agent = _get(kv, '사무취급자') or _get(kv, '대 리 인')
+    if agent:
+        agent = re.sub(r'^성\s*명\s*[:：]\s*', '', agent)
+        lines.append(f'🏦 주관사: {_trunc(agent, 30)}')
+
+    return lines
+
+
 def parse_tender_offer_result(kv: dict) -> list:
     """공개매수결과보고서 — HTML 인코딩 깨짐이 심해 HTML 원문에서 직접 추출."""
     lines = []
@@ -2630,6 +2677,7 @@ _PARSER_MAP = [
     (['신탁계약해지결과'],                       parse_trust_termination),
     (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
     (['대량보유상황보고서'],                      parse_large_holding_report),
+    (['공개매수신고서', '공개매수공고'],           parse_tender_offer),
     (['공개매수결과보고서', '공개매수청약'],       parse_tender_offer_result),
     # (['주식담보제공'], …) 는 위 최대주주변경 앞으로 이동함
 ]
