@@ -1208,7 +1208,8 @@ def get_theme_analysis(theme_name: str) -> str:
     msg += f"════════════"
     return msg
 
-def get_industry_theme_ranking(industry_name: str, shared_prices: dict = None) -> str:
+def get_industry_theme_ranking(industry_name: str, shared_prices: dict = None,
+                               flow_map: dict = None) -> str:
     _t = _get_industry_targets(industry_name)
     if isinstance(_t, str): return _t
     _, _, _ = _t  # names, codes_map 사용 안 함 — 아래서 INDUSTRY_HIERARCHY 직접 순회
@@ -1231,13 +1232,15 @@ def get_industry_theme_ranking(industry_name: str, shared_prices: dict = None) -
 
         for name in company_list:
             if name not in COMPANY_CODES: continue
-            data = price_map.get(COMPANY_CODES[name])
+            code = COMPANY_CODES[name]
+            data = price_map.get(code)
             if data:
                 rate = safe_float(data.get('prdy_ctrt'))
                 cap_100m = safe_int(data.get('hts_avls')) 
                 total_rate += rate
                 count += 1
-                stocks_detail.append({"name": name, "rate": rate, "cap": cap_100m})
+                stocks_detail.append({"name": name, "rate": rate, "cap": cap_100m,
+                                      "code": code, "sign": data.get('prdy_vrss_sign')})
         
         if count > 0:
             avg_rate = total_rate / count
@@ -1268,7 +1271,15 @@ def get_industry_theme_ranking(industry_name: str, shared_prices: dict = None) -
             s_rate = stock['rate']
             cap_str = format_money(stock['cap'])
             s_icon = "🔺" if s_rate > 0 else "🔻" if s_rate < 0 else "➖"
-            msg += f"  └ {s_name} {s_icon}{fmt_change_pct(s_rate)} ({cap_str})\n"
+            # 상한가/하한가 배지 — prdy_vrss_sign(1=상한, 5=하한)이 등락률 임계보다 정확
+            _sign = str(stock.get("sign") or "")
+            limit_tag = " 상한가" if _sign == "1" else " 하한가" if _sign == "5" else ""
+            msg += f"  └ {s_name} {s_icon}{fmt_change_pct(s_rate)}{limit_tag} ({cap_str})\n"
+            # 확정 수급 — flow_map은 마감 브리핑에서만 전달(장중엔 미확정이라 생략).
+            # 급등을 외국인·기관 중 누가 사고 파는지가 산업방 핵심 정보.
+            _fl = flow_map.get(stock["code"]) if flow_map else None
+            if _fl:
+                msg += f"     💰 {_fl}\n"
             
         msg += "\n"
     msg += f"════════════"

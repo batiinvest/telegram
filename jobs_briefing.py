@@ -141,7 +141,7 @@ def job_daily_closing():
     stock_api.send_telegram(DEFAULT_CHAT_ID, msg2, keyboard=COMMON_BUTTON)
 
     _broadcast_to_industries(
-        stock_api.get_industry_theme_ranking, prices,
+        stock_api.get_industry_theme_ranking, prices, _flow,
         keyboard=COMMON_BUTTON, label="마감 브리핑"
     )
     _broadcast_to_companies(
