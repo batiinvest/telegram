@@ -2029,6 +2029,68 @@ def parse_share_pledge(kv: dict) -> list:
     return lines
 
 
+def parse_share_transfer(kv: dict) -> list:
+    """(최대주주변경을수반하는) 주식양수도계약체결 — 양도/양수인·거래규모·변경후 지분.
+
+    구(舊): parse_major_shareholder_change로 새어 양도인이 뒤섞여 오출력됐음
+    (양수도 서식엔 '변경전/후 최대주주' 값 표가 없어 오매칭). 핵심 필드는 깔끔히
+    키로 접근됨 — 변경예정 최대주주(=양수인)·양수도 주식수/가액/대금·예정 소유비율.
+    양도인만 계약당사자 표의 셀 정렬이 서식마다 어긋나, '변경전 최대주주' 값을 갖는
+    첫 이름 키로 best-effort 추출(실패 시 생략, 양수인은 항상 표시)."""
+    lines = []
+
+    buyer = _get(kv, '3. 변경예정 최대주주', '변경예정 최대주주', '-양수인')
+    # 일부 정정 서식에서 셀 밀림으로 이름 뒤에 날짜·수량이 붙음
+    # ('지서현 2026-08-13 3,823,859 7.49') → 이름만 (날짜·3자리+숫자 앞에서 절단)
+    if buyer:
+        buyer = re.split(r'\s+(?=\d{4}-\d{2}-\d{2}|[\d,]{3,}\b)', buyer)[0].strip()
+    seller = None
+    for k, v in kv.items():
+        if (v and v.strip() == '변경전 최대주주'
+                and not k.startswith(('-', '1.', '2.', '3.', '4.', '5.', '성명', '변경'))
+                and '관계' not in k and '주식' not in k):
+            seller = k.strip()
+            break
+
+    if seller or buyer:
+        lines.append('🔄 최대주주 변경 (주식양수도)')
+        if seller:
+            lines.append(f'  양도인: {_trunc(seller, 30)}')
+        if buyer:
+            lines.append(f'  양수인: {_trunc(buyer, 30)}')
+
+    # 거래 규모
+    shares = _get(kv, '양수도 주식수(주)', '양수도주식수')
+    price  = _get(kv, '1주당 가액(원)', '1주당가액')
+    amount = _get(kv, '양수도 대금(원)', '양수도대금')
+    if shares and re.search(r'\d', shares):
+        ps = f' (주당 {price}원)' if price else ''
+        lines.append(f'🔢 양수도 주식: {int(re.sub(r"[^0-9]", "", shares)):,}주{ps}')
+    if amount:
+        lines.append(f'💰 양수도 대금: {_fmt_amount(amount)}원')
+
+    # 변경 후 지분 (양수인 인수 후)
+    a_sh = _get(kv, '-예정 소유주식수(주)', '예정 소유주식수')
+    a_rt = _get(kv, '-예정 소유비율(%)', '예정 소유비율')
+    if a_sh or a_rt:
+        parts = []
+        if a_sh and re.search(r'\d', a_sh):
+            parts.append(f'{int(re.sub(r"[^0-9]", "", a_sh)):,}주')
+        if a_rt:
+            parts.append(f'{a_rt}%')
+        if parts:
+            lines.append(f'📊 변경후 지분: {" / ".join(parts)}')
+
+    if v := _get(kv, '-변경 예정일자', '변경 예정일자'):
+        lines.append(f'📅 변경예정일: {v}')
+    if v := _get(kv, '4. 계약일자', '계약일자'):
+        lines.append(f'📝 계약일자: {v}')
+    if v := _get(kv, '관련공시', '※관련공시', '※ 관련공시'):
+        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+
+    return lines
+
+
 def _parse_agm_notice_text(kv: dict) -> list:
     """주주총회소집공고 자유서식 본문 '아래' 섹션(일시·장소·보고·부의안건) 파싱.
 
@@ -2543,9 +2605,11 @@ _PARSER_MAP = [
     (['감자완료'],                             parse_capital_reduction_done),
     (['매출액또는손익구조', '손익구조30'],      parse_earnings_change),
     (['권리락'],                             parse_ex_rights),
-    # 주식담보제공은 최대주주변경보다 먼저 — '최대주주변경을수반하는주식담보제공…'
-    # 제목이 최대주주변경 파서(변경전/후 최대주주 값 없음→빈 결과)로 새던 문제.
+    # 주식담보제공·주식양수도는 최대주주변경보다 먼저 —
+    # '최대주주변경을수반하는주식담보제공/양수도…' 제목이 최대주주변경 파서
+    # (변경전/후 최대주주 값 없음→빈 결과·오출력)로 새던 문제.
     (['주식담보제공'],                         parse_share_pledge),
+    (['주식양수도'],                           parse_share_transfer),
     (['최대주주변경'],                        parse_major_shareholder_change),
     (['주주명부폐쇄', '기준일설정'],           parse_record_date),
     (['전환청구권', '신주인수권', '교환청구권행사'], parse_rights_exercise),
