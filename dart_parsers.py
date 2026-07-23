@@ -1826,9 +1826,11 @@ def parse_tender_offer(kv: dict) -> list:
     특히 목적의 ■ 체크 항목(상장폐지 등)이 투자 판단의 핵심."""
     lines = ['📢 공개매수']
 
-    buyer = _get(kv, '공 개 매 수 자', '공개매수자')
+    # 설명서는 상단이 '보 고 자', 신고서는 '공 개 매 수 자' — 둘 다 대응.
+    # 값 형태: '성 명: SK…' 또는 'ㆍ성명 : SK… ■ 회사 □…'
+    buyer = _get(kv, '공 개 매 수 자', '보 고 자', '공개매수자')
     if buyer:
-        buyer = re.sub(r'^성\s*명\s*[:：]\s*', '', buyer)
+        buyer = re.sub(r'^[ㆍ·\s]*성\s*명\s*[:：]\s*', '', buyer)
         buyer = re.split(r'\s*[■□]', buyer)[0].strip()   # 체크박스 이후 절단
         lines.append(f'🏢 매수자: {_trunc(buyer, 30)}')
 
@@ -2677,7 +2679,7 @@ _PARSER_MAP = [
     (['신탁계약해지결과'],                       parse_trust_termination),
     (['자기주식취득신탁', '자기주식취득결정'],   parse_treasury_acquisition),
     (['대량보유상황보고서'],                      parse_large_holding_report),
-    (['공개매수신고서', '공개매수공고'],           parse_tender_offer),
+    (['공개매수신고서', '공개매수설명서', '공개매수공고'], parse_tender_offer),
     (['공개매수결과보고서', '공개매수청약'],       parse_tender_offer_result),
     # (['주식담보제공'], …) 는 위 최대주주변경 앞으로 이동함
 ]
