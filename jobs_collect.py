@@ -602,7 +602,12 @@ def job_collect_macro():
 
         # 06:xx 아침 수집에만 메인 채널 브리핑 발송 (16:10 저녁 수집 제외, 휴장일 제외)
         if datetime.datetime.now().hour == 6 and _is_enabled('macro_briefing') and not market_timer.is_us_holiday():
-            msg = stock_api.get_macro_briefing(data)
+            try:
+                _sectors, _sec_date = collect_macro.fetch_us_sectors()
+            except Exception as _se:
+                logging.warning(f"[매크로] 미국 섹터 조회 실패 — 섹터 섹션 생략: {_se}")
+                _sectors, _sec_date = {}, None
+            msg = stock_api.get_macro_briefing(data, sectors=_sectors, sector_date=_sec_date)
             if msg:
                 stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
                 _log_notice(DEFAULT_CHAT_ID, "[매크로 브리핑] 발송")

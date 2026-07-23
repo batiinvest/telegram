@@ -295,6 +295,54 @@ def collect_all() -> dict:
     return result
 
 
+def fetch_us_sectors() -> tuple:
+    """간밤 미국 섹터 ETF 등락 → 우리 산업 매핑 평균 (아침 브리핑 전용, 라이브).
+    us_etf_map(산업↔ETF)로 배치 조회 후 산업별 등가중 평균. save_to_db 경로와 분리 —
+    macro_data 테이블에 없는 컬럼이라 collect_all 결과에 넣지 않는다.
+    반환: ({industry: chg_pct}, 'YYYY-MM-DD' 미국 세션일) 또는 ({}, None)."""
+    if yf is None or sb is None:
+        return {}, None
+    try:
+        rows = sb.table("us_etf_map").select("industry,ticker").execute().data or []
+    except Exception as e:
+        log.warning(f"[미국섹터] us_etf_map 조회 실패: {e}")
+        return {}, None
+    if not rows:
+        return {}, None
+    ind_tickers = {}
+    for r in rows:
+        ind_tickers.setdefault(r["industry"], []).append(r["ticker"])
+    syms = sorted({t for ts in ind_tickers.values() for t in ts})
+    try:
+        df = yf.download(syms, period="5d", interval="1d",
+                         auto_adjust=False, progress=False, threads=True)
+        closes = df["Close"]
+    except Exception as e:
+        log.warning(f"[미국섹터] yf.download 실패: {e}")
+        return {}, None
+    session_date = None
+    try:
+        if len(df.index):
+            session_date = df.index[-1].strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    chg = {}
+    for sym in syms:
+        try:
+            ser = closes[sym].dropna()
+            if len(ser) >= 2 and ser.iloc[-2] > 0:
+                chg[sym] = (ser.iloc[-1] - ser.iloc[-2]) / ser.iloc[-2] * 100
+        except Exception:
+            continue
+    out = {}
+    for ind, ts in ind_tickers.items():
+        vals = [chg[t] for t in ts if t in chg]
+        if vals:
+            out[ind] = round(sum(vals) / len(vals), 2)
+    log.info(f"[미국섹터] {len(out)}개 산업 / {len(chg)}개 티커 (세션 {session_date})")
+    return out, session_date
+
+
 def save_to_db(data: dict, force: bool = False) -> bool:
     """Supabase macro_data 테이블에 upsert"""
     if sb is None:

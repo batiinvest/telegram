@@ -2072,7 +2072,7 @@ from naver_report import (   # noqa: E402
 )
 
 
-def get_macro_briefing(data: dict) -> str | None:
+def get_macro_briefing(data: dict, sectors: dict = None, sector_date: str = None) -> str | None:
     """
     글로벌 매크로 브리핑 메시지 생성 (06:30 KST 아침 발송용)
 
@@ -2127,6 +2127,21 @@ def get_macro_briefing(data: dict) -> str | None:
         if sf is not None: lines.append(f"S&amp;P500F  {sf:,.0f}{_chg(sf_c)}")
         if nf is not None: lines.append(f"나스닥F  {nf:,.0f}{_chg(nf_c)}")
         lines.append("")
+
+    # ── 간밤 미국 섹터 (우리 11개 산업 매핑, 상승/하락 상위 3) ──────
+    if sectors:
+        ups   = sorted([(k, v) for k, v in sectors.items() if v > 0], key=lambda x: x[1], reverse=True)[:3]
+        downs = sorted([(k, v) for k, v in sectors.items() if v < 0], key=lambda x: x[1])[:3]
+        if ups or downs:
+            tag = ""
+            if sector_date and len(sector_date) >= 10:
+                tag = f"  (현지 {int(sector_date[5:7])}/{int(sector_date[8:10])})"
+            lines.append(f"🏭 <b>간밤 미국 섹터</b>{tag}")
+            if ups:
+                lines.append("🔺 " + " · ".join(f"{k} {fmt_change_pct(v, 1)}" for k, v in ups))
+            if downs:
+                lines.append("🔻 " + " · ".join(f"{k} {fmt_change_pct(v, 1)}" for k, v in downs))
+            lines.append("")
 
     # ── 미 10년물 + 달러/원 (자금흐름 핵심 지표) ─────────────────
     y10 = data.get('us10y');    y10_c = data.get('us10y_chg')
