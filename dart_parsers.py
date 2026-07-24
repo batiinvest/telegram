@@ -2397,6 +2397,78 @@ def parse_market_measure(kv: dict) -> list:
     return lines
 
 
+def parse_unfaithful_disclosure(kv: dict) -> list:
+    """불성실공시법인 지정예고 / 지정 / 미지정 — 유형·사유·벌점·제재금·심사사유.
+
+    3변형 통합. 구(舊) 폴백은 원시 번호('2. 3. 4. 5.')와 매 건 동일한 법적
+    boilerplate(8점↑ 거래정지 등)를 그대로 노출 → 핵심(벌점·제재금·실질심사)이 묻힘.
+    벌점 라벨은 서식별로 다름: 지정=부과벌점 현황(+누계), 예고=최근 1년간 누계.
+    """
+    lines = []
+
+    # 유형 키는 서식별로 '불성실공시 유형'(유가·예고) / '유형'(코스닥 지정)
+    if v := _get(kv, '불성실공시 유형', '불성실공시유형', '유형'):
+        lines.append(f'📋 유형: {_trunc(v, 30)}')
+
+    if v := _get(kv, '불성실공시 내용', '내용'):
+        body = _trunc_clean(re.sub(r'\s+', ' ', v), 150)
+        lines.append(f'📄 사유: {body}')
+
+    # 미지정(지정유예 등) — 결과가 곧 핵심
+    if v := _get(kv, '미지정 사유'):
+        lines.append(f'✅ 결과: {_trunc(v, 50)}')
+
+    # 지연 정도 — 사유발생 → 실제 공시 간격이 위반 심각도를 보여줌
+    occurred = _get(kv, '사유발생일', '원공시일')
+    disclosed = _get(kv, '공시일')
+    if occurred and disclosed and occurred != disclosed:
+        lines.append(f'📅 사유발생 {occurred} → 공시 {disclosed}')
+
+    # 벌점 — 서식 3종: 유가 지정('부과벌점 현황'+'누계벌점'), 코스닥 지정('부과벌점'
+    # 단독키 + '최근 1년간…'), 예고(누계만). 당해/누계를 혼동하지 않도록 분리 추출.
+    # ※ 누계 10점↑ 관리종목·8점↑ 거래정지 사유라 정확한 구분이 중요.
+    own = None
+    if v := _get(kv, '부과벌점 현황'):          # 유가 지정: 값이 '부과벌점 N'
+        if m := re.search(r'([\d.]+)', v):
+            own = m.group(1)
+    if own is None:                              # 코스닥 지정: 정확히 '부과벌점' 키
+        for k, v in kv.items():
+            if (re.sub(r'^\d+\.\s*', '', k).strip() == '부과벌점'
+                    and v and (m := re.search(r'([\d.]+)', v))):
+                own = m.group(1)
+                break
+    cum = None
+    for cand in ('누계벌점(환산적용벌점)', '누계벌점',
+                 '최근 1년간 불성실공시법인 부과벌점'):
+        if v := _get(kv, cand):
+            if m := re.search(r'([\d.]+)', v):
+                cum = m.group(1)
+                break
+    if own and cum:
+        lines.append(f'📊 부과벌점: {own}점 (누계 {cum}점)')
+    elif own:
+        lines.append(f'📊 부과벌점: {own}점')
+    elif cum:
+        lines.append(f'📊 최근1년 누계벌점: {cum}점')
+
+    if v := _get(kv, '공시위반제재금(원)', '공시위반제재금'):
+        lines.append(f'💸 제재금: {_fmt_amount(v)}원')
+
+    # 상장적격성 실질심사 — '해당'이면 상폐 심사 트리거라 최우선 경고 (미해당은 생략)
+    if v := _get(kv, '상장적격성 실질심사사유 발생 여부'):
+        if '미해당' not in v:
+            lines.append(f'🚨 상장적격성 실질심사 사유: {_trunc(v, 30)}')
+
+    if v := _get(kv, '지정여부 결정시한', '결정시한'):
+        lines.append(f'📅 결정시한: {v}')
+    if v := _get(kv, '지정ㆍ부과일자', '지정일자', '지정일'):
+        lines.append(f'📅 지정일: {v}')
+    if v := _get(kv, '결정일'):
+        lines.append(f'📅 결정일: {v}')
+
+    return lines
+
+
 def parse_dividend(kv: dict) -> list:
     """현금ㆍ현물배당결정 / 금전배당결정 — 배당구분·1주당 배당금·시가배당률·기준일·지급일"""
     lines = []
@@ -2646,6 +2718,9 @@ _PARSER_MAP = [
     (['기타주요경영사항'],                   parse_misc_mgmt),
     (['임원ㆍ주요주주', '임원·주요주주'],     parse_insider_report),
     (['거래정지', '매매거래정지'],           parse_trading_halt),
+    # 불성실공시는 상장적격성보다 먼저 — 지정 서식에 '상장적격성 실질심사사유' 필드가
+    # 있어 market_measure로 새면 안 됨
+    (['불성실공시'],                           parse_unfaithful_disclosure),
     (['상장폐지', '관리종목', '상장적격성'],   parse_market_measure),
     (['소송'],                                parse_lawsuit),
     (['횡령', '배임'],                         parse_embezzlement),
