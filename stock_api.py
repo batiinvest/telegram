@@ -2111,10 +2111,14 @@ def get_macro_briefing(data: dict, sectors: dict = None, sector_date: str = None
         if nq is not None: lines.append(f"나스닥  {nq:,.0f}{_chg(nq_c)}")
         if dw is not None: lines.append(f"다우  {dw:,.0f}{_chg(dw_c)}")
         if vx is not None:
+            # 문구는 등락률(급변)과 레벨(공포 여부)을 함께 본다 — 시장요약 임계(VIX 20=공포/25=위험)와 정합.
+            # +2% 급등이라도 VIX<20이면 '변동성 확대', 20 이상일 때만 '공포 확산'.
             vix_note = ''
             if vx_c is not None:
-                if vx_c <= -2.0:   vix_note = '  공포 완화'
-                elif vx_c >= 2.0:  vix_note = '  공포 확산'
+                if vx_c >= 2.0:
+                    vix_note = '  공포 확산' if vx >= 20 else '  변동성 확대'
+                elif vx_c <= -2.0:
+                    vix_note = '  공포 완화' if vx >= 20 else '  변동성 축소'
             lines.append(f"VIX  {vx:.2f}{_chg(vx_c)}{vix_note}")
         lines.append("")
 
@@ -2125,7 +2129,7 @@ def get_macro_briefing(data: dict, sectors: dict = None, sector_date: str = None
     if sf is not None or nf is not None:
         lines.append("📡 <b>선물</b>")
         if sf is not None: lines.append(f"S&amp;P500F  {sf:,.0f}{_chg(sf_c)}")
-        if nf is not None: lines.append(f"나스닥F  {nf:,.0f}{_chg(nf_c)}")
+        if nf is not None: lines.append(f"나스닥100F  {nf:,.0f}{_chg(nf_c)}")
         lines.append("")
 
     # ── 간밤 미국 섹터 (우리 11개 산업 매핑, 상승/하락 상위 3) ──────
