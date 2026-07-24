@@ -42,6 +42,8 @@ DUP_SIM_THRESHOLD = 0.45
 # 이벤트키 중복은 제목이 이 정도는 겹쳐야 인정 — 순수 키워드 충돌(예: ETF'상장' vs ADR'상장') 오탐 방지. 고정.
 DUP_EVENT_GATE = 0.30
 
+_KST = datetime.timezone(datetime.timedelta(hours=9))
+
 
 def _load_news_filters():
     """
@@ -189,6 +191,60 @@ def _alert_admin_once(tag: str, msg: str):
         logging.exception("⚠️ [뉴스] 관리자 알림 발송 실패")
 
 
+# ══════════════════════════════════════════════════════════════════
+#  제목 유사도 유틸 — 모듈 레벨(뉴스봇 + 저녁요약 공용 단일 출처)
+#  daily_summary.py가 동일 기준으로 이벤트 군집화를 하려면 필요하다.
+#  로직 변경 시 양쪽에 함께 반영되도록 여기서만 정의한다.
+# ══════════════════════════════════════════════════════════════════
+
+def normalize_title(title: str) -> str:
+    """
+    중복 감지를 위한 제목 정규화.
+    - 숫자/단위 제거 (주가 변동 숫자가 달라도 같은 기사)
+    - 언론사 접두/접미 제거
+    - 공백 정규화
+    """
+    t = html.unescape(title).lower()
+    t = re.sub(r'<[^>]+>', '', t)                    # HTML 태그 제거
+    t = re.sub(r'\[.*?\]|\(.*?\)', '', t)            # 괄호 내용 제거 (언론사명 등)
+    t = re.sub(r'[0-9,]+(?:\.[0-9]+)?%?', '', t)    # 숫자/퍼센트 제거
+    t = re.sub(r'[^\w가-힣]', ' ', t)                # 특수문자 → 공백
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
+def title_sig(norm_title: str, company: str) -> set:
+    """
+    유사도용 시그니처 — 종목명을 제외한 어절 + 각 어절의 문자 2-gram 집합.
+    SequenceMatcher(문자열 정렬)보다 한국어 어순 뒤바뀜·조사 차이에 강하다.
+    """
+    words = [w for w in norm_title.split() if w and w != company.lower()]
+    s = set(words)
+    for w in words:
+        for i in range(len(w) - 1):
+            s.add(w[i:i + 2])
+    return s
+
+
+def jaccard(a: set, b: set) -> float:
+    return len(a & b) / len(a | b) if a and b else 0.0
+
+
+def extract_event_key(company: str, title: str) -> str:
+    """
+    제목에서 핵심 이벤트 키워드를 추출해 이벤트 키 생성.
+    - 공백 제거 후 매칭 → '공급 계약' = '공급계약'
+    - 키워드 길이 내림차순 매칭 → '공급계약'이 '계약'보다 우선
+    - 제목만 사용(본문은 부수 단어로 엉뚱한 키를 유발)
+    예: "삼성전자 반도체 공급계약" → "삼성전자_공급계약"
+    """
+    compact = re.sub(r'\s+', '', title)
+    for kw in sorted(MEANINGFUL_KEYWORDS, key=len, reverse=True):
+        if re.sub(r'\s+', '', kw) in compact:
+            return f"{company}_{kw}"
+    return ""
+
+
 class NaverNewsBot:
     def __init__(self):
         self.base_url = "https://openapi.naver.com/v1/search/news.json"
@@ -275,56 +331,25 @@ class NaverNewsBot:
     # ──────────────────────────────────────────
     #  3. 제목 정규화 (중복 감지용)
     # ──────────────────────────────────────────
+    # 아래 4종은 모듈 레벨 함수에 위임 — 저녁요약(daily_summary)과 동일 기준 보장.
     def _normalize_title(self, title: str) -> str:
-        """
-        중복 감지를 위한 제목 정규화.
-        - 숫자/단위 제거 (주가 변동 숫자가 달라도 같은 기사)
-        - 언론사 접두/접미 제거
-        - 공백 정규화
-        """
-        t = html.unescape(title).lower()
-        t = re.sub(r'<[^>]+>', '', t)                    # HTML 태그 제거
-        t = re.sub(r'\[.*?\]|\(.*?\)', '', t)            # 괄호 내용 제거 (언론사명 등)
-        t = re.sub(r'[0-9,]+(?:\.[0-9]+)?%?', '', t)    # 숫자/퍼센트 제거
-        t = re.sub(r'[^\w가-힣]', ' ', t)                # 특수문자 → 공백
-        t = re.sub(r'\s+', ' ', t).strip()
-        return t
+        return normalize_title(title)
 
     def _title_hash(self, title: str) -> str:
-        return hashlib.md5(self._normalize_title(title).encode()).hexdigest()
+        return hashlib.md5(normalize_title(title).encode()).hexdigest()
 
     def _sig(self, norm_title: str, company: str) -> set:
-        """
-        유사도용 시그니처 — 종목명을 제외한 어절 + 각 어절의 문자 2-gram 집합.
-        SequenceMatcher(문자열 정렬)보다 한국어 어순 뒤바뀜·조사 차이에 강하다.
-        """
-        words = [w for w in norm_title.split() if w and w != company.lower()]
-        s = set(words)
-        for w in words:
-            for i in range(len(w) - 1):
-                s.add(w[i:i+2])
-        return s
+        return title_sig(norm_title, company)
 
     @staticmethod
     def _jaccard(a: set, b: set) -> float:
-        return len(a & b) / len(a | b) if a and b else 0.0
+        return jaccard(a, b)
 
     # ──────────────────────────────────────────
     #  4. 이벤트 키 추출 (같은 이벤트 반복 방지)
     # ──────────────────────────────────────────
     def _extract_event_key(self, company: str, title: str) -> str:
-        """
-        제목에서 핵심 이벤트 키워드를 추출해 이벤트 키 생성.
-        - 공백 제거 후 매칭 → '공급 계약' = '공급계약'
-        - 키워드 길이 내림차순 매칭 → '공급계약'이 '계약'보다 우선
-        - 제목만 사용(본문은 부수 단어로 엉뚱한 키를 유발)
-        예: "삼성전자 반도체 공급계약" → "삼성전자_공급계약"
-        """
-        compact = re.sub(r'\s+', '', title)
-        for kw in sorted(MEANINGFUL_KEYWORDS, key=len, reverse=True):
-            if re.sub(r'\s+', '', kw) in compact:
-                return f"{company}_{kw}"
-        return ""
+        return extract_event_key(company, title)
 
     # ──────────────────────────────────────────
     #  5. 통합 중복 감지
@@ -368,6 +393,41 @@ class NaverNewsBot:
                 return True
 
         return False
+
+    def _persist_news(self, company: str, title: str, desc: str,
+                      link: str, pub_dt) -> None:
+        """
+        발송한 뉴스를 daily_news에 적재 — 저녁 요약이 읽는 유일한 뉴스 소스.
+
+        네이버 재조회로는 하루치를 복원할 수 없다(봇이 종일 폴링해 키 대부분이
+        일일 한도 소진). 즉 '보낼 때 남기지 않으면 그날 뉴스는 영영 사라진다'.
+        다만 적재 실패가 발송·중복관리에 영향을 주면 안 되므로 완전히 격리한다.
+        """
+        try:
+            from db_client import get_supabase_client
+            sb = get_supabase_client()
+            if not sb:
+                return
+            base_date = (pub_dt.astimezone(_KST).date() if pub_dt
+                         else datetime.datetime.now(_KST).date()).isoformat()
+            try:
+                source = urllib.parse.urlparse(link).netloc.replace('www.', '') or None
+            except Exception:
+                source = None
+            sb.table('daily_news').upsert({
+                'base_date':    base_date,
+                'corp_name':    company,
+                'stock_code':   COMPANY_CODES.get(company),
+                'industry':     COMPANY_TO_INDUSTRY.get(company),
+                'title':        title,
+                'description':  (desc or '')[:1000] or None,
+                'link':         link,
+                'source':       source,
+                'published_at': pub_dt.isoformat() if pub_dt else None,
+            }, on_conflict='base_date,corp_name,link',
+               ignore_duplicates=True).execute()
+        except Exception as e:
+            logging.debug(f"[뉴스적재] 실패(무시): {e}")
 
     def _register_sent(self, title: str, desc: str, company: str):
         """발송 후 종목별 캐시에 등록"""
@@ -541,9 +601,10 @@ class NaverNewsBot:
                         continue
 
                     # ── 발송 ──
-                    time_str = ""
+                    time_str, pub_dt = "", None
                     try:
-                        time_str = parsedate_to_datetime(item['pubDate']).strftime("%H:%M")
+                        pub_dt = parsedate_to_datetime(item['pubDate'])
+                        time_str = pub_dt.strftime("%H:%M")
                     except Exception:
                         pass
 
@@ -600,6 +661,7 @@ class NaverNewsBot:
 
                     self.history.add(link)
                     self._register_sent(title, desc, company_name)
+                    self._persist_news(company_name, title, desc, link, pub_dt)
                     logging.info(f"✅ Sent: {company_name} - {title}")
 
                 time.sleep(0.1)

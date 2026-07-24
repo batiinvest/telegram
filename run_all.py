@@ -37,7 +37,7 @@ from jobs_collect import (
     job_collect_market_closing, job_short_surge, job_collect_investor_trend,
     job_collect_investor_trend_ranked,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
-    job_collect_credit_balance,
+    job_daily_summary, job_collect_credit_balance,
     job_collect_investor_market, job_retry_failed,
 )
 from jobs_briefing import (
@@ -152,6 +152,7 @@ def run_scheduler():
     schedule.every().saturday.at("00:30").do(job_cleanup_market_data)   # 새벽 market_data 정리
     schedule.every().saturday.at("01:00").do(job_sync_listed_companies) # 새벽 상장사 동기화
     schedule.every().day.at("18:30").do(job_collect_financials)        # 장 마감 후 재무수집 (공시 기반)
+    schedule.every().day.at("18:55").do(_threaded(job_daily_summary))  # 종목별 저녁 요약 생성 (18:30 공시 저장 완료 후)
     schedule.every().day.at("18:35").do(_threaded(job_collect_analyst_opinions))  # 투자의견 (장후)
     schedule.every().day.at("18:40").do(job_collect_estimates)        # 종목추정실적 (미래 매출/영업이익 + 상향감지)
     schedule.every().day.at("19:00").do(job_collect_credit_balance)    # KOFIA 신용공여 잔고 — 직전 영업일분이 당일 오후 발표(2026-07-22 실측: 10:30엔 없고 18:18엔 있음)

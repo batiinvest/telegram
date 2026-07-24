@@ -1017,6 +1017,23 @@ def job_market_summary():
         mark_failed(e)
 
 
+@_job(holiday=True)
+def job_daily_summary():
+    """평일 18:55 — 종목별 저녁 요약 생성 (daily_summaries).
+
+    18:30 job_collect_financials가 daily_disclosures를 채운 뒤 실행해야 한다.
+    뉴스는 뉴스봇이 발송 시점에 적재한 daily_news를 읽는다(재조회 불가).
+    """
+    try:
+        logging.info("🌙 [저녁요약] daily_summary 실행")
+        from daily_summary import run as run_daily_summary
+        saved = run_daily_summary()
+        logging.info(f"✅ [저녁요약] 완료 — {saved}개 종목")
+    except Exception as e:
+        logging.error(f"❌ [저녁요약] 오류: {e}")
+        mark_failed(e)
+
+
 @_job()
 def job_watchlist_alert():
     """
