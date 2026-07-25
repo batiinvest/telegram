@@ -34,7 +34,6 @@ SMS Forwarder 앱 추천:
 """
 
 import os
-import re
 import json
 import logging
 from logger_config import get_logger

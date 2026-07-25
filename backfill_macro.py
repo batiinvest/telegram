@@ -11,7 +11,7 @@ yfinance에서 날짜별로 가져와 macro_data 테이블에 저장
   python3 backfill_macro.py --days 180  # 6달
 """
 
-import os, sys, math, time, argparse, logging
+import sys, math, time, argparse
 from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
 load_dotenv()
@@ -19,7 +19,6 @@ load_dotenv()
 
 try:
     import yfinance as yf
-    import pandas as pd
 except ImportError:
     print("pip install yfinance pandas")
     sys.exit(1)

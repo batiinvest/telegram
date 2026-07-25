@@ -18,7 +18,6 @@ Supabase `pro_members` 테이블 + Telegram Bot API를 이용해
   (BOT_TOKEN은 config.py의 TELEGRAM_BOT_TOKEN 사용)
 """
 
-import logging
 from logger_config import get_logger
 log = get_logger(__name__)
 

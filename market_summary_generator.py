@@ -16,7 +16,6 @@ market_summary_generator.py
     - .env 또는 환경변수: SUPABASE_URL, SUPABASE_KEY
 """
 
-import os
 import sys
 import json
 import logging

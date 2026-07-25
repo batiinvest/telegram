@@ -3,8 +3,6 @@ import OpenDartReader
 from google import genai
 from bs4 import BeautifulSoup
 import logging
-import requests
-import re
 import time
 from config import DART_API_KEY, GOOGLE_API_KEY
 from managers import global_session as _session

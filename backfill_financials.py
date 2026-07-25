@@ -22,13 +22,10 @@ backfill_financials.py
 import os
 import sys
 import time
-import logging
 from logger_config import get_logger
 log = get_logger(__name__)
 
 import argparse
-from datetime import datetime
-from typing import Optional
 
 try:
     from db_client import get_supabase_client as _get_sb

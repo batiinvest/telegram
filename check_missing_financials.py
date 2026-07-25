@@ -12,7 +12,7 @@ companies 테이블과 financials 테이블을 비교해
   python check_missing_financials.py --export missing.txt       # 파일로 저장
 """
 
-import os, sys, argparse, logging
+import argparse
 from pathlib import Path
 from dotenv import load_dotenv
 

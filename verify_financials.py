@@ -22,7 +22,6 @@ backfill_financials.py 수집 후 데이터 품질 검증기
 
 import os
 import sys
-import logging
 from logger_config import get_logger
 log = get_logger(__name__)
 

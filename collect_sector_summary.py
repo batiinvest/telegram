@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS sector_daily_summary (
   python collect_sector_summary.py 2026-05-28  # 특정 날짜
 """
 
-import os, sys, logging
+import sys
 from dotenv import load_dotenv
 
 from pathlib import Path

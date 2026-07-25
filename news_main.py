@@ -7,18 +7,16 @@
 #   4. 출처별 신뢰도 가중치 (증권사 리포트 광고 필터)
 #   5. 시간 윈도우 기반 중복 제거 (같은 이벤트 반복 발송 방지)
 
-import requests
 import datetime
 import time
 import logging
-import os
 import html
 import urllib.parse
 import re
 import hashlib
 
 from email.utils import parsedate_to_datetime
-from typing import Set, Dict, List, Tuple
+from typing import Dict
 from collections import deque
 
 from managers import market_timer, HistoryManager, get_session

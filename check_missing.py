@@ -1,4 +1,4 @@
-import os, sys, OpenDartReader, requests
+import sys, OpenDartReader, requests
 sys.path.insert(0, '/home/kjhofone')
 
 # .env 직접 로드

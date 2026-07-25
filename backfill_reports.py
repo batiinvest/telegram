@@ -14,7 +14,7 @@ log = get_logger(__name__)
   python3 backfill_reports.py --skip-history              # 이미 보낸 것도 재전송
 """
 
-import sys, time, logging, argparse
+import sys, time, argparse
 from datetime import date, timedelta
 from urllib.parse import urlencode
 from bs4 import BeautifulSoup

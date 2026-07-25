@@ -8,7 +8,7 @@ KIS inquire-daily-itemchartprice는 호출당 최대 100거래일 → 날짜 윈
 
 실행: cd /home/kjhofone && python3 backfill_market_1y.py [--code 005930] [--days 400]
 """
-import os, sys, time, logging, argparse
+import os, sys, time, argparse
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 load_dotenv('/home/kjhofone/.env')

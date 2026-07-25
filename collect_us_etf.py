@@ -8,8 +8,8 @@ collect_us_etf.py — 미국 산업별 ETF 수집 → us_market 테이블 저장
 실행: python3 collect_us_etf.py [--backfill DAYS]
 """
 
-import os, sys, logging, time, argparse
-from datetime import date, datetime, timedelta, timezone
+import time, argparse
+from datetime import date, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()

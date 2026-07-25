@@ -8,11 +8,9 @@
 
 import re
 import html
-import requests
 import datetime
 import time
 import logging
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from managers import market_timer, HistoryManager, get_session
 from db_utils import fetch_all_pages as _fetch_all_pages

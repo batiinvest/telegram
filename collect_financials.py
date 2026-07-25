@@ -15,13 +15,11 @@ DART OpenAPI → Supabase financials 테이블 수집기
 import os
 import sys
 import time
-import logging
 from logger_config import get_logger
 log = get_logger(__name__)
 
 import argparse
-import requests
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 try:

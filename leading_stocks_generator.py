@@ -29,7 +29,6 @@ Supabase 테이블: leading_stocks
     환경변수: SUPABASE_URL, SUPABASE_KEY (service role key)
 """
 
-import os
 import sys
 import time
 from collections import defaultdict

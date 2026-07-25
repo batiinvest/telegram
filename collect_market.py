@@ -18,7 +18,7 @@ import logging
 from logger_config import get_logger
 log = get_logger(__name__)
 
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -31,7 +31,7 @@ from collect_utils import batch_upsert, batch_update_existing
 
 # 기존 managers 활용 + 시세는 kis_client (메시지 계층 stock_api 의존 제거)
 try:
-    from managers import kis_auth, get_session, safe_float, safe_int
+    from managers import kis_auth, safe_float, safe_int
     from kis_client import get_raw_price as _get_raw_price
 except ImportError:
     print("managers.py, kis_client.py가 같은 폴더에 있어야 합니다.")

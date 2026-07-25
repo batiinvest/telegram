@@ -14,7 +14,7 @@ log = get_logger(__name__)
 설치: pip install yfinance --break-system-packages
 """
 
-import os, sys, logging, time
+import time
 from datetime import date, datetime, timezone
 from dotenv import load_dotenv
 load_dotenv()

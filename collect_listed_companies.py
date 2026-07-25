@@ -19,7 +19,7 @@ dart_fss로 코스피+코스닥 전체 상장사를 동기화합니다.
     python3 collect_listed_companies.py --dry-run  # 변경사항만 확인
 """
 
-import os, sys, time, logging, argparse
+import os, sys, time, argparse
 from dotenv import load_dotenv
 load_dotenv()
 

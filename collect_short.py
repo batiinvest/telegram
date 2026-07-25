@@ -23,13 +23,11 @@ KRX API:
 import os
 import sys
 import time
-import logging
 from logger_config import get_logger
 from collect_utils import batch_upsert, fetch_all_pages
 log = get_logger(__name__)
 
 from datetime import date, timedelta
-from typing import Optional
 
 import requests
 from dotenv import load_dotenv

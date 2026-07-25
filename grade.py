@@ -24,7 +24,6 @@ score (정렬용):
   S=100+(yoy+op_yoy+margin), A=80~85+(yoy), B=50+(yoy), 관찰=30+(qoq)
 """
 
-import logging
 from typing import Optional
 from format_utils import get_prev_quarter  # 공통 유틸로 이관
 from logger_config import get_logger

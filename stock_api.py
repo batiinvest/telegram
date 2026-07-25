@@ -1,6 +1,5 @@
 import requests
 import json
-import os
 import logging
 import math
 import time
@@ -9,9 +8,8 @@ import html
 from io import BytesIO
 from urllib.parse import urljoin, urlencode
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, List
 from bs4 import BeautifulSoup
-from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
 

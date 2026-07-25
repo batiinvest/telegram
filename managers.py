@@ -6,7 +6,7 @@ import requests
 import time
 import threading
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from collections import deque # ✅ deque 임포트 확인 (없으면 추가)
 # time 모듈(line 6)을 datetime.time으로 덮지 않도록 별칭 사용 — time.sleep() 호출부 보호
 from datetime import datetime, time as dtime, timedelta, timezone
