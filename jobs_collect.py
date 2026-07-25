@@ -59,40 +59,65 @@ def job_cleanup_market_data():
     """토요일 새벽 — market_data 정리
     - 모니터링 종목: 90일 보존
     - 전체 상장사(비모니터링): 28일 보존
+    ⚠️ 대량 DELETE 한 문장으로 처리하면 statement timeout(57014) 발생 →
+       오래된 날짜부터 WIN_DAYS 크기 창으로 나눠 삭제한다.
     """
-    KEEP_MON  = 90   # 모니터링 종목 보존일
-    KEEP_ALL  = 28   # 전체 종목 보존일
+    KEEP_MON = 90    # 모니터링 종목 보존일
+    KEEP_ALL = 28    # 전체 종목 보존일
+    WIN_DAYS = 14    # 삭제 배치 날짜 창 (statement timeout 회피)
     try:
         sb = _bridge._get_client() if _BRIDGE_OK else None
         if not sb:
             logging.error("❌ [정리] Supabase 연결 없음 — 스킵")
             return
 
-        cutoff_all = (datetime.date.today() - datetime.timedelta(days=KEEP_ALL)).isoformat()
-        cutoff_mon = (datetime.date.today() - datetime.timedelta(days=KEEP_MON)).isoformat()
+        today      = datetime.date.today()
+        cutoff_all = (today - datetime.timedelta(days=KEEP_ALL)).isoformat()
+        cutoff_mon = (today - datetime.timedelta(days=KEEP_MON)).isoformat()
 
         # 모니터링 종목 코드 목록
         _mon = sb.table('companies').select('code').eq('is_monitored', True).execute()
         mon_codes = [r['code'].split('.')[0] for r in (_mon.data or [])]
 
+        def _windowed_delete(cutoff_iso, apply_filter):
+            """base_date < cutoff 행을 오래된 날짜부터 WIN_DAYS 창으로 나눠 삭제.
+            한 DELETE가 최대 WIN_DAYS치 데이터만 건드려 statement timeout을 피한다.
+            returning='minimal' 로 삭제행 반환(대량 직렬화) 비용도 제거."""
+            r0 = (sb.table('market_data').select('base_date')
+                    .lt('base_date', cutoff_iso).order('base_date').limit(1).execute())
+            if not r0.data:
+                return 0
+            cur    = datetime.date.fromisoformat(r0.data[0]['base_date'])
+            cutoff = datetime.date.fromisoformat(cutoff_iso)
+            total  = 0
+            guard  = 0
+            while cur < cutoff and guard < 2000:
+                guard  += 1
+                win_end = min(cur + datetime.timedelta(days=WIN_DAYS), cutoff)
+                try:
+                    q = (sb.table('market_data').delete(count='exact', returning='minimal')
+                           .gte('base_date', cur.isoformat())
+                           .lt('base_date', win_end.isoformat()))
+                    res = apply_filter(q).execute()
+                    total += (res.count or 0)
+                except Exception as we:
+                    logging.warning(f"⚠️ [정리] 창 {cur}~{win_end} 삭제 실패: {we}")
+                cur = win_end
+            return total
+
         # 1) 비모니터링 종목 — 28일 초과 삭제
         if mon_codes:
-            sb.table('market_data').delete() \
-              .lt('base_date', cutoff_all) \
-              .not_.in_('stock_code', mon_codes).execute()
+            n1 = _windowed_delete(cutoff_all, lambda q: q.not_.in_('stock_code', mon_codes))
         else:
-            sb.table('market_data').delete().lt('base_date', cutoff_all).execute()
+            n1 = _windowed_delete(cutoff_all, lambda q: q)
 
         # 2) 모니터링 종목 — 90일 초과 삭제
+        n2 = 0
         if mon_codes:
-            # 500개 청크로 분할
-            chunk = 200
-            for i in range(0, len(mon_codes), chunk):
-                sb.table('market_data').delete() \
-                  .lt('base_date', cutoff_mon) \
-                  .in_('stock_code', mon_codes[i:i+chunk]).execute()
+            n2 = _windowed_delete(cutoff_mon, lambda q: q.in_('stock_code', mon_codes))
 
-        logging.info(f"🗑️ [정리] market_data 정리 완료 — 모니터링 {KEEP_MON}일 / 전체 {KEEP_ALL}일 보존")
+        logging.info(f"🗑️ [정리] market_data 정리 완료 — 비모니터링 {n1}행 / 모니터링 {n2}행 삭제 (보존 {KEEP_MON}일/{KEEP_ALL}일)")
+        _log_notice("system", f"[정리] market_data — 비모니터링 {n1}행 / 모니터링 {n2}행 삭제")
     except Exception as e:
         logging.error(f"❌ [정리] market_data 정리 오류: {e}")
         mark_failed(e)
