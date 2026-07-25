@@ -5,7 +5,8 @@ dart_parsers.py — 공시 카테고리별 파서 파사드 (2026-07 분할)
   dart_parse_helpers.py       공용 헬퍼·상수 (_fmt_amount·_f·_clean_* 등)
   dart_parsers_capital.py     자본·주식·배당 파서
   dart_parsers_business.py    계약·실적·재무 파서
-  dart_parsers_governance.py  지배구조·지분·주총 파서
+  dart_parsers_agm.py         주총·임원·경영·IR 파서
+  dart_parsers_holdings.py    지분·대량보유·공개매수·담보 파서
   dart_parsers_status.py      거래정지·신탁·제재·정정 파서
   dart_parsers.py             _PARSER_MAP 등록 + 전 심볼 재수출(하위호환)
 
@@ -18,7 +19,8 @@ import logging  # noqa: F401
 from dart_parse_helpers import *       # noqa: F401,F403  헬퍼·상수 재수출
 from dart_parsers_capital import *     # noqa: F401,F403  parse_* 재수출
 from dart_parsers_business import *    # noqa: F401,F403
-from dart_parsers_governance import *  # noqa: F401,F403
+from dart_parsers_agm import *         # noqa: F401,F403
+from dart_parsers_holdings import *    # noqa: F401,F403
 from dart_parsers_status import *      # noqa: F401,F403
 
 
