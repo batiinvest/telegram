@@ -1,0 +1,5 @@
+# 개발/테스트 전용 의존성 (운영 서버에는 설치 불필요)
+# 설치: python -m pip install -r requirements-dev.txt
+# 실행: python -m pytest
+pytest>=8.0
+pyflakes>=3.0
