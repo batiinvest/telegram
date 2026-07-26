@@ -284,6 +284,97 @@ def generate(base_date: str = None) -> int:
     return saved
 
 
+def render_card(row: dict) -> str:
+    """daily_summaries 한 행 → 텔레그램 HTML 카드 (broadcast·수동 발송 공용).
+    row: base_date/corp_name/industry/disclosure_cnt/news_cnt/ai_summary/items."""
+    import html as _html, json as _json
+    def esc(v):
+        return _html.escape(str(v or ''), quote=False)
+    items = row.get('items') or {}
+    if isinstance(items, str):
+        try:
+            items = _json.loads(items)
+        except Exception:
+            items = {}
+    discs = items.get('disclosures') or []
+    news  = items.get('news') or []
+    ind   = row.get('industry') or ''
+
+    lines = [f"🏢 <b>{esc(row.get('corp_name'))}</b>" + (f" · {esc(ind)}" if ind else ""),
+             f"📅 {esc(row.get('base_date'))} 저녁 요약"]
+    if row.get('ai_summary'):
+        lines += ["", "🧠 <b>오늘 한눈에</b>", f"<i>{esc(row['ai_summary'])}</i>"]
+
+    lines.append("")
+    total_d = row.get('disclosure_cnt') or len(discs)
+    if discs:
+        lines.append(f"📋 <b>공시 {total_d}건</b>")
+        for d in discs[:6]:
+            cat = esc(d.get('category') or '기타')
+            nm  = esc((d.get('report_nm') or '').strip())
+            rno = d.get('rcept_no')
+            link = (f" <a href='https://dart.fss.or.kr/dsaf001/main.do?rcpNo={esc(rno)}'>[DART]</a>"
+                    if rno else "")
+            lines.append(f"• <b>[{cat}]</b> {nm}{link}")
+        shown = min(len(discs), 6)
+        if total_d > shown:
+            lines.append(f"  … 외 {total_d - shown}건")
+    else:
+        lines.append("📋 <b>공시</b> 없음")
+
+    lines.append("")
+    if news:
+        lines.append(f"📰 <b>뉴스 {row.get('news_cnt') or len(news)}건</b>")
+        for n in news:
+            src  = n.get('sources')
+            more = f" <i>· {src}개 매체</i>" if isinstance(src, int) and src > 1 else ""
+            ttl  = esc(n.get('title'))
+            lnk  = str(n.get('link') or '')
+            ttl_html = f"<a href='{esc(lnk)}'>{ttl}</a>" if lnk.startswith('http') else ttl
+            lines.append(f"• ({esc(n.get('time'))}) {ttl_html}{more}")
+    else:
+        lines.append("📰 <b>뉴스</b> 없음")
+
+    return "\n".join(lines)
+
+
+def broadcast(base_date: str = None) -> int:
+    """당일 요약 중 활동(공시+뉴스>0) 종목을 해당 기업채팅방으로 발송.
+    방 없는 종목은 스킵(웹 리포트 카드로만 노출). 반환: 발송 성공 건수."""
+    import time as _time
+    import stock_api
+    base_date = base_date or datetime.datetime.now(KST).date().isoformat()
+    sb = get_supabase_client()
+    if not sb:
+        logging.error("❌ [저녁요약 발송] Supabase 없음")
+        return 0
+    rows = (sb.table('daily_summaries').select('*').eq('base_date', base_date).execute().data) or []
+    # 코드 → chat_id (rooms.code의 .KQ/.KS 접미사 정규화)
+    code2chat = {}
+    for k, v in (getattr(config, 'CHAT_IDS_BY_CODE', {}) or {}).items():
+        code2chat[str(k).split('.')[0]] = v
+    if not code2chat:
+        logging.warning("⚠️ [저녁요약 발송] 기업채팅방 매핑 없음 — 스킵")
+        return 0
+
+    sent = 0
+    for r in rows:
+        if (r.get('disclosure_cnt') or 0) + (r.get('news_cnt') or 0) == 0:
+            continue
+        code = str(r.get('stock_code') or '').split('.')[0]
+        chat = code2chat.get(code)
+        if not chat:
+            continue  # 방 없는 종목은 웹 카드로만 노출
+        try:
+            if stock_api.send_telegram(chat, render_card(r), preview=False):
+                sent += 1
+            _time.sleep(0.5)
+        except Exception as e:
+            logging.error(f"[저녁요약 발송] {r.get('corp_name')} 실패: {e}")
+    logging.info(f"🌙 [저녁요약 발송] {base_date} — {sent}건 (기업채팅방)")
+    return sent
+
+
 def run():
     """스케줄러 진입점."""
     return generate()

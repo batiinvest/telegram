@@ -1050,9 +1050,12 @@ def job_daily_summary():
     """
     try:
         logging.info("🌙 [저녁요약] daily_summary 실행")
-        from daily_summary import run as run_daily_summary
-        saved = run_daily_summary()
+        import daily_summary
+        saved = daily_summary.run()
         logging.info(f"✅ [저녁요약] 완료 — {saved}개 종목")
+        # 활동 있는 종목을 기업채팅방으로 발송 (방 없는 종목은 웹 카드로만 노출)
+        sent = daily_summary.broadcast()
+        logging.info(f"✅ [저녁요약] 기업채팅방 발송 {sent}건")
     except Exception as e:
         logging.error(f"❌ [저녁요약] 오류: {e}")
         mark_failed(e)
