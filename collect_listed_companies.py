@@ -34,7 +34,7 @@ except ImportError:
     from supabase import create_client as _cs
     def _get_sb(): return _cs(os.getenv("SB_URL",""), os.getenv("SB_SERVICE_KEY",""))
 
-from collect_utils import fetch_all_pages as _fetch_all_pages
+from collect_utils import fetch_all_pages as _fetch_all_pages, batch_upsert
 
 DART_API_KEY   = os.getenv("DART_API_KEY", "")
 SB_URL         = os.getenv("SB_URL", "")
@@ -157,16 +157,8 @@ def run(dry_run: bool = False):
         return
 
     # 5. DB 반영
-    inserted = 0
-    for i in range(0, len(new_listings), 100):
-        batch = new_listings[i:i+100]
-        try:
-            sb.table("companies").upsert(batch, on_conflict="name", ignore_duplicates=True).execute()
-            inserted += len(batch)
-            log.info(f"신규 저장: {inserted}/{len(new_listings)}개")
-        except Exception as e:
-            log.error(f"신규 저장 실패: {e}")
-        time.sleep(0.2)
+    inserted = batch_upsert(sb, "companies", new_listings, "name", chunk=100,
+                            progress_label="신규 저장", ignore_duplicates=True, sleep=0.2)
 
     updated = 0
     for item in to_update:

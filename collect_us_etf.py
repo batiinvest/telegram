@@ -10,6 +10,7 @@ collect_us_etf.py — 미국 산업별 ETF 수집 → us_market 테이블 저장
 
 import time, argparse
 from datetime import date, timedelta
+from collect_utils import batch_upsert
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -112,16 +113,8 @@ def collect_and_save(days: int = 5):
     all_rows = [r for r in all_rows if r['base_date'] >= cutoff]
 
     log.info(f"총 {len(all_rows)}건 upsert 시작...")
-    chunk = 500
-    for i in range(0, len(all_rows), chunk):
-        batch = all_rows[i:i+chunk]
-        try:
-            _sb.table('us_market').upsert(
-                batch, on_conflict='base_date,ticker,industry'
-            ).execute()
-            log.info(f"  ✅ {i+len(batch)}/{len(all_rows)} 저장 완료")
-        except Exception as e:
-            log.error(f"  ❌ 저장 실패: {e}")
+    batch_upsert(_sb, 'us_market', all_rows, 'base_date,ticker,industry',
+                 chunk=500, progress_label="us_market 저장")
 
     log.info("✅ us_market 수집 완료")
 

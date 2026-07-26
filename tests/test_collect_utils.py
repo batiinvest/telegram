@@ -25,8 +25,10 @@ class FakeQuery:
         self._payload = None
         self._filters = []
 
-    def upsert(self, batch, on_conflict=None):
+    def upsert(self, batch, on_conflict=None, ignore_duplicates=False):
         self._kind, self._payload = "upsert", batch
+        self._upsert_kwargs = {"on_conflict": on_conflict,
+                               "ignore_duplicates": ignore_duplicates}
         return self
 
     def update(self, vals):
@@ -47,6 +49,7 @@ class FakeQuery:
 
     def execute(self):
         if self._kind == "upsert":
+            self.sb.upsert_kwargs.append(self._upsert_kwargs)
             if self.sb.fail_upsert:
                 raise RuntimeError("upsert boom")
             self.sb.upserted.extend(self._payload)
@@ -67,6 +70,7 @@ class FakeSB:
         self.upserted = []
         self.upsert_calls = 0
         self.updates = []
+        self.upsert_kwargs = []
 
     def table(self, t):
         return FakeQuery(self, t)
@@ -95,6 +99,51 @@ def test_batch_upsert_continues_on_failure():
     n = batch_upsert(sb, "t", [{"id": 1}, {"id": 2}], "id", chunk=100)
     assert n == 0
     assert sb.upserted == []
+
+
+def test_batch_upsert_default_no_ignore_duplicates():
+    """기본 호출(하위호환): ignore_duplicates 미전달과 동일하게 False."""
+    sb = FakeSB()
+    batch_upsert(sb, "t", [{"id": 1}], "id")
+    assert sb.upsert_kwargs[0]["ignore_duplicates"] is False
+    assert sb.upsert_kwargs[0]["on_conflict"] == "id"
+
+
+def test_batch_upsert_ignore_duplicates_param():
+    """ignore_duplicates=True → upsert에 전달."""
+    sb = FakeSB()
+    batch_upsert(sb, "t", [{"id": 1}], "id", ignore_duplicates=True)
+    assert sb.upsert_kwargs[0]["ignore_duplicates"] is True
+
+
+def test_batch_upsert_progress_label_logs(caplog):
+    """progress_label 지정 시 청크 성공마다 진행 로그."""
+    import logging
+    sb = FakeSB()
+    with caplog.at_level(logging.INFO):
+        batch_upsert(sb, "t", [{"id": i} for i in range(150)], "id",
+                     chunk=100, progress_label="DB 저장")
+    msgs = [r.message for r in caplog.records]
+    assert "DB 저장: 100/150개" in msgs
+    assert "DB 저장: 150/150개" in msgs
+
+
+def test_batch_upsert_sleep_between_chunks(monkeypatch):
+    """sleep 파라미터 → 청크마다 time.sleep 호출."""
+    import collect_utils
+    slept = []
+    monkeypatch.setattr(collect_utils.time, "sleep", lambda s: slept.append(s))
+    sb = FakeSB()
+    batch_upsert(sb, "t", [{"id": i} for i in range(150)], "id",
+                 chunk=100, sleep=0.2)
+    assert slept == [0.2, 0.2]   # 2청크
+
+
+def test_batch_upsert_raise_on_error_aborts():
+    """raise_on_error=True → 청크 실패를 재발생(중단)."""
+    sb = FakeSB(fail_upsert=True)
+    with pytest.raises(RuntimeError):
+        batch_upsert(sb, "t", [{"id": 1}], "id", raise_on_error=True)
 
 
 # ── require_env ──

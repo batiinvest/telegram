@@ -27,6 +27,7 @@ score (정렬용):
 from typing import Optional
 from format_utils import get_prev_quarter  # 공통 유틸로 이관
 from logger_config import get_logger
+from collect_utils import batch_upsert
 
 log = get_logger(__name__)
 
@@ -226,11 +227,9 @@ def save_grade_history(sb, year: str, quarter: str) -> dict:
         if grade_change in ('new', 'up', 'down'):
             result_map[grade_change].append(row)
 
-    # ── upsert (100개 배치) ──
-    for i in range(0, len(records), 100):
-        sb.table('earnings_grade_history') \
-          .upsert(records[i:i + 100], on_conflict='stock_code,bsns_year,quarter') \
-          .execute()
+    # ── upsert (100개 배치) — 실패 시 중단(기존 try/except 없음 동작 유지) ──
+    batch_upsert(sb, 'earnings_grade_history', records,
+                 'stock_code,bsns_year,quarter', chunk=100, raise_on_error=True)
 
     log.info(
         f"📊 [등급이력] {year} {quarter} — {len(records)}개 저장 "

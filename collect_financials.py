@@ -21,6 +21,7 @@ log = get_logger(__name__)
 import argparse
 from datetime import datetime
 from typing import Optional
+from collect_utils import batch_upsert
 
 try:
     from db_client import get_supabase_client as _get_sb
@@ -871,15 +872,9 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
             except Exception as e:
                 log.debug(f"성장률 계산 실패 {row.get('corp_name')}: {e}")
 
-        for i in range(0, len(collected), 50):
-            batch = collected[i:i+50]
-            try:
-                sb.table("financials").upsert(
-                    batch, on_conflict="corp_code,bsns_year,quarter,fs_div"
-                ).execute()
-                log.info(f"DB 저장: {min(i+50, len(collected))}/{len(collected)}개")
-            except Exception as e:
-                log.error(f"DB 저장 실패: {e}")
+        batch_upsert(sb, "financials", collected,
+                     "corp_code,bsns_year,quarter,fs_div",
+                     chunk=50, progress_label="DB 저장")
 
     log.info(f"=== 공시 기반 수집 완료: 성공 {ok} / 실패 {fail} ===")
     return ok, fail
@@ -1230,19 +1225,9 @@ def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,
         failed = retry_failed
 
     # Supabase upsert (50개씩 배치)
-    upserted = 0
-    batch_size = 50
-    for i in range(0, len(collected), batch_size):
-        batch = collected[i:i+batch_size]
-        try:
-            sb.table("financials").upsert(
-                batch,
-                on_conflict="corp_code,bsns_year,quarter,fs_div"
-            ).execute()
-            upserted += len(batch)
-            log.info(f"DB 저장: {upserted}/{len(collected)}개")
-        except Exception as e:
-            log.error(f"DB 저장 실패 (배치 {i}): {e}")
+    batch_upsert(sb, "financials", collected,
+                 "corp_code,bsns_year,quarter,fs_div",
+                 chunk=50, progress_label="DB 저장")
 
     log.info(f"=== 완료: 수집 {len(collected)}개 / DART없음 {len(skipped)}개 / 실패 {len(failed)}개 ===")
     if failed:

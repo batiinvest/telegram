@@ -47,6 +47,7 @@ log = get_logger(__name__)
 
 from db_utils import fetch_all_pages
 from db_client import get_supabase_client
+from collect_utils import batch_upsert
 
 sb = get_supabase_client()
 
@@ -261,10 +262,8 @@ def save(records: list[dict]):
     if not records:
         log.info('저장할 데이터 없음')
         return
-    for i in range(0, len(records), 50):
-        sb.from_('sector_daily_summary') \
-          .upsert(records[i:i+50], on_conflict='base_date,industry') \
-          .execute()
+    batch_upsert(sb, 'sector_daily_summary', records, 'base_date,industry',
+                 chunk=50, raise_on_error=True)
     log.info(f'sector_daily_summary upsert: {len(records)}개')
 
 

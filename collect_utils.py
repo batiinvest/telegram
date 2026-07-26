@@ -11,6 +11,7 @@ collect_*.py / backfill_*.py 에서 반복되는 패턴을 통합합니다.
 
 import logging
 import os
+import time
 
 log = logging.getLogger(__name__)
 
@@ -33,24 +34,42 @@ def fetch_all_pages(query_builder, page_size: int = 1000) -> list:
 # ── 배치 upsert ───────────────────────────────────────────────────────────────
 
 def batch_upsert(sb, table: str, records: list,
-                 conflict_col: str, chunk: int = 100) -> int:
+                 conflict_col: str, chunk: int = 100,
+                 progress_label: str = "", ignore_duplicates: bool = False,
+                 sleep: float = 0, raise_on_error: bool = False) -> int:
     """
     레코드 리스트를 청크 단위로 upsert.
     collect_*.py 전반의 `for i in range(0, len(records), N):` 패턴 통합.
+
+    기본값은 기존 동작과 동일(하위호환). 옵션으로 인라인 변형을 흡수:
+      progress_label   : 지정 시 청크 성공마다 `"{label}: {done}/{total}개"` info 로그
+      ignore_duplicates: True면 upsert에 ignore_duplicates=True 전달 (신규 삽입 전용)
+      sleep            : 청크 사이 대기 초 (레이트리밋 완화)
+      raise_on_error   : True면 청크 실패를 삼키지 않고 재발생(중단) — try/except 없던 인라인용
 
     Returns:
         성공 upsert 건수
     """
     if not records:
         return 0
+    total_recs = len(records)
     total = 0
-    for i in range(0, len(records), chunk):
+    for i in range(0, total_recs, chunk):
         batch = records[i:i + chunk]
         try:
-            sb.table(table).upsert(batch, on_conflict=conflict_col).execute()
+            kwargs = {"on_conflict": conflict_col}
+            if ignore_duplicates:
+                kwargs["ignore_duplicates"] = True
+            sb.table(table).upsert(batch, **kwargs).execute()
             total += len(batch)
+            if progress_label:
+                log.info(f"{progress_label}: {min(i + chunk, total_recs)}/{total_recs}개")
         except Exception as e:
+            if raise_on_error:
+                raise
             log.error(f"[collect_utils] batch_upsert 오류 ({table} chunk {i}): {e}")
+        if sleep:
+            time.sleep(sleep)
     return total
 
 
