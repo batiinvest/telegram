@@ -21,6 +21,7 @@ import datetime
 
 import config
 from db_client import get_supabase_client
+from collect_utils import batch_upsert
 # 중복판정 기준은 뉴스봇과 단일 출처 공유 (news_main 모듈 레벨 함수)
 from news_main import (normalize_title, title_sig, jaccard, extract_event_key,
                        DUP_SIM_THRESHOLD, DUP_EVENT_GATE)
@@ -275,15 +276,8 @@ def generate(base_date: str = None) -> int:
             'updated_at': datetime.datetime.now(KST).isoformat(),
         })
 
-    saved = 0
-    for i in range(0, len(rows), 100):
-        chunk = rows[i:i + 100]
-        try:
-            sb.table('daily_summaries').upsert(
-                chunk, on_conflict='base_date,corp_name').execute()
-            saved += len(chunk)
-        except Exception as e:
-            logging.error(f"❌ [저녁요약] 저장 실패(청크 {i // 100}): {e}")
+    # collect_utils.batch_upsert 위임 (청크별 try/except·건수반환 동일)
+    saved = batch_upsert(sb, 'daily_summaries', rows, 'base_date,corp_name', chunk=100)
 
     logging.info(f"🌙 [저녁요약] {base_date} — {saved}개 종목 저장 "
                  f"(대형 {len(majors)}, AI서술 {ai_done})")

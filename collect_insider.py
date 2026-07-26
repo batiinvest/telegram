@@ -12,6 +12,7 @@ import requests, zipfile, io, logging, time
 import xml.etree.ElementTree as ET
 from datetime import date
 from typing import Optional
+from collect_utils import batch_upsert
 
 log = logging.getLogger(__name__)
 
@@ -542,18 +543,9 @@ def collect_insider_trades(disc_all: list, api_key: str, sb,
             deduped.append(row)
     all_rows = deduped
 
-    # upsert (10개씩 배치)
-    saved = 0
-    for i in range(0, len(all_rows), 10):
-        batch = all_rows[i:i+10]
-        try:
-            sb.table('insider_trades').upsert(
-                batch,
-                on_conflict='rcept_no,reporter,trade_date,stock_type'
-            ).execute()
-            saved += len(batch)
-        except Exception as e:
-            log.error(f"📋 [지분공시] DB 저장 실패: {e}")
+    # upsert (10개씩 배치) — collect_utils.batch_upsert 위임 (청크별 try/except·건수반환 동일)
+    saved = batch_upsert(sb, 'insider_trades', all_rows,
+                         'rcept_no,reporter,trade_date,stock_type', chunk=10)
 
     log.info(f"📋 [지분공시] 저장 완료: {saved}건 (임원 {len(insider_targets)}건 + 대량보유 {len(bulk_targets)}건)")
     return saved
