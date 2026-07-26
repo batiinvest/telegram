@@ -289,7 +289,7 @@ def collect_one(dart, sb, stock_code: str, force: bool = False) -> bool:
 
             log.info(f"  사업보고서 섹션 추출: {list(sections.keys())}")
         else:
-            log.info(f"  사업보고서 섹션 없음 (수동 입력 필요)")
+            log.info("  사업보고서 섹션 없음 (수동 입력 필요)")
     except Exception as e:
         log.warning(f"  사업보고서 처리 실패: {e}")
 
@@ -299,7 +299,7 @@ def collect_one(dart, sb, stock_code: str, force: bool = False) -> bool:
         sb.table('company_info') \
           .upsert(payload, on_conflict='stock_code') \
           .execute()
-        log.info(f"  ✅ 저장 완료")
+        log.info("  ✅ 저장 완료")
         return True
     except Exception as e:
         log.error(f"  ❌ 저장 실패: {e}")

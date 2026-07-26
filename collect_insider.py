@@ -123,10 +123,8 @@ def parse_insider_xml(xml_content: str, rcept_no: str, corp_code: str,
 
     # 세부변동내역 테이블 파싱
     # TABLE-GROUP ACLASS="RPT_RSN" 하위 TR들
-    in_detail = False
     for tg in root.iter('TABLE-GROUP'):
         if tg.get('ACLASS') == 'RPT_RSN':
-            in_detail = True
             for tr in tg.iter('TR'):
                 row_data = {}
                 for child in tr:
@@ -238,10 +236,6 @@ def parse_bulk_holder_xml(xml_content: str, rcept_no: str, corp_code: str,
     bfr_rt = find_val('BFR_STK_RT') or find_val('SUM_BMT_RT') or ''
     ths_rt = find_val('THS_STK_RT') or find_val('SUM_TMT_RT') or ''
 
-    # 변동 방향 판단
-    direction = 0
-    if mdf is not None:
-        direction = 1 if mdf > 0 else (-1 if mdf < 0 else 0)
 
     # 변동사유
     reason_text = find_val('CHN_RSN') or find_val('CHN_RSM') or rpt_dst_txt or ''

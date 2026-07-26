@@ -482,7 +482,7 @@ def run_and_alert(trd_date: str = None, telegram_token: str = None,
 
     # 3. 텔레그램 알림 (stock_api.send_telegram 사용)
     if not telegram_token or not chat_id:
-        log.info(f"📉 [공매도급증] 텔레그램 미설정 — 콘솔 출력만")
+        log.info("📉 [공매도급증] 텔레그램 미설정 — 콘솔 출력만")
         for s in surges[:10]:
             log.info(f"  {s['corp_name']}({s['stock_code']}) "
                      f"오늘 {s['today_ratio']}% / 5일평균 {s['avg_ratio']}% "

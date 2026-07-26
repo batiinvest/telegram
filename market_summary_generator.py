@@ -410,11 +410,6 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
         k1, k5x = sig.get("kr1"), sig.get("kr5x")
         return k1 is not None and k5x is not None and k1 >= THR_SURGE and k5x <= 0
 
-    # ── 공시 분석 ──
-    from collections import Counter
-    disc_count = len(discs)
-    cat_counter = Counter(d.get("category","기타") for d in discs)
-    top_cats = [f"{k}({v})" for k, v in cat_counter.most_common(3)]
 
     # ────────────────────────────────────────────────────────
     # 5섹션 빌드
@@ -656,7 +651,7 @@ def run(target_date: Optional[str] = None):
 
     macro    = fetch_macro(target_date)
     if not macro:
-        log.warning(f"[SummaryGen] macro_data 없음 — 중단")
+        log.warning("[SummaryGen] macro_data 없음 — 중단")
         return False
 
     market_rows = fetch_market_summary(target_date)

@@ -434,7 +434,7 @@ def job_collect_financials():
                 logging.info(f"📊 [재무수집] 전체 완료: 성공 {total_ok}개, 실패 {total_fail}개")
                 _log_notice("system", f"[재무수집] 오늘 공시 {len(today_corps)}개 → {total_ok}개 완료")
             else:
-                logging.info(f"📊 [재무수집] 오늘 재무 공시 없음 — 재무수집 스킵, 공시목록만 저장")
+                logging.info("📊 [재무수집] 오늘 재무 공시 없음 — 재무수집 스킵, 공시목록만 저장")
         else:
             logging.info(f"📊 [재무수집] 오늘({today}) 정기보고서 공시 없음 — 공시목록만 저장")
 
@@ -539,7 +539,6 @@ def job_save_grade_history(year: str = None, quarter: str = None):
             return
 
         GRADE_EMOJI = {'S': '🏆', 'A': '🥇', 'B': '🥈', '관찰': '⚡'}
-        GRADE_COLOR = {'S': '금', 'A': '주황', 'B': '파랑', '관찰': '초록'}
 
         def fmt_row(r, change_label):
             g  = r['grade']

@@ -598,7 +598,7 @@ def main():
     all_quarters = sorted({f"{r['bsns_year']} {r['quarter']}" for r in rows})
 
     print(f"\n{'='*60}")
-    print(f"🔍 재무 데이터 품질 검증 보고서")
+    print("🔍 재무 데이터 품질 검증 보고서")
     print(f"   검증 범위: {'모니터링 종목' if monitored_only else '전체'}")
     print(f"   연도 필터: {args.year or '전체'}")
     print(f"   총 데이터: {len(rows):,}건  |  분기: {len(all_quarters)}개")

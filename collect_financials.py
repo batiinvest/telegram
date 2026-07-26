@@ -697,7 +697,6 @@ def collect_one(dart, corp_code: str, stock_code: str, corp_name: str,
         # Q1/Q2/Q3: thstrm_amount = 당해 단독값 → 그대로 사용
         # Q4(사업보고서): thstrm_amount = 연간 누적값 → 이후 convert_to_pure_quarter에서 변환
         # revenue는 합계 계정 우선 — 세부항목(재화판매, 용역 등)이 먼저 나와도 합계로 덮어씀
-        PREFER_MAX_COLS = set()  # 최대값 우선 제거
         # revenue 우선순위: 정확한 계정명 순서로 선택
         REVENUE_PRIORITY = ['매출액', '수익(매출액)', '영업수익', '매출', '수익',
                            '순매출액', '매출액 및 지분법손익', '총매출액', '영업수익(매출액)']
@@ -788,8 +787,6 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
         log.warning("수집 대상 없음")
         return 0, 0
 
-    REPRT = {'Q1':'11013','Q2':'11012','Q3':'11014','Q4':'11011'}
-    reprt_code = REPRT.get(quarter, '11013')
 
     ok, fail = 0, 0
     collected = []

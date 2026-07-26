@@ -101,7 +101,6 @@ def parse_outside_director(kv: dict) -> list:
 
     # 변경 전 현황
     before_total   = _get(kv, '3. Status before change of outside directors')
-    after_total    = _get(kv, '4. Status after change of outside director')
     after_outside  = _get(kv, 'Total number of outside directors (persons)')
     after_reg      = _get(kv, 'Total number of registered directors (persons)')
     ratio          = _get(kv, 'Outside director ratio (%)')

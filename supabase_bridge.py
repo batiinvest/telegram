@@ -361,7 +361,7 @@ class SupabaseBridge:
             flag_val = res.data[0]["value"]
             if flag_val != self._last_reload_flag:
                 self._last_reload_flag = flag_val
-                logging.info(f"[Bridge] 재로드 신호 감지 — 종목 데이터 갱신")
+                logging.info("[Bridge] 재로드 신호 감지 — 종목 데이터 갱신")
                 return True
             return False
         except Exception as e:
@@ -383,7 +383,7 @@ class SupabaseBridge:
             flag_val = res.data[0]["value"]
             if flag_val != self._last_disclosure_flag:
                 self._last_disclosure_flag = flag_val
-                logging.info(f"[Bridge] 공시수집 수동 트리거 감지")
+                logging.info("[Bridge] 공시수집 수동 트리거 감지")
                 return True
             return False
         except Exception as e:

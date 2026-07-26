@@ -357,7 +357,7 @@ def save_to_db(data: dict, force: bool = False) -> bool:
     payload['updated_at'] = datetime.now(timezone.utc).isoformat()
 
     try:
-        res = sb.table('macro_data').upsert(payload, on_conflict='base_date').execute()
+        sb.table('macro_data').upsert(payload, on_conflict='base_date').execute()
         log.info(f"✅ macro_data 저장 완료 ({today}) — {len(payload)}개 컬럼")
         return True
     except Exception as e:

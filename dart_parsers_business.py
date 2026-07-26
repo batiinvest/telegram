@@ -214,8 +214,6 @@ def parse_preliminary_earnings(kv: dict) -> list:
     """연결/별도 잠정실적 공정공시"""
     lines = []
 
-    # 보고 기간 추출: 당기실적 키의 값이 시작일
-    period_start = _get(kv, '당기실적')
     # 분기 레이블: 두 가지 패턴 지원
     #   ('26.1Q)  →  26.1Q
     #   (2026년 1분기)  →  26.1Q 변환

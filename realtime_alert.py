@@ -844,7 +844,7 @@ class KisMyStockScanner:
                     json={'chat_id': int(parts[2]), 'message_id': int(parts[3])}, timeout=5)
                 answer('🗑 삭제됨')
                 edit_append(chr(10) + chr(10) + '🗑 메시지 삭제됨')
-            except Exception as _de:
+            except Exception:
                 answer('삭제 실패', alert=True)
             return
         if action == 'ok':

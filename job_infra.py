@@ -27,7 +27,7 @@ try:
         _init_mon = _sb_init.table('companies').select('code').eq('is_monitored', True).execute()
         _bridge._prev_mon_codes = {r['code'].split('.')[0] for r in (_init_mon.data or [])}
         logging.info(f"📋 [Bridge] 모니터링 종목 {len(_bridge._prev_mon_codes)}개 초기화")
-    except Exception as _ie:
+    except Exception:
         _bridge._prev_mon_codes = set()
 except Exception as _be:
     _bridge = None

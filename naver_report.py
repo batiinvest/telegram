@@ -275,7 +275,7 @@ def _build_report_caption(file_name: str, tag: str, hashtags: str, fields: dict 
         lines.append(f"⚠️ 리스크  {rk}")
 
     lines.append("")
-    lines.append(f"📎 <a href='https://t.me/batiarchive'>바티아카이브</a>")
+    lines.append("📎 <a href='https://t.me/batiarchive'>바티아카이브</a>")
     lines.append(hashtags)
 
     return "\n".join(lines)[:1024]
@@ -322,11 +322,9 @@ def run_naver_report_job():
                 # 데이터가 없는 경우 (네이버는 데이터 없어도 빈 테이블 구조일 수 있음)
                 if not rows: break 
 
-                page_has_data = False
                 for row in rows:
                     data = _parse_report_row(row, base_url, page_type)
                     if data:
-                        page_has_data = True
                         pdf_url, file_name, tag = data
                         
                         # 이미 보낸 리포트는 건너뜀 (중복 방지)

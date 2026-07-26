@@ -764,7 +764,7 @@ def get_sector_status(industry_name: str) -> str:
         if (data := price_data.get(code))
     ]
     
-    if not results: return f"❌ 데이터를 처리할 수 없습니다."
+    if not results: return "❌ 데이터를 처리할 수 없습니다."
     
     avg_rate = sum(r['rate'] for r in results) / len(results)
     results.sort(key=lambda x: x['rate'], reverse=True)
@@ -787,7 +787,7 @@ def get_sector_status(industry_name: str) -> str:
         msg += f"{i+1}. <b>{item['name']}</b> ({get_arrow(item['rate'])}{item['rate']}%)\n"
 
     if laggards:
-        msg += f"\n💧 <b>하락 소외</b>\n"
+        msg += "\n💧 <b>하락 소외</b>\n"
         for i, item in enumerate(laggards):
             msg += f"{i+1}. {item['name']} ({get_arrow(item['rate'])}{item['rate']}%)\n"
 
@@ -1034,7 +1034,7 @@ def get_market_scoreboard(shared_prices: dict = None, breadth: str = None,
         r_icon = '🔺' if sec['rate'] > 0 else '🔻' if sec['rate'] < 0 else '➖'
         msg += f"{rank}. <b>{sec['name']}</b> {r_icon} {fmt_change_pct(sec['rate'])}\n"
 
-    msg += f"════════════\n💡 <b>Tip:</b> 상세 분석은 각 산업방에서 <i>/업황</i> 또는 <i>/자금</i>"
+    msg += "════════════\n💡 <b>Tip:</b> 상세 분석은 각 산업방에서 <i>/업황</i> 또는 <i>/자금</i>"
     return msg
 
 def get_universe_ranking(shared_prices: dict = None, tag_map: dict = None) -> str:
@@ -1070,7 +1070,7 @@ def get_universe_ranking(shared_prices: dict = None, tag_map: dict = None) -> st
         _tag = tag_map.get(item['code'], '') if tag_map else ''
         msg += f"{i+1}. <b>{item['name']}</b> (🔺{fmt_change_pct(item['rate'])})" + (f"  {_tag}" if _tag else "") + "\n"
         
-    msg += f"\n💧 <b>급락 Bottom 5</b>\n"
+    msg += "\n💧 <b>급락 Bottom 5</b>\n"
     for i, item in enumerate(bottom_5):
         _tag = tag_map.get(item['code'], '') if tag_map else ''
         msg += f"{i+1}. {item['name']} (🔻{fmt_change_pct(item['rate'])})" + (f"  {_tag}" if _tag else "") + "\n"
@@ -1204,7 +1204,7 @@ def get_theme_analysis(theme_name: str) -> str:
         rate_txt = f"+{item['rate']}%" if item['rate'] > 0 else f"{item['rate']}%"
         msg += f"{rank}. <b>{item['name']}</b> {get_arrow(item['rate'])} {rate_txt} ({format_money(item['cap'])})\n"
         
-    msg += f"════════════"
+    msg += "════════════"
     return msg
 
 def get_industry_theme_ranking(industry_name: str, shared_prices: dict = None,
@@ -1281,7 +1281,7 @@ def get_industry_theme_ranking(industry_name: str, shared_prices: dict = None,
                 msg += f"     💰 {_fe['text']}\n"
             
         msg += "\n"
-    msg += f"════════════"
+    msg += "════════════"
     return msg
 
 def _get_trend_raw(code: str) -> Dict[str, float]:
@@ -1375,14 +1375,14 @@ def get_sector_fundamental_comparison(target_name: str) -> str:
             f"20일 {ti['20d']}{d['t_20d']:.1f}% │ "
             f"60일 {ti['60d']}{d['t_60d']:.1f}%\n"
         )
-        msg += f"════════════\n" 
-        msg += f"📊 <b>가치 지표</b>\n"
+        msg += "════════════\n" 
+        msg += "📊 <b>가치 지표</b>\n"
         msg += f"• PER: {d['per']:.2f}배 | EPS: {d['eps']:,}원\n"
         msg += f"• PBR: {d['pbr']:.2f}배 | ROE: {d['roe']:.1f}%\n"
-        msg += f"════════════\n"
+        msg += "════════════\n"
         msg += f"{d['financial_msg']}\n\n"
 
-    msg += f"════════════"
+    msg += "════════════"
     return msg
 
 def _fetch_weekly_stats_batch(target_codes: Dict[str, str]) -> List[Dict]:
@@ -1418,11 +1418,11 @@ def _format_top_bottom_msg(stock_data: List[Dict]) -> str:
     bottom_5 = stock_data[-5:]
     bottom_5.sort(key=lambda x: x['rate']) 
 
-    msg = f"🚀 <b>주간 급등 Top 5</b>\n"
+    msg = "🚀 <b>주간 급등 Top 5</b>\n"
     for i, item in enumerate(top_5):
         msg += f"{i+1}. <b>{item['name']}</b> ({item['r_1w']} |{item['r_1m']} | {item['r_3m']})\n"
 
-    msg += f"\n📉 <b>주간 급락 Top 5</b>\n"
+    msg += "\n📉 <b>주간 급락 Top 5</b>\n"
     for i, item in enumerate(bottom_5):
         msg += f"{i+1}. <b>{item['name']}</b> ({item['r_1w']} | {item['r_1m']} | {item['r_3m']})\n"
     return msg
@@ -1454,9 +1454,9 @@ def get_weekly_universe_ranking() -> str:
         rate_str = f"+{avg:.2f}" if avg > 0 else f"{avg:.2f}"
         msg += f"{i+1}. <b>{sec['name']}</b> {icon} {rate_str}%\n"
 
-    msg += f"════════════\n"
+    msg += "════════════\n"
     msg += _format_top_bottom_msg(stock_data) 
-    msg += f"════════════\n💡 괄호 안은 (1주 | 20일 | 60일) 수익률입니다."
+    msg += "════════════\n💡 괄호 안은 (1주 | 20일 | 60일) 수익률입니다."
     return msg
 
 def get_industry_weekly_ranking(industry_name: str) -> str:
@@ -1484,9 +1484,9 @@ def get_industry_weekly_ranking(industry_name: str) -> str:
         rate_str = f"+{avg:.2f}" if avg > 0 else f"{avg:.2f}"
         msg += f"{i+1}. <b>{t['name']}</b> {icon} {rate_str}%\n"
 
-    msg += f"════════════\n"
+    msg += "════════════\n"
     msg += _format_top_bottom_msg(stock_data) 
-    msg += f"════════════\n💡 괄호 안은 (1주 | 20일 | 60일) 수익률입니다."
+    msg += "════════════\n💡 괄호 안은 (1주 | 20일 | 60일) 수익률입니다."
     return msg
 
 def get_market_breadth(sb_client) -> str:
@@ -1878,15 +1878,15 @@ def get_weekly_flow_summary(sb_client) -> str:
     for i, r in enumerate(f_buy, 1):
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['f_amt'])}\n"
 
-    msg += f"\n🔻 <b>외국인 순매도 Top5</b>\n"
+    msg += "\n🔻 <b>외국인 순매도 Top5</b>\n"
     for i, r in enumerate(f_sell, 1):
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['f_amt'])}\n"
 
-    msg += f"\n════════════\n🔺 <b>기관 순매수 Top5</b>\n"
+    msg += "\n════════════\n🔺 <b>기관 순매수 Top5</b>\n"
     for i, r in enumerate(i_buy, 1):
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['i_amt'])}\n"
 
-    msg += f"\n🔻 <b>기관 순매도 Top5</b>\n"
+    msg += "\n🔻 <b>기관 순매도 Top5</b>\n"
     for i, r in enumerate(i_sell, 1):
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['i_amt'])}\n"
 
@@ -2052,7 +2052,7 @@ def get_industry_financial_ranking(industry_name: str) -> str:
             f"{data_part}\n"
         )
 
-    msg += f"──────────────\n"
+    msg += "──────────────\n"
     msg += f"ℹ️ <u>밑줄</u>: 추정치 없어 '{prev_year_str}년 실적 반영\n"
     msg += f"(총 {len(combined_list)}개 종목)"
     return msg

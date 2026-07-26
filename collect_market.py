@@ -774,7 +774,6 @@ def backfill_market(days: int = 90, max_workers: int = 3,
                 return code, name, []
 
             output2 = data.get('output2', []) or []
-            output1 = data.get('output1', {}) or {}
 
             rows = []
             for r in output2:
@@ -943,7 +942,6 @@ def fetch_analyst_opinions(stock_code: str, corp_name: str,
                 continue
             opinion_date = f"{d[:4]}-{d[4:6]}-{d[6:]}"
             tp = row.get('hts_goal_prc', '0').strip()
-            bp = row.get('stck_prdy_clpr', '0').strip()
             gr = row.get('dprt', '').strip()
             result.append({
                 'stock_code':        stock_code,

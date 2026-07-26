@@ -559,4 +559,4 @@ if __name__ == '__main__':
         ok = send_invite(tid)
         print("✅ 발송 성공" if ok else "❌ 발송 실패")
     else:
-        print(f"사용법: python pro_channel.py [stats|list|check|invite <telegram_id>]")
+        print("사용법: python pro_channel.py [stats|list|check|invite <telegram_id>]")

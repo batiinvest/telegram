@@ -134,12 +134,12 @@ def main():
     # 수집 명령어 안내
     print('  ─── 수집 명령어 ───────────────────────────────────────')
     if scope in ('all', 'non_monitored'):
-        print(f'  비모니터링 최근 분기만:')
-        print(f'    python collect_financials.py --non-monitored-only')
-        print(f'  비모니터링 2023년부터 전체:')
-        print(f'    python collect_financials.py --non-monitored-only --from-year 2023')
+        print('  비모니터링 최근 분기만:')
+        print('    python collect_financials.py --non-monitored-only')
+        print('  비모니터링 2023년부터 전체:')
+        print('    python collect_financials.py --non-monitored-only --from-year 2023')
     if scope in ('all', 'monitored') and monitored_missing:
-        print(f'  모니터링 누락 분기:')
+        print('  모니터링 누락 분기:')
         print(f'    python collect_financials.py {year} {quarter} --monitored-only')
     print('=' * 60)
 

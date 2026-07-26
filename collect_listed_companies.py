@@ -92,7 +92,6 @@ def run(dry_run: bool = False):
         raise RuntimeError("companies 조회 결과 0건 — 쿼리 실패 의심, 동기화 중단 (오판 방지)")
 
     dart_codes = set(dart_map.keys())
-    db_codes   = set(db_map.keys())
 
     # 3. 케이스 분류
     new_listings        = []
