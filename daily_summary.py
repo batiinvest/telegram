@@ -342,19 +342,18 @@ def render_card(row: dict) -> str:
     return "\n".join(lines)
 
 
-def render_empty_card(name: str, base_date: str) -> str:
-    """활동(공시·뉴스) 없는 종목용 최소 카드 — 전 기업채팅방 발송 시."""
-    import html as _html
-    def esc(v):
-        return _html.escape(str(v or ''), quote=False)
-    return (f"🏢 <b>{esc(name)}</b>\n"
-            f"📅 {esc(base_date)} 저녁 요약\n\n"
-            f"오늘은 새로 올라온 공시·뉴스가 없어요.")
+def _summary_body(r: dict, name: str, base_date: str) -> str:
+    """요약 카드에서 종목 헤더(🏢/📅) 제거한 본문 — 시세 블록에 이어붙일 때."""
+    if r and (r.get('disclosure_cnt') or 0) + (r.get('news_cnt') or 0) > 0:
+        lines = render_card(r).split(chr(10))
+        return chr(10).join(lines[2:]).lstrip(chr(10))
+    return "오늘은 새로 올라온 공시·뉴스가 없어요."
 
 
 def broadcast(base_date: str = None) -> int:
-    """당일 요약을 전 기업채팅방으로 발송(사용자 선택). 활동 있으면 요약 카드,
-    없으면 '특이사항 없음' 카드. 반환: 발송 성공 건수."""
+    """당일 요약을 전 기업채팅방으로 통합 발송 = 시세 스냅샷(get_stock_detail) + 공시·뉴스.
+    활동 없으면 시세 + '특이사항 없음'. 18:30 마감 브리핑의 종목 시세 발송을 이걸로 통합.
+    반환: 발송 성공 건수."""
     import time as _time
     import stock_api
     base_date = base_date or datetime.datetime.now(KST).date().isoformat()
@@ -370,6 +369,10 @@ def broadcast(base_date: str = None) -> int:
     except Exception as e:
         logging.error(f"❌ [저녁요약 발송] rooms 조회 실패: {e}")
         return 0
+    try:
+        flow_map = stock_api.get_flow_map(sb)
+    except Exception:
+        flow_map = None
 
     sent = 0
     for rm in rooms:
@@ -377,18 +380,22 @@ def broadcast(base_date: str = None) -> int:
         if not chat:
             continue
         code = str(rm.get('code') or '').split('.')[0]
+        name = rm.get('name') or ''
         r = by_code.get(code)
-        if r and (r.get('disclosure_cnt') or 0) + (r.get('news_cnt') or 0) > 0:
-            msg = render_card(r)
-        else:
-            msg = render_empty_card(rm.get('name'), base_date)
+        try:
+            detail = stock_api.get_stock_detail(code, name, flow_map=flow_map)
+        except Exception as e:
+            logging.warning(f"[저녁요약 발송] {name} 시세 실패: {e}")
+            detail = None
+        head = detail if detail else f"🏢 <b>{name}</b>"
+        msg = head + chr(10) * 2 + _summary_body(r, name, base_date)
         try:
             if stock_api.send_telegram(chat, msg, preview=False):
                 sent += 1
             _time.sleep(0.5)
         except Exception as e:
-            logging.error(f"[저녁요약 발송] {rm.get('name')} 실패: {e}")
-    logging.info(f"🌙 [저녁요약 발송] {base_date} — {sent}/{len(rooms)}건 (전 기업채팅방)")
+            logging.error(f"[저녁요약 발송] {name} 실패: {e}")
+    logging.info(f"🌙 [저녁요약 발송] {base_date} — {sent}/{len(rooms)}건 (통합: 시세+공시뉴스)")
     return sent
 
 

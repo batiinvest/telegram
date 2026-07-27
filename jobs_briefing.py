@@ -144,10 +144,7 @@ def job_daily_closing():
         stock_api.get_industry_theme_ranking, prices, _flow,
         keyboard=COMMON_BUTTON, label="마감 브리핑"
     )
-    _broadcast_to_companies(
-        stock_api.get_stock_detail, _flow,
-        keyboard=COMMON_BUTTON, label="마감 브리핑"
-    )
+    # 종목 시세 상세는 저녁요약(daily_summary.broadcast, 18:55)에 통합 발송 → 여기선 제거
 
 
 @_job("kind_ir")
