@@ -1270,9 +1270,10 @@ def get_industry_theme_ranking(industry_name: str, shared_prices: dict = None,
             s_rate = stock['rate']
             cap_str = format_money(stock['cap'])
             s_icon = "🔺" if s_rate > 0 else "🔻" if s_rate < 0 else "➖"
-            # 상한가/하한가 배지 — prdy_vrss_sign(1=상한, 5=하한)이 등락률 임계보다 정확
+            # 상한가/하한가 배지 — prdy_vrss_sign(1=상한, 4=하한)이 등락률 임계보다 정확
+            # (KIS 부호코드: 1상한·2상승·3보합·4하한·5하락 — 5는 일반 하락이라 배지 없음)
             _sign = str(stock.get("sign") or "")
-            limit_tag = " 상한가" if _sign == "1" else " 하한가" if _sign == "5" else ""
+            limit_tag = " 상한가" if _sign == "1" else " 하한가" if _sign == "4" else ""
             msg += f"  └ {s_name} {s_icon}{fmt_change_pct(s_rate)}{limit_tag} ({cap_str})\n"
             # 확정 수급 — flow_map은 마감 브리핑에서만 전달(장중엔 미확정이라 생략).
             # 외국인·기관 중 한쪽이라도 ±10억 이상일 때만 표시(소액 노이즈 제거).
