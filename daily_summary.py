@@ -16,6 +16,7 @@ daily_summary.py — 종목별 저녁 요약 생성
 """
 import re
 import sys
+import time
 import logging
 import datetime
 
@@ -42,6 +43,7 @@ SIGNIFICANT_CATS = {
 MAX_NEWS = 5        # 카드에 노출할 뉴스 이벤트 수
 MAX_DISC = 8        # 카드에 노출할 공시 수
 MAX_AI_CALLS = 30   # 1회 실행당 Gemini 호출 상한 (무료 쿼터 보호)
+AI_CALL_DELAY = 13  # Gemini 무료 티어 분당 5회 한도 → 호출 간 최소 간격(초). 30개 ≈ 6분.
 
 
 # ══════════════════════════════════════════════════════════════
@@ -239,7 +241,9 @@ def generate(base_date: str = None) -> int:
                     key=lambda b: (b['cap'], len(b['discs']) + len(b['news'])),
                     reverse=True)[:MAX_AI_CALLS]
     ai_done = 0
-    for b in majors:
+    for i, b in enumerate(majors):
+        if i:
+            time.sleep(AI_CALL_DELAY)   # 분당 5회 한도 회피 — 버스트로 429 나던 문제 해결
         b['ai'] = ai_synthesis(
             b['name'],
             [(d.get('report_nm') or '').strip() for d in b['discs']],
@@ -338,9 +342,19 @@ def render_card(row: dict) -> str:
     return "\n".join(lines)
 
 
+def render_empty_card(name: str, base_date: str) -> str:
+    """활동(공시·뉴스) 없는 종목용 최소 카드 — 전 기업채팅방 발송 시."""
+    import html as _html
+    def esc(v):
+        return _html.escape(str(v or ''), quote=False)
+    return (f"🏢 <b>{esc(name)}</b>\n"
+            f"📅 {esc(base_date)} 저녁 요약\n\n"
+            f"오늘은 새로 올라온 공시·뉴스가 없어요.")
+
+
 def broadcast(base_date: str = None) -> int:
-    """당일 요약 중 활동(공시+뉴스>0) 종목을 해당 기업채팅방으로 발송.
-    방 없는 종목은 스킵(웹 리포트 카드로만 노출). 반환: 발송 성공 건수."""
+    """당일 요약을 전 기업채팅방으로 발송(사용자 선택). 활동 있으면 요약 카드,
+    없으면 '특이사항 없음' 카드. 반환: 발송 성공 건수."""
     import time as _time
     import stock_api
     base_date = base_date or datetime.datetime.now(KST).date().isoformat()
@@ -349,29 +363,32 @@ def broadcast(base_date: str = None) -> int:
         logging.error("❌ [저녁요약 발송] Supabase 없음")
         return 0
     rows = (sb.table('daily_summaries').select('*').eq('base_date', base_date).execute().data) or []
-    # 코드 → chat_id (rooms.code의 .KQ/.KS 접미사 정규화)
-    code2chat = {}
-    for k, v in (getattr(config, 'CHAT_IDS_BY_CODE', {}) or {}).items():
-        code2chat[str(k).split('.')[0]] = v
-    if not code2chat:
-        logging.warning("⚠️ [저녁요약 발송] 기업채팅방 매핑 없음 — 스킵")
+    by_code = {str(r.get('stock_code') or '').split('.')[0]: r for r in rows}
+    try:
+        rooms = (sb.table('rooms').select('code,chat_id,name')
+                 .eq('room_type', 'company').execute().data) or []
+    except Exception as e:
+        logging.error(f"❌ [저녁요약 발송] rooms 조회 실패: {e}")
         return 0
 
     sent = 0
-    for r in rows:
-        if (r.get('disclosure_cnt') or 0) + (r.get('news_cnt') or 0) == 0:
-            continue
-        code = str(r.get('stock_code') or '').split('.')[0]
-        chat = code2chat.get(code)
+    for rm in rooms:
+        chat = rm.get('chat_id')
         if not chat:
-            continue  # 방 없는 종목은 웹 카드로만 노출
+            continue
+        code = str(rm.get('code') or '').split('.')[0]
+        r = by_code.get(code)
+        if r and (r.get('disclosure_cnt') or 0) + (r.get('news_cnt') or 0) > 0:
+            msg = render_card(r)
+        else:
+            msg = render_empty_card(rm.get('name'), base_date)
         try:
-            if stock_api.send_telegram(chat, render_card(r), preview=False):
+            if stock_api.send_telegram(chat, msg, preview=False):
                 sent += 1
             _time.sleep(0.5)
         except Exception as e:
-            logging.error(f"[저녁요약 발송] {r.get('corp_name')} 실패: {e}")
-    logging.info(f"🌙 [저녁요약 발송] {base_date} — {sent}건 (기업채팅방)")
+            logging.error(f"[저녁요약 발송] {rm.get('name')} 실패: {e}")
+    logging.info(f"🌙 [저녁요약 발송] {base_date} — {sent}/{len(rooms)}건 (전 기업채팅방)")
     return sent
 
 
