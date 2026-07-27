@@ -453,8 +453,10 @@ def get_stock_detail(code: str, name: str = None, flow_map: dict = None) -> Opti
         cap_str = format_money(cap_100m)
         high, low = safe_int(output.get('stck_hgpr')), safe_int(output.get('stck_lwpr'))
         w52_high, w52_low = safe_int(output.get('w52_hgpr')), safe_int(output.get('w52_lwpr'))
-        frgn_rate = safe_float(output.get('hts_frgn_ehrt'))
         arrow = get_arrow(rate)
+        _sign = str(output.get('prdy_vrss_sign') or '')
+        limit_tag = ' 상한가' if _sign == '1' else ' 하한가' if _sign == '5' else ""
+        w52_off = f" (고점比 {(price - w52_high) / w52_high * 100:.0f}%)" if (w52_high and price) else ""
 
         returns_msg = ""
         if returns:
@@ -468,18 +470,20 @@ def get_stock_detail(code: str, name: str = None, flow_map: dict = None) -> Opti
         header = f"<b>[{name}]</b>\n" if name else ""
         _fe = flow_map.get(code) if flow_map else None
         _flow = _fe.get("text") if _fe else None
-        flow_line = f"💰 <b>오늘 수급:</b> {_flow} (잠정)\n" if _flow else ""
+        _frate = _fe.get("frate") if _fe else None
+        frgn_rate = _frate if _frate is not None else safe_float(output.get('hts_frgn_ehrt'))
+        flow_line = f"💰 <b>오늘 수급:</b> {_flow}\n" if _flow else ""
 
         return (
             f"{header}"
             f"════════════\n"
             f"<b>시총:</b> {cap_str}\n"
             f"<b>주식수:</b> {total_shares:,}주\n" 
-            f"<b>현재가:</b> {price:,}<b>원</b> ({arrow}{rate:.2f}%)\n"
+            f"<b>현재가:</b> {price:,}<b>원</b> ({arrow}{rate:.2f}%){limit_tag}\n"
             f"<b>거래량:</b> {vol:,}주 (전일比 {vol_ratio:.0f}%)\n"
             f"<b>거래대금:</b> {val // 100000000:,}억\n"
             f"<b>당일 고가/저가:</b> {high:,} / {low:,}\n"
-            f"<b>52주 최고/최저:</b> {w52_high:,} / {w52_low:,}\n"       
+            f"<b>52주 최고/최저:</b> {w52_high:,} / {w52_low:,}{w52_off}\n"       
             f"<b>외인비중:</b> {frgn_rate:.2f}%\n"
             f"{flow_line}"
             f"════════════"
@@ -1525,7 +1529,7 @@ def get_flow_map(sb_client) -> dict:
             return {}
         latest = dres.data[0]['base_date']
         rows = fetch_all_pages(sb_client.table('market_data')
-            .select('stock_code,price,foreign_net_buy,institution_net_buy')
+            .select('stock_code,price,foreign_net_buy,institution_net_buy,foreign_hold_qty,listing_shares')
             .eq('base_date', latest).not_.is_('foreign_net_buy', 'null'))
     except Exception as e:
         logging.error(f"[수급맵] 조회 실패: {e}")
@@ -1536,7 +1540,10 @@ def get_flow_map(sb_client) -> dict:
         f = (r.get('foreign_net_buy') or 0) * price // 100_000_000
         i = (r.get('institution_net_buy') or 0) * price // 100_000_000
         text = f"외국인 {'+' if f >= 0 else ''}{f:,}억 · 기관 {'+' if i >= 0 else ''}{i:,}억"
-        out[r['stock_code']] = {"text": text, "f": f, "i": i}
+        hq = r.get('foreign_hold_qty'); ls = r.get('listing_shares'); nb = r.get('foreign_net_buy')
+        # 당일 외인비중 = (전일 확정 보유 + 당일 확정 순매수) / 상장주식수 (KIS ehrt는 18:30엔 T-1)
+        frate = round((hq + nb) / ls * 100, 2) if (hq is not None and ls and nb is not None) else None
+        out[r['stock_code']] = {"text": text, "f": f, "i": i, "frate": frate}
     return out
 
 
