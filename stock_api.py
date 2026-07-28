@@ -455,7 +455,7 @@ def get_stock_detail(code: str, name: str = None, flow_map: dict = None) -> Opti
         w52_high, w52_low = safe_int(output.get('w52_hgpr')), safe_int(output.get('w52_lwpr'))
         arrow = get_arrow(rate)
         _sign = str(output.get('prdy_vrss_sign') or '')
-        limit_tag = ' 상한가' if _sign == '1' else ' 하한가' if _sign == '5' else ""
+        limit_tag = ' 상한가' if _sign == '1' else ' 하한가' if _sign == '4' else ""  # KIS 부호: 1상한·4하한·5하락(일반)
         w52_off = f" (고점比 {(price - w52_high) / w52_high * 100:.0f}%)" if (w52_high and price) else ""
 
         returns_msg = ""
