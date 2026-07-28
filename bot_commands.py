@@ -149,6 +149,39 @@ def _handle(update: dict):
     username = user.get('username', '')
     text     = (msg.get('text') or '').strip()
 
+    # 전달(forward)된 메시지 → 원작성자 id 추출 후 차단 안내 (관리자 DM 전용)
+    _fwd = msg.get('forward_from') or (msg.get('forward_origin') or {}).get('sender_user')
+    if isinstance(_fwd, dict) and _fwd.get('id'):
+        import room_access as _ra
+        if not _ra.is_room_admin(uid):
+            return
+        import html as _h
+        _pending_input.pop(chat_id, None)
+        _tid = _fwd['id']
+        _nm = (_fwd.get('first_name') or '')
+        if _fwd.get('last_name'):
+            _nm += ' ' + _fwd['last_name']
+        _un = _fwd.get('username')
+        _info = '🔎 전달된 메시지 작성자' + chr(10) + '<b>' + _h.escape(_nm.strip() or str(_tid)) + '</b>'
+        if _un:
+            _info += ' (@' + _h.escape(_un) + ')'
+        _info += chr(10) + 'id <code>' + str(_tid) + '</code>'
+        _post('sendMessage', chat_id=chat_id, parse_mode='HTML', text=_info,
+              reply_markup={'inline_keyboard': [[
+                  {'text': '🚫 전체 방 차단', 'callback_data': 'SPAM|banall|' + str(_tid)},
+                  {'text': '♻️ 차단 해제', 'callback_data': 'SPAM|unban|' + str(_tid)}]]})
+        return
+    # 전달했지만 원작성자가 계정 링크를 숨긴 경우 (id 획득 불가)
+    if msg.get('forward_sender_name') or (msg.get('forward_origin') or {}).get('type') == 'hidden_user':
+        import room_access as _ra
+        if not _ra.is_room_admin(uid):
+            return
+        _pending_input.pop(chat_id, None)
+        _post('sendMessage', chat_id=chat_id, parse_mode='HTML',
+              text='⚠️ 이 사용자는 전달 시 계정을 숨겨서 id를 알 수 없습니다.' + chr(10)
+                   + '그룹에서 그 사람 메시지에 <b>답장</b>하며 <code>/차단</code> 을 보내면 확실히 차단됩니다.')
+        return
+
     cmd = ''
     payload = ''
     if text.startswith('/'):

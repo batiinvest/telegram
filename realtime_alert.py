@@ -812,6 +812,40 @@ class KisMyStockScanner:
             answer("❌ 오류 발생", alert=True)
             edit(f"❌ <b>[입장 처리 오류]</b>\n<code>{e}</code>")
 
+    def _handle_group_ban(self, message, cmd):
+        """그룹에서 관리자가 메시지에 답장하며 /차단 → 그 작성자 전체 방 차단(프라이버시 무관)."""
+        base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+        chat_id = message.get("chat", {}).get("id")
+        mid = message.get("message_id")
+        def _r(t):
+            try:
+                self.listener_session.post(f"{base_url}/sendMessage",
+                    json={"chat_id": chat_id, "reply_to_message_id": mid,
+                          "text": t, "parse_mode": "HTML"}, timeout=5)
+            except Exception:
+                pass
+        import room_access as _ra
+        clicker = (message.get("from") or {}).get("id")
+        if not _ra.is_room_admin(clicker):
+            return
+        reply = message.get("reply_to_message")
+        if not reply or not (reply.get("from") or {}).get("id"):
+            _r("⚠️ 차단할 사람의 메시지에 <b>답장</b>하면서 /차단 을 보내세요.")
+            return
+        frm = reply["from"]
+        target = frm.get("id")
+        if frm.get("is_bot") or _ra.is_room_admin(target):
+            _r("⚠️ 봇/관리자는 차단할 수 없습니다.")
+            return
+        tname = frm.get("first_name", "") or str(target)
+        import spam_guard as _sg, html as _h
+        if cmd in ("/차단해제", "/unban"):
+            n = _sg.unban_all(target)
+            _r(f"♻️ <b>{_h.escape(tname)}</b> (id <code>{target}</code>) — {n}개 방 차단 해제")
+        else:
+            n = _sg.ban_all(target)
+            _r(f"🚫 <b>{_h.escape(tname)}</b> (id <code>{target}</code>) — {n}개 방에서 차단")
+
     def _handle_spam_callback(self, cb_id, chat_id, message_id, callback_q, parts):
         base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
         def answer(text='', alert=False):
@@ -1145,8 +1179,16 @@ class KisMyStockScanner:
                             self.process_report(chat_id, message.get("message_id"), user_name, text)
                             continue
 
-                        # ── 광고/홍보 모더레이션 (그룹 메시지 검사, 흐름 유지) ──
+                        # ── 관리자: 그룹에서 답장+/차단 → 작성자 전체 차단 / 그 외 광고 모더레이션 ──
                         if message.get("chat", {}).get("type") in ("group", "supergroup"):
+                            _gt = (message.get("text") or "").strip()
+                            _gc = _gt.split()[0].split("@")[0].lower() if _gt else ""
+                            if _gc in ("/차단", "/ban", "/차단해제", "/unban"):
+                                try:
+                                    self._handle_group_ban(message, _gc)
+                                except Exception as _gbe:
+                                    logging.error(f"[group-ban] {_gbe}")
+                                continue
                             try:
                                 import spam_guard as _sg
                                 _sg.check_message(self, message)
