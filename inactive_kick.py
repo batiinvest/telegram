@@ -316,6 +316,70 @@ def job_inactive_kick():
     send_admin(report)
 
 
+def _all_search_rooms():
+    """검색 대상 전체 방 — 숫자 chat_id + @username 모두 (본방/산업방 포함)."""
+    rows = _sb().table("rooms").select("name,chat_id").execute().data or []
+    out = []
+    for r in rows:
+        c = str(r.get("chat_id") or "").strip()
+        if not c:
+            continue
+        cid = int(c) if c.lstrip("-").isdigit() else c
+        out.append((cid, r["name"]))
+    return out
+
+
+def _sm_add(found, u, nm):
+    e = found.get(u.id)
+    if e:
+        if nm not in e["rooms"]:
+            e["rooms"].append(nm)
+    else:
+        un = (u.username or "")
+        found[u.id] = {
+            "id": u.id,
+            "name": _display_name(u),
+            "username": ("@" + un) if un else "",
+            "rooms": [nm],
+        }
+
+
+def search_members_by_name(query, limit=8, deep=True):
+    """이름/username 부분일치로 전체 방(숫자 id + @username) 멤버 검색.
+    1) 서버측 prefix 검색(빠름) → 2) 결과 없으면 수동 전체 스캔(부분일치, 중간 매칭까지).
+    반환: [{'id':int,'name':str,'username':str,'rooms':[방이름,...]}] — 정확일치·다방 우선."""
+    q = str(query).strip()
+    ql = q.lower()
+    found = {}
+    rooms = _all_search_rooms()
+    with TelegramClient(StringSession(_SESSION), _API_ID, _API_HASH) as client:
+        # 1) 빠른 서버측 prefix 검색
+        for cid, nm in rooms:
+            try:
+                for u in client.iter_participants(cid, search=q):
+                    if getattr(u, "bot", False):
+                        continue
+                    _sm_add(found, u, nm)
+            except Exception:
+                continue
+        # 2) prefix로 못 찾으면 수동 부분일치 전체 스캔
+        if not found and deep:
+            for cid, nm in rooms:
+                try:
+                    for u in client.iter_participants(cid):
+                        if getattr(u, "bot", False):
+                            continue
+                        dn = (_display_name(u) or "").lower()
+                        un = (u.username or "").lower()
+                        if ql in dn or ql in un:
+                            _sm_add(found, u, nm)
+                except Exception:
+                    continue
+    out = list(found.values())
+    out.sort(key=lambda c: (0 if c["name"] == q else 1, -len(c["rooms"])))
+    return out[:limit]
+
+
 if __name__ == "__main__":
     live = "--live" in sys.argv
     rpt, tkick, tdone = scan_and_kick(dry_run=not live)

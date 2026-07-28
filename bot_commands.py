@@ -549,14 +549,42 @@ def _run_ban(chat_id, uid, query):
         return
     import threading, spam_guard as _sg, html as _h
     def _w():
-        target, disp = _sg.resolve_user(query)
-        if not target:
-            _post('sendMessage', chat_id=chat_id, text='❌ ' + str(disp))
+        q = str(query).strip()
+        # 숫자 id 또는 @아이디 → 기존 경로(직접 차단)
+        if q.lstrip('-').isdigit() or q.startswith('@'):
+            target, disp = _sg.resolve_user(q)
+            if not target:
+                _post('sendMessage', chat_id=chat_id, text='❌ ' + str(disp))
+                return
+            n = _sg.ban_all(target)
+            _post('sendMessage', chat_id=chat_id, parse_mode='HTML',
+                  text='🚫 <b>' + _h.escape(str(disp)) + '</b> (id <code>' + str(target) + '</code>) — ' + str(n) + '개 방에서 차단',
+                  reply_markup={'inline_keyboard': [[{'text': '♻️ 차단 해제', 'callback_data': 'SPAM|unban|' + str(target)}]]})
             return
-        n = _sg.ban_all(target)
-        _post('sendMessage', chat_id=chat_id, parse_mode='HTML',
-              text='🚫 <b>' + _h.escape(str(disp)) + '</b> (id <code>' + str(target) + '</code>) — ' + str(n) + '개 방에서 차단',
-              reply_markup={'inline_keyboard': [[{'text': '♻️ 차단 해제', 'callback_data': 'SPAM|unban|' + str(target)}]]})
+        # 표시이름(닉네임) → Telethon 멤버 검색 후 후보 버튼
+        try:
+            import inactive_kick as _ik
+            cands = _ik.search_members_by_name(q)
+        except Exception as e:
+            log.error('[cmd] 이름검색 오류: ' + str(e))
+            _post('sendMessage', chat_id=chat_id,
+                  text='⚠️ 이름 검색 중 오류가 발생했습니다. 숫자 id 또는 @아이디로 시도하세요.')
+            return
+        if not cands:
+            _post('sendMessage', chat_id=chat_id, parse_mode='HTML',
+                  text="❌ '" + _h.escape(q) + "' 이름의 멤버를 찾지 못했습니다." + chr(10)
+                       + "숫자 id 또는 @아이디로 시도하세요.")
+            return
+        kb = []
+        for c in cands:
+            label = c['name'] + ((' ' + c['username']) if c['username'] else '') \
+                    + ' · ' + str(len(c['rooms'])) + '개방'
+            kb.append([{'text': label, 'callback_data': 'SPAM|banall|' + str(c['id'])}])
+        note = '🔎 <b>' + _h.escape(q) + '</b> 검색 결과 — 차단할 사람을 누르세요.'
+        if len(cands) >= 8:
+            note += chr(10) + '(결과가 많음 — 이름을 더 정확히/‘@아이디’로 좁히세요)'
+        _post('sendMessage', chat_id=chat_id, parse_mode='HTML', text=note,
+              reply_markup={'inline_keyboard': kb})
     threading.Thread(target=_w, daemon=True).start()
     _reply(chat_id, "🚫 차단 처리 중…")
 
