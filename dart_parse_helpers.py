@@ -255,6 +255,9 @@ def _clinical_bullet(label: str, content: str, sec_limit: int) -> str:
     label = re.sub(r'\s*\([^)]*\)\s*$', '', label).strip()   # 라벨 뒤 영문 괄호 제거
     content = re.sub(r'^-\s*', '', content).strip()          # 선두 대시 불릿 제거
     content = _trunc_clean(content, sec_limit)
+    # 다중 하위 불릿(' - ') → 개행 정렬: 지표별(KOOS/WOMAC/VAS…) 세로 나열로 스캔 용이.
+    # (선두 '- '는 위에서 제거됨 → 문장 사이 ' - '만 대상. 'TG-C' 등 공백없는 하이픈 무관)
+    content = re.sub(r'\s+-\s+(?=\S)', '\n      - ', content)
     # 용량행·위약 앞 개행 → 용량반응/약동학 표를 세로 정렬.
     # 단 콤마·여는괄호 뒤(문장 내 인라인 '(TG-C: x, 위약: y)')는 제외 — 통계 서술을
     # 괄호 중간에서 끊지 않도록. 실제 표 행(직전이 값·글자로 끝남)에서만 개행.
@@ -265,12 +268,13 @@ def _clinical_bullet(label: str, content: str, sec_limit: int) -> str:
 def _parse_clinical_result(text: str, max_sections: int = 5, sec_limit: int = 600) -> list:
     """임상시험결과 '결과값'을 섹션 단위로 분리해 bullet로 반환.
 
-    두 서식 지원:
+    세 서식 지원:
       ①  '[1차 평가변수(Co-Primary Endpoint)] ... [안전성(Safety)] ...'  (대괄호 헤더)
-      ②  '- 항바이러스 활성: ... - 안전성, 내약성: ...'                    (대시 콜론)
-    ①을 우선 시도 — 핵심 결론(예: 유효성 입증 실패)이 첫 섹션 맨 앞으로 올라와
-    통짜 truncate 폴백보다 가독성이 크게 개선됨. 둘 다 실패 시 빈 리스트(호출측 fallback).
-    본문 내 인라인 콜론('200 mg:', 'Dose:')은 오분리되지 않음.
+      ②  '1. 안전성 평가변수 … 2. 유효성 평가변수 …'                     (최상위 번호)
+      ③  '- 항바이러스 활성: ... - 안전성, 내약성: ...'                    (대시 콜론)
+    핵심 결론(유효성 입증 여부 등)이 섹션 첫머리로 올라와 통짜 truncate 폴백보다
+    가독성이 크게 개선됨. 셋 다 실패 시 빈 리스트(호출측 fallback).
+    본문 내 인라인 콜론('200 mg:', 'Dose:')·소수점·하위번호('N)')는 오분리되지 않음.
     """
     text = re.sub(r'\s+', ' ', text).strip()
 
@@ -288,7 +292,28 @@ def _parse_clinical_result(text: str, max_sections: int = 5, sec_limit: int = 60
         if lines:
             return lines
 
-    # ── ② 대시 콜론 헤더 ──
+    # ── ② 최상위 번호 섹션 'N. 섹션명' (점+공백+한글 → 소수점·하위 'N)'과 구분) ──
+    num = re.split(r'(?:^|\s)([1-9])\.\s+(?=[가-힣])', text)
+    if len(num) >= 5 and len(num[0].strip()) < 6:
+        lines = []
+        for i in range(2, len(num), 2):        # 내용은 짝수 인덱스(2,4,…), 앞은 번호
+            seg = num[i].strip()
+            # 라벨 = 첫 하위마커(N)·①-⑳·'- ') 전까지의 섹션명
+            mlab = re.match(r'^([가-힣][가-힣()\s]{1,18}?)(?=\s*(?:\d[).]|[①-⑳]|-\s))', seg)
+            label = mlab.group(1).strip() if mlab else _trunc(seg, 15)
+            # 본문 = 첫 대시 불릿부터(하위 번호·라벨 노이즈 생략), 없으면 라벨 이후 전체
+            rest = seg[mlab.end():] if mlab else seg
+            mbody = re.search(r'-\s+(\S.*)', rest, re.DOTALL)
+            body = (mbody.group(1) if mbody else rest).strip()
+            if len(body) < 5:
+                continue
+            lines.append(_clinical_bullet(label, body, sec_limit))
+            if len(lines) >= max_sections:
+                break
+        if lines:
+            return lines
+
+    # ── ③ 대시 콜론 헤더 ──
     parts = re.split(r'(?:^|\s)-\s+([가-힣][가-힣,·\s]{0,14}):\s+', text)
     if len(parts) < 3:   # 섹션 헤더 못 찾음
         return []
