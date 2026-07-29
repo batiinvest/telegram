@@ -17,7 +17,7 @@ from db_utils import fetch_all_pages
 from format_utils import fmt_change_pct
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, CHAT_IDS_BY_CODE
-from job_infra import _job, _is_enabled, _log_notice, _bridge, _BRIDGE_OK, mark_failed
+from job_infra import _job, _is_enabled, _log_notice, _bridge, _BRIDGE_OK, mark_failed, get_missing_jobs
 
 # ✅ 재무/시장 데이터 수집 + 상장사 동기화
 try:
@@ -1217,7 +1217,8 @@ _RETRYABLE_JOBS = {
 
 @_job(key='auto_retry', holiday=True)
 def job_retry_failed():
-    """평일 19:25 — 오늘 마지막 실행이 실패한 멱등 잡을 1회 재실행.
+    """평일 19:25 — ①오늘 마지막 실행이 실패했거나 ②예정시각이 지났는데 실행 기록이
+    아예 없는(배포 재시작 등으로 실행 도중 소실) 멱등 잡을 1회 재실행.
     19:00 freshness 알림 후·19:50 운영요약 전이라 재처리 결과가 요약에 반영된다."""
     if not _BRIDGE_OK:
         return
@@ -1233,7 +1234,14 @@ def job_retry_failed():
     last = {}
     for r in rows:
         last[r['job_name']] = r['ok']
-    targets = [n for n, ok in last.items() if not ok and n in _RETRYABLE_JOBS]
+    # ① 실행됐으나 실패한 잡
+    failed = [n for n, ok in last.items() if not ok and n in _RETRYABLE_JOBS]
+    # ② 예정시각이 지났는데 실행 기록이 아예 없는 잡 — 배포 재시작 등으로 실행 도중
+    #    프로세스가 죽으면 실패 기록조차 남지 않아 ①에서 못 잡는다. get_missing_jobs로
+    #    보완(가드·요일 판정은 그쪽이 수행). market_closing은 _RETRYABLE_JOBS에 없어 제외(알림 발송).
+    missing, _disabled = get_missing_jobs(set(last))
+    unrun = [n for n, _at in missing if n in _RETRYABLE_JOBS]
+    targets = list(dict.fromkeys(failed + unrun))  # 순서 보존 dedup
     if not targets:
         logging.info("[재처리] 재실행 대상 없음")
         return

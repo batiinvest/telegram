@@ -230,7 +230,9 @@ def job_daily_ops_summary():
         runs = {k: dict(v, recovered=False)
                 for k, v in _JOB_RESULTS.items() if v.get('date') == today}
 
-    missing, disabled = get_missing_jobs(set(runs))
+    # 자기 자신(ops_summary)은 이 시점에 아직 job_runs 기록 전이라 항상 미실행으로
+    # 잡히는 오탐 → ran 집합에 미리 넣어 제외한다.
+    missing, disabled = get_missing_jobs(set(runs) | {'job_daily_ops_summary'})
     send_fails = pop_send_failures()
     if not runs and not missing:
         return
