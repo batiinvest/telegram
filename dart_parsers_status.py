@@ -424,8 +424,27 @@ def parse_market_measure(kv: dict) -> list:
             t = _trunc_clean(re.sub(r'\s+', ' ', title), 100)
             lines.append(f'📋 {t}')
         if body:
-            b = _trunc_clean(re.sub(r'\s+', ' ', body), 500)
-            lines.append(f'  {b}')
+            body = re.sub(r'\s+', ' ', body).strip()
+            # 핵심 결과 상단 요약 — 산문에 묻힌 결론을 먼저 노출 (상장폐지 결정 등)
+            if '상장폐지기준에 해당' in body:
+                lines.append('🚨 결과: 상장폐지기준 해당 (이의신청 가능)')
+            elif '개선기간' in body and '부여' in body:
+                lines.append('🚨 결과: 개선기간 부여')
+            elif '심의대상' in body:
+                lines.append('🚨 결과: 실질심사 대상 결정')
+            elif '상장폐지' in body and ('결정' in body or '확정' in body):
+                lines.append('🚨 결과: 상장폐지 결정')
+            # 이의신청 기한 (영업일)
+            ma = re.search(r'(\d+)\s*일\s*\(?\s*영업일', body)
+            if ma and '이의신청' in body:
+                lines.append(f'📅 이의신청 기한: {ma.group(1)}영업일')
+            # 본문 문장별 분리 (통짜 500자 → 스캔 가능)
+            for s in re.split(r'(?<=[다요][.)])\s+', body):
+                s = s.strip()
+                if len(s) >= 8:
+                    lines.append(f'  • {_trunc_clean(s, 180)}')
+                if len(lines) >= 7:
+                    break
 
     return lines
 
