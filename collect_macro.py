@@ -249,34 +249,55 @@ def collect_all() -> dict:
     # ── 환율 변환 ──────────────────────────────────────────────
     usd_krw = result.get('usd_krw_raw')  # 1 USD = N KRW
 
-    # USD/KRW
-    result['usd_krw']     = round(usd_krw, 2) if usd_krw else None
-    result['usd_krw_chg'] = result.pop('usd_krw_raw_chg_raw', None)
+    # 등락률은 원화 환산 후 재계산 — 원본 티커 등락률(USD/JPY·EUR/USD·USD/CNY)을
+    # 그대로 쓰면 USD/KRW 변동분이 빠지고, 역수 통화(엔·위안)는 부호까지 뒤집힌다.
+    def _prev(now, chg):
+        if now is None or chg is None:
+            return None
+        d = 1.0 + chg / 100.0
+        return now / d if d != 0 else None
 
-    # JPY/KRW: 1 USD = N JPY → 100엔 = (100/N)*usd_krw
+    def _pct(now, prev):
+        if now is None or prev in (None, 0):
+            return None
+        return round((now - prev) / prev * 100, 2)
+
+    usd_krw_chg  = result.get('usd_krw_raw_chg_raw')
+    usd_krw_prev = _prev(usd_krw, usd_krw_chg)
+
+    # USD/KRW (직접 시세 — 등락률 그대로)
+    result['usd_krw']     = round(usd_krw, 2) if usd_krw else None
+    result['usd_krw_chg'] = usd_krw_chg
+
+    # JPY/KRW: 100엔 = usd_krw / (USD/JPY) * 100
     jpy = result.get('jpy_raw')  # USD/JPY
     if jpy and usd_krw:
-        jpy_krw = round(usd_krw / jpy * 100, 2)
-        result['jpy_krw'] = jpy_krw
-        result['jpy_krw_chg'] = result.pop('jpy_raw_chg_raw', None)
+        result['jpy_krw'] = round(usd_krw / jpy * 100, 2)
+        _jp = _prev(jpy, result.get('jpy_raw_chg_raw'))
+        _pl = (usd_krw_prev / _jp * 100) if (usd_krw_prev and _jp) else None
+        result['jpy_krw_chg'] = _pct(usd_krw / jpy * 100, _pl)
     else:
         result['jpy_krw'] = None
         result['jpy_krw_chg'] = None
 
-    # EUR/KRW: EUR/USD × USD/KRW
+    # EUR/KRW: (EUR/USD) × usd_krw
     eur = result.get('eur_raw')  # EUR/USD
     if eur and usd_krw:
         result['eur_krw'] = round(eur * usd_krw, 2)
-        result['eur_krw_chg'] = result.pop('eur_raw_chg_raw', None)
+        _ep = _prev(eur, result.get('eur_raw_chg_raw'))
+        _pl = (_ep * usd_krw_prev) if (_ep and usd_krw_prev) else None
+        result['eur_krw_chg'] = _pct(eur * usd_krw, _pl)
     else:
         result['eur_krw'] = None
         result['eur_krw_chg'] = None
 
-    # CNY/KRW: 1 USD = N CNY → 1 CNY = usd_krw/N
+    # CNY/KRW: 1 CNY = usd_krw / (USD/CNY)
     cny = result.get('cny_raw')  # USD/CNY
     if cny and usd_krw:
         result['cny_krw'] = round(usd_krw / cny, 4)
-        result['cny_krw_chg'] = result.pop('cny_raw_chg_raw', None)
+        _cp = _prev(cny, result.get('cny_raw_chg_raw'))
+        _pl = (usd_krw_prev / _cp) if (usd_krw_prev and _cp) else None
+        result['cny_krw_chg'] = _pct(usd_krw / cny, _pl)
     else:
         result['cny_krw'] = None
         result['cny_krw_chg'] = None
