@@ -42,7 +42,7 @@ from jobs_collect import (
 )
 from jobs_briefing import (
     job_lunch_briefing, job_naver_report, job_daily_closing, job_kind_ir,
-    job_pro_channel_check, job_daily_ops_summary,
+    job_pro_channel_check, job_daily_ops_summary, job_disclosure_digest,
     job_saturday_main_ranking, job_saturday_flow_summary, job_saturday_industry_report,
     job_sunday_industry_recap, job_sunday_company_diagnosis,
 )
@@ -138,6 +138,7 @@ def run_scheduler():
     schedule.every().day.at("17:05").do(job_short_surge)               # 공매도 수집 + 5일 평균 대비 2배 급증 알림
     schedule.every().day.at("17:15").do(job_sector_summary)            # 산업별 일별 요약 집계
     schedule.every().day.at("19:45").do(job_sector_summary)            # 산업집계 재계산 (19:30 수급 확정 후 — 당일 최종 반영)
+    schedule.every().day.at("19:00").do(_threaded(job_disclosure_digest))  # 오늘 주요·긴급 공시 다이제스트 → 메인 채널
     schedule.every().day.at("19:25").do(job_retry_failed)              # 실패 잡 자동 재처리 (job_runs 기반, 멱등 잡만)
     schedule.every().day.at("17:30").do(job_leading_stocks)            # 주도주 탐색기 스코어 계산
     schedule.every().day.at("18:20").do(job_collect_investor_market)   # KIS 시장별 투자자매매동향 (장마감 확정 후, 시황 카드)

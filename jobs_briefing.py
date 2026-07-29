@@ -188,6 +188,21 @@ def _hhmm(ts) -> str:
         return (ts or '')[11:16]
 
 
+@_job("disclosure_digest", holiday=True)
+def job_disclosure_digest():
+    """매일 19:00 — 오늘 발송한 주요·긴급 공시를 카테고리별로 요약해 메인 채널 발송.
+    실적/계약/청약/상장폐지는 원문 재파싱으로 핵심 수치 enrich (disclosure_digest.py).
+    주요·긴급 공시가 없는 날(휴장 등)은 발송 생략."""
+    import disclosure_digest
+    msg = disclosure_digest.generate(_bridge._get_client())
+    if not msg:
+        logging.info("📭 [공시 다이제스트] 오늘 주요·긴급 공시 없음 — 발송 생략")
+        return
+    if stock_api.send_telegram(DEFAULT_CHAT_ID, msg):
+        _log_notice(DEFAULT_CHAT_ID, "[공시 다이제스트] 메인 발송")
+        logging.info("🌆 [공시 다이제스트] 메인 채널 발송 완료")
+
+
 @_job()
 def job_daily_ops_summary():
     """매일 19:50 — 오늘 잡 실행 결과 요약을 관리자 방으로 발송 (운영 가시성).
