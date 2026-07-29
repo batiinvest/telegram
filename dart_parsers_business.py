@@ -244,10 +244,20 @@ def parse_preliminary_earnings(kv: dict) -> list:
     _IS_NUM = re.compile(r'^-?[\d,]+(\.\d+)?$')
     _IS_PCT = re.compile(r'^-?[\d.]+$')
 
+    # 단위 감지 — 서식이 억원/백만원/천원/원 중 선택. 구: 백만원 고정 →
+    # 억원으로 보고하는 대형사(HD현대중공업 등)가 100배 축소 발송되던 버그.
+    _unit_mult = 1_000_000   # 기본 백만원 (단위 미표기 시 종전 동작 유지)
+    _UNIT_MULT = {'억원': 100_000_000, '백만원': 1_000_000, '천원': 1_000, '원': 1}
+    for _k, _v in kv.items():
+        m = re.search(r'단위\s*[:：]?\s*(억원|백만원|천원|원)', f'{_k} {_v}')
+        if m:
+            _unit_mult = _UNIT_MULT[m.group(1)]
+            break
+
     def _fmt_amt(v: str) -> str:
         try:
             n = int(v.replace(',', ''))
-            return _fmt_amount(str(abs(n) * 1_000_000))  # 단위: 백만원
+            return _fmt_amount(str(abs(n) * _unit_mult))
         except (ValueError, AttributeError):
             return v
 

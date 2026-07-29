@@ -142,6 +142,53 @@ class DartRoutingBot:
         except Exception as e:
             logging.warning(f"[공시봇] 발송이력 DB 시드 실패 (파일 이력만 사용): {e}")
 
+    @staticmethod
+    def _fmt_eok(won) -> str:
+        """원 단위 정수 → '549억' / '-70억' / '1.6조' 압축 표기."""
+        if won is None:
+            return '-'
+        try:
+            n = int(won)
+        except (ValueError, TypeError):
+            return '-'
+        sign = '-' if n < 0 else ''
+        a = abs(n)
+        if a >= 1_000_000_000_000:      # 조
+            return f'{sign}{a / 1_000_000_000_000:.1f}조'
+        if a >= 100_000_000:            # 억
+            return f'{sign}{round(a / 100_000_000):,}억'
+        return f'{sign}{round(a / 10_000):,}만'
+
+    def _earnings_trend(self, stock_code: str, n: int = 4) -> str:
+        """financials(is_cumulative=False = 분기 단독값)에서 직전 n개 분기
+        매출/영업익/순이익 추이를 반환. 데이터 없으면 빈 문자열.
+        ※ 방금 발표된 이번 분기 잠정치는 financials에 아직 없어 직전 분기부터 표시됨."""
+        if not _BRIDGE_OK or not stock_code:
+            return ''
+        try:
+            code = stock_code.split('.')[0]
+            sb = _bridge._get_client()
+            if not sb:
+                return ''
+            rows = (sb.table('financials')
+                    .select('bsns_year,quarter,revenue,operating_profit,net_income')
+                    .eq('stock_code', code).eq('is_cumulative', False)
+                    .order('bsns_year', desc=True).order('quarter', desc=True)
+                    .limit(n).execute().data or [])
+            if not rows:
+                return ''
+            lines = ['📈 최근 실적 (매출/영업익/순이익)']
+            for r in rows:
+                yy = str(r.get('bsns_year', ''))[2:]
+                qn = str(r.get('quarter', '')).replace('Q', '').strip()   # 'Q1'→'1'
+                lines.append(f"  {yy}.{qn}Q: {self._fmt_eok(r.get('revenue'))} / "
+                             f"{self._fmt_eok(r.get('operating_profit'))} / "
+                             f"{self._fmt_eok(r.get('net_income'))}")
+            return '\n'.join(lines)
+        except Exception:
+            logging.exception(f"⚠️ [공시] 실적추이 조회 실패: {stock_code}")
+            return ''
+
     def ai_worker(self, chat_id, corp_name, report_nm, rcept_no):
         logging.info(f"🤖 AI Analyzing: {corp_name}")
         result = analyze_disclosure_gemini(corp_name, report_nm, rcept_no)
@@ -334,6 +381,11 @@ class DartRoutingBot:
         detail = get_disclosure_detail(rcept_no, report_nm)
         if audit_note:
             detail = f"{audit_note}\n{detail}".strip()
+        # 잠정실적 — financials(탈누적 단독값)에서 직전 분기 추이 덧붙임
+        if '잠정' in report_nm and stock_code:
+            trend = self._earnings_trend(stock_code)
+            if trend:
+                detail = f"{detail}\n{trend}".strip()
         msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
 
         # ── 채널 라우팅 — 정책은 dart_rules.decide_targets (순수 함수) ──
