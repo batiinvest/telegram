@@ -73,6 +73,12 @@ _FLOOD_MINLEN = 12
 _admin_cache = {}
 _ADMIN_TTL = 3600
 
+# 도배 알림 집계 — 같은 메시지가 여러 방에 퍼져도 관리자 알림은 1건으로 합치고,
+# 새 방이 늘 때마다 그 알림을 수정(edit)해 방 목록·개수를 갱신한다.
+_room_titles = {}      # chat_id -> 표시용 방 제목(최근값)
+_flood_alerts = {}     # text_hash -> {'mid': 관리자 알림 message_id, 'count': 마지막 알림 방 수, 'ts'}
+_FLOOD_ALERT_TTL = _FLOOD_WINDOW   # 10분 지나면 새 도배 버스트로 간주해 재알림
+
 
 def _tg(method, **params):
     if not _BOT_TOKEN:
@@ -90,11 +96,15 @@ def _esc(s):
     return _html.escape(str(s or ""), quote=False)
 
 
+def _text_hash(text):
+    return hashlib.md5(text.strip().encode("utf-8", "ignore")).hexdigest()
+
+
 def _is_flood(text, chat_id):
     t = text.strip()
     if len(t) < _FLOOD_MINLEN:
         return False
-    h = hashlib.md5(t.encode("utf-8", "ignore")).hexdigest()
+    h = _text_hash(text)
     now = time.time()
     lst = [x for x in _recent.get(h, []) if now - x[1] < _FLOOD_WINDOW]
     rooms = {c for c, _ in lst}
@@ -148,6 +158,7 @@ def check_message(scanner, message):
     if not uid or frm.get("is_bot") or uid in _exempt_ids():
         return
     chat_id = chat.get("id")
+    _remember_room_title(chat_id, chat.get("title"))
     is_spam, reason, auto_delete = _detect(text, chat_id)
     if not is_spam:
         return
@@ -159,7 +170,10 @@ def check_message(scanner, message):
             scanner.delete_message(chat_id, msg_id)
         except Exception as e:
             log.debug(f"[spam] 삭제 오류: {e}")
-    _notify_admin(chat, frm, text, reason, auto_delete, msg_id)
+        _notify_admin(chat, frm, text, reason, auto_delete, msg_id)
+    else:
+        # 도배(다중방): 방마다 따로 알리지 않고 관리자 알림 1건으로 집계·갱신
+        _notify_flood(chat, frm, text, reason)
     _act = '삭제' if auto_delete else '알림'
     log.info(f"[spam] {_act} chat={chat_id} uid={uid} reason={reason}")
 
@@ -187,6 +201,77 @@ def _notify_admin(chat, frm, text, reason, deleted, message_id):
     row.append({"text": "🚫 전체 차단", "callback_data": "SPAM|banall|" + str(uid)})
     row.append({"text": "✅ 정상", "callback_data": "SPAM|ok"})
     _tg("sendMessage", chat_id=admin, parse_mode="HTML", text=body, reply_markup={"inline_keyboard": [row]})
+
+
+def _remember_room_title(cid, title):
+    if cid is None:
+        return
+    _room_titles[cid] = title or str(cid)
+    if len(_room_titles) > 3000:
+        for k in list(_room_titles)[:1500]:
+            _room_titles.pop(k, None)
+
+
+def _flood_rooms(h):
+    """윈도 내 이 메시지가 퍼진 방 chat_id 목록(중복 제거, 등장 순)."""
+    now = time.time()
+    out, seen = [], set()
+    for c, ts in _recent.get(h, []):
+        if now - ts < _FLOOD_WINDOW and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def _flood_body(frm, text, reason, cids):
+    _NL = chr(10)
+    uid = frm.get("id")
+    name = frm.get("first_name") or ""
+    uname = ("@" + frm["username"]) if frm.get("username") else ""
+    names = [_room_titles.get(c, str(c)) for c in cids]
+    shown = names[:15]
+    more = len(names) - len(shown)
+    room_line = ", ".join(_esc(x) for x in shown) + (f" 외 {more}곳" if more > 0 else "")
+    body = ("⚠️ <b>도배 의심 — 삭제 안 함</b>" + _NL + _NL
+            + "발신: " + _esc(name) + " " + uname + " (id <code>" + str(uid) + "</code>)" + _NL
+            + "방 " + str(len(cids)) + "곳: " + room_line + _NL
+            + "사유: " + reason + _NL
+            + "내용: " + _esc(text[:300]))
+    kb = {"inline_keyboard": [[
+        {"text": "🚫 전체 차단", "callback_data": "SPAM|banall|" + str(uid)},
+        {"text": "✅ 정상", "callback_data": "SPAM|ok"},
+    ]]}
+    return body, kb
+
+
+def _notify_flood(chat, frm, text, reason):
+    """다중방 도배: 같은 메시지는 관리자 알림 1건으로 합치고, 방이 늘면 그 알림을 수정."""
+    admin = _get_admin_chat()
+    if not admin:
+        return
+    h = _text_hash(text)
+    now = time.time()
+    cids = _flood_rooms(h)
+    n = len(cids)
+    st = _flood_alerts.get(h)
+    if st and now - st["ts"] > _FLOOD_ALERT_TTL:
+        st = None  # 오래된 상태 → 새 버스트로 간주
+    body, kb = _flood_body(frm, text, reason, cids)
+    if st is None:
+        res = _tg("sendMessage", chat_id=admin, parse_mode="HTML", text=body,
+                  reply_markup=kb, disable_web_page_preview=True)
+        mid = (res.get("result") or {}).get("message_id")
+        _flood_alerts[h] = {"mid": mid, "count": n, "ts": now}
+    elif n > st["count"] and st.get("mid"):
+        _tg("editMessageText", chat_id=admin, message_id=st["mid"], parse_mode="HTML",
+            text=body, reply_markup=kb, disable_web_page_preview=True)
+        st["count"] = n
+        st["ts"] = now
+    else:
+        st["ts"] = now  # 같은 방 재도배 — 새 알림 없이 타임스탬프만 갱신
+    if len(_flood_alerts) > 2000:
+        for k in list(_flood_alerts)[:1000]:
+            _flood_alerts.pop(k, None)
 
 
 # ── 차단 (관리자 콜백에서 호출) ────────────────────────────
