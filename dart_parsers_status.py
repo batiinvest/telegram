@@ -13,14 +13,29 @@ def parse_trading_halt(kv: dict) -> list:
     # ── 거래정지 해제 형식 ───────────────────────────────────────
     release = _get(kv, '2.해제사유', '해제사유')
     if release:
-        lines.append(f'🔓 {release}')
+        etc = _get(kv, '5.기타', '기타') or ''
+        # 상장폐지 정리매매 개시 — '해제'지만 실질은 상장폐지(최악 이벤트).
+        # 🔓(해제) 대신 🚨로, 핵심 일정(정리매매기간·상장폐지일)을 별도 노출.
+        is_delist = '상장폐지' in release or '정리매매' in release or '상장폐지' in etc
+        lines.append(f'{"🚨" if is_delist else "🔓"} {release}')
         if v := _get(kv, '1.대상종목', '대상종목'):
             lines.append(f'📋 대상: {v}')
         halt_dt = _get(kv, '3.해제일시', '해제일시') or ''
         if halt_dt:
-            lines.append(f'📅 해제일시: {halt_dt.rstrip(" -").strip()}')
-        if v := _get(kv, '5.기타', '기타'):
-            lines.extend(_parse_etc_field(v))
+            label = '📅 정리매매 개시' if is_delist else '📅 해제일시'
+            lines.append(f'{label}: {halt_dt.rstrip(" -").strip()}')
+        if is_delist and etc:
+            mp = re.search(r'정리매매기간\s*[:：]?\s*([\d.]+\s*~\s*[\d.]+(?:\([^)]*\))?)', etc)
+            md = re.search(r'상장폐지일\s*[:：]?\s*([\d.]+)', etc)
+            mr = re.search(r'상장폐지\s*사유\s*[:：]?\s*(.+?)(?=\s*-\s*정리매매|\s*-\s*상장폐지일|$)', etc)
+            if mp:
+                lines.append(f'🕐 정리매매: {mp.group(1)}')
+            if md:
+                lines.append(f'🔚 상장폐지일: {md.group(1)}')
+            if mr:
+                lines.append(f'📋 사유: {_trunc(mr.group(1).strip(), 60)}')
+        elif etc:
+            lines.extend(_parse_etc_field(etc))
         if v := _get(kv, '4.근거규정', '근거규정'):
             lines.append(f'📋 근거: {_trunc(v, 60)}')
         return lines
