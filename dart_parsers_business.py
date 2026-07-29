@@ -312,6 +312,49 @@ def parse_preliminary_earnings(kv: dict) -> list:
     return lines
 
 
+def extract_preliminary_current(kv: dict) -> dict | None:
+    """잠정실적 KV에서 이번 분기 구조화 값 추출 (추이 표시용 — 이번 분기는 financials
+    미반영이라 여기서 뽑아 붙임). parse_preliminary_earnings와 동일 단위·인덱스 로직.
+    반환: {'year','quarter'(1~4),'label'('26.2Q'),'revenue','operating_profit','net_income'}
+    (금액은 원 단위). 핵심 지표 없으면 None."""
+    # 연도·분기 — 당기실적 시작일(2026-04-01→Q2) 우선, 없으면 레이블 정규식
+    year = q = None
+    period = _get(kv, '당기실적')
+    m = re.match(r'(\d{4})-(\d{2})', period or '')
+    if m:
+        year, q = int(m.group(1)), (int(m.group(2)) - 1) // 3 + 1
+    if year is None:
+        for k in kv:
+            mm = re.match(r"^\('?([0-9]{2})\.([0-9])Q?\)", k)
+            if mm:
+                year, q = 2000 + int(mm.group(1)), int(mm.group(2)); break
+            mm2 = re.match(r'^\(([0-9]{4})년\s*([0-9])분기\)', k)
+            if mm2:
+                year, q = int(mm2.group(1)), int(mm2.group(2)); break
+
+    _unit_mult = 1_000_000
+    _UM = {'억원': 100_000_000, '백만원': 1_000_000, '천원': 1_000, '원': 1}
+    for _k, _v in kv.items():
+        mu = re.search(r'단위\s*[:：]?\s*(억원|백만원|천원|원)', f'{_k} {_v}')
+        if mu:
+            _unit_mult = _UM[mu.group(1)]; break
+
+    items = list(kv.items())
+    _IS_NUM = re.compile(r'^-?[\d,]+(\.\d+)?$')
+    _MAP = {'매출액': 'revenue', '영업이익': 'operating_profit', '당기순이익': 'net_income'}
+    out = {'year': year, 'quarter': q,
+           'label': f'{str(year)[2:]}.{q}Q' if (year and q) else ''}
+    for idx, (k, _v) in enumerate(items):
+        if k in _MAP and idx + 1 < len(items):
+            k1 = items[idx + 1][0]
+            if _IS_NUM.match(k1):
+                try:
+                    out[_MAP[k]] = int(k1.replace(',', '')) * _unit_mult
+                except ValueError:
+                    pass
+    return out if any(x in out for x in ('revenue', 'operating_profit', 'net_income')) else None
+
+
 def parse_value_enhancement(kv: dict) -> list:
     """기업가치제고계획 (자율공시)"""
     lines = []

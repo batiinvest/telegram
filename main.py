@@ -159,14 +159,26 @@ class DartRoutingBot:
             return f'{sign}{round(a / 100_000_000):,}억'
         return f'{sign}{round(a / 10_000):,}만'
 
-    def _earnings_trend(self, stock_code: str, n: int = 4) -> str:
-        """financials(is_cumulative=False = 분기 단독값)에서 직전 n개 분기
-        매출/영업익/순이익 추이를 반환. 데이터 없으면 빈 문자열.
-        ※ 방금 발표된 이번 분기 잠정치는 financials에 아직 없어 직전 분기부터 표시됨."""
+    def _earnings_trend(self, stock_code: str, rcept_no: str = "", n: int = 5) -> str:
+        """최근 n개 분기 매출/영업익/순이익 추이. 이번 분기(잠정)는 financials에
+        아직 없어 공시 KV에서 뽑아 맨 위에 '(잠정실적)' 표기로 붙이고, 직전 분기는
+        financials(is_cumulative=False = 탈누적 단독값)에서. 데이터 없으면 빈 문자열."""
         if not _BRIDGE_OK or not stock_code:
             return ''
         try:
             code = stock_code.split('.')[0]
+
+            # 이번 분기(잠정) — 공시 KV에서 구조화 추출
+            cur = None
+            if rcept_no:
+                try:
+                    from dart_doc import _fetch_html, _build_kv
+                    from dart_parser import extract_preliminary_current
+                    html = _fetch_html(rcept_no)
+                    cur = extract_preliminary_current(_build_kv(html)) if html else None
+                except Exception:
+                    logging.exception(f"⚠️ [공시] 잠정 현분기 추출 실패: {rcept_no}")
+
             sb = _bridge._get_client()
             if not sb:
                 return ''
@@ -175,16 +187,30 @@ class DartRoutingBot:
                     .eq('stock_code', code).eq('is_cumulative', False)
                     .order('bsns_year', desc=True).order('quarter', desc=True)
                     .limit(n).execute().data or [])
-            if not rows:
+            if not rows and not (cur and cur.get('label')):
                 return ''
+
+            def _row(label, rev, op, net, tag=''):
+                return (f"  {label}: {self._fmt_eok(rev)} / {self._fmt_eok(op)} / "
+                        f"{self._fmt_eok(net)}{tag}")
+
             lines = ['📈 최근 실적 (매출/영업익/순이익)']
+            cy, cq = (cur or {}).get('year'), (cur or {}).get('quarter')
+            if cur and cur.get('label'):
+                lines.append(_row(cur['label'], cur.get('revenue'),
+                                  cur.get('operating_profit'), cur.get('net_income'),
+                                  ' (잠정실적)'))
             for r in rows:
+                # 잠정으로 이미 표시한 분기가 financials에도 있으면 중복 제거
+                if cy and r.get('bsns_year') == cy and str(r.get('quarter')) == f'Q{cq}':
+                    continue
                 yy = str(r.get('bsns_year', ''))[2:]
-                qn = str(r.get('quarter', '')).replace('Q', '').strip()   # 'Q1'→'1'
-                lines.append(f"  {yy}.{qn}Q: {self._fmt_eok(r.get('revenue'))} / "
-                             f"{self._fmt_eok(r.get('operating_profit'))} / "
-                             f"{self._fmt_eok(r.get('net_income'))}")
-            return '\n'.join(lines)
+                qn = str(r.get('quarter', '')).replace('Q', '').strip()
+                lines.append(_row(f'{yy}.{qn}Q', r.get('revenue'),
+                                  r.get('operating_profit'), r.get('net_income')))
+                if len(lines) - 1 >= n:
+                    break
+            return '\n'.join(lines) if len(lines) > 1 else ''
         except Exception:
             logging.exception(f"⚠️ [공시] 실적추이 조회 실패: {stock_code}")
             return ''
@@ -381,9 +407,9 @@ class DartRoutingBot:
         detail = get_disclosure_detail(rcept_no, report_nm)
         if audit_note:
             detail = f"{audit_note}\n{detail}".strip()
-        # 잠정실적 — financials(탈누적 단독값)에서 직전 분기 추이 덧붙임
+        # 잠정실적 — 이번 분기(잠정)+직전 분기 추이 덧붙임
         if '잠정' in report_nm and stock_code:
-            trend = self._earnings_trend(stock_code)
+            trend = self._earnings_trend(stock_code, rcept_no)
             if trend:
                 detail = f"{detail}\n{trend}".strip()
         msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
