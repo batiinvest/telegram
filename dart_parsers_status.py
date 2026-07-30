@@ -430,34 +430,52 @@ def parse_market_measure(kv: dict) -> list:
                 m = re.search(r'제\s*목\s*[:：]\s*(.+)$', txt)
                 if m:
                     seg = m.group(1).strip()
-                    head, _sep, rest = seg.partition(')')   # 제목은 대개 괄호로 종결
-                    if rest.strip():
-                        title, body = (head + ')').strip(), rest.strip()
+                    # 제목 ↔ 본문 분리 — 제목 끝은 ① 제목 종결 괄호 ')'(핀텔형) 또는
+                    # ② 본문 시작 날짜('26.MM.DD, 자이글형) 중 더 앞선 것.
+                    cand = []
+                    p_paren = seg.find(')')
+                    if 0 <= p_paren < 80:            # 제목 끝 괄호(길지 않은 것만)
+                        cand.append(p_paren + 1)      # ')' 포함
+                    md = re.search(r"['\"]?\d{2,4}\s?[.\-]\s?\d{1,2}\s?[.\-]", seg)
+                    if md and md.start() > 8:         # 본문 시작 날짜
+                        cand.append(md.start())
+                    if cand:
+                        pos = min(cand)
+                        title, body = seg[:pos].strip(), seg[pos:].strip()
+                        if not body:
+                            title = seg
                     else:
-                        body = seg
+                        title = seg
         if title:
             t = _trunc_clean(re.sub(r'\s+', ' ', title), 100)
             lines.append(f'📋 {t}')
         if body:
             body = re.sub(r'\s+', ' ', body).strip()
             _tb = f"{title or ''} {body}"
-            # 핵심 결과 상단 요약 — 산문에 묻힌 결론을 먼저 노출.
-            # ※ 회사의 불복 대응(효력정지 가처분·집행정지)을 먼저 감지 — 본문에
-            #   '상장폐지결정'이 있어도 KRX 결정이 아니라 회사가 상폐에 불복한 것.
+            _appeal = False   # 이의신청 기한 표시 여부 (상폐 해당/결정 단계에서만)
+            # 핵심 결과 상단 요약. ※ 순서 중요 — 결정된 것 먼저, 진행중(예정)은 뒤.
+            #   불복(효력정지 가처분) → 상폐기준 해당(결정) → 개선기간 종료(심사 예정)
+            #   → 개선기간 부여 → 심의대상 → 상폐 결정
             if any(k in _tb for k in ('효력정지', '가처분', '집행정지')):
                 lines.append('🛡 상장폐지 불복 — 효력정지 가처분 신청')
             elif '상장폐지기준에 해당' in body:
                 lines.append('🚨 결과: 상장폐지기준 해당 (이의신청 가능)')
-            elif '개선기간' in body and '부여' in body:
+                _appeal = True
+            elif '개선기간' in _tb and '종료' in _tb and '예정' in body:
+                # 개선기간 종료 — 상폐 여부 아직 미결정(심사 예정)
+                lines.append('⏳ 결과: 개선기간 종료 — 상장폐지 여부 심사 예정')
+            elif '개선기간' in _tb and '부여' in body:
                 lines.append('🚨 결과: 개선기간 부여')
             elif '심의대상' in body:
                 lines.append('🚨 결과: 실질심사 대상 결정')
-            elif '상장폐지' in body and ('결정' in body or '확정' in body):
+            elif '상장폐지' in body and ('결정하' in body or '확정' in body):
                 lines.append('🚨 결과: 상장폐지 결정')
-            # 이의신청 기한 (영업일)
-            ma = re.search(r'(\d+)\s*일\s*\(?\s*영업일', body)
-            if ma and '이의신청' in body:
-                lines.append(f'📅 이의신청 기한: {ma.group(1)}영업일')
+                _appeal = True
+            # 이의신청 기한 — 상폐 해당/결정 단계에서만(개선기간 종료 등은 조건부·미래라 제외)
+            if _appeal:
+                ma = re.search(r'(\d+)\s*일\s*\(?\s*영업일', body)
+                if ma and '이의신청' in body:
+                    lines.append(f'📅 이의신청 기한: {ma.group(1)}영업일')
             # 본문 문장별 분리 (통짜 500자 → 스캔 가능)
             for s in re.split(r'(?<=[다요][.)])\s+', body):
                 s = s.strip()
