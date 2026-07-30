@@ -137,7 +137,10 @@ def _fmt_payment_terms(raw: str) -> list[str]:
 
     if not sections:
         # '-' 구분 목록 처리 (예: '30% 지급 - 30% 지급 - 잔금 ...')
-        dash_items = [s.strip() for s in re.split(r'\s+-\s+', raw.strip()) if s.strip()]
+        # 선두 대시/불릿 제거 — '• - 중도금' 불릿 중복 방지
+        dash_items = [re.sub(r'^[-·•]\s*', '', s.strip())
+                      for s in re.split(r'\s+-\s+', raw.strip()) if s.strip()]
+        dash_items = [s for s in dash_items if s]
         if len(dash_items) > 1:
             return [f'  • {_trunc(item, 60)}' for item in dash_items[:6]]
         # 번호 목록도 dash도 없으면 truncate
