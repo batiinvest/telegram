@@ -246,17 +246,21 @@ def parse_rights_exercise(kv: dict) -> list:
 
 
 def parse_subscription_result(kv: dict) -> list:
-    """유상증자또는주식관련사채등의 청약결과(자율공시) — 청약률이 핵심.
+    """유상증자또는주식관련사채등의 청약결과 / 발행결과(자율공시).
 
     구(舊): 제목에 '유상증자'가 있어 parse_rights_offering(증자결정용, 신주식수·
     발행가액 등 다른 필드)로 매칭 → 빈 결과 → 폴백 노이즈(번호 필드+boilerplate).
-    청약률≥100%=완전청약/초과, <100%=미달 — 발행 성공 여부의 핵심 지표.
+    - 청약결과: 청약률(≥100%=완전청약/초과, <100%=미달)이 핵심.
+    - 발행결과: 실제발행금액(조달 완료)·납입일이 핵심. 실제<예정이면 미달.
     """
     def _num(s):
         d = re.sub(r'[^0-9]', '', s or '')
         return int(d) if d else None
 
-    lines = ['📢 유상증자 청약결과']
+    actual_amt = _get(kv, '실제발행금액(원)', '실제발행금액')
+    is_issue = bool(actual_amt)   # 발행결과 vs 청약결과 구분
+
+    lines = [f'📢 유상증자 {"발행결과" if is_issue else "청약결과"}']
 
     method = _get(kv, '2. 발행방법', '발행방법')
     kind   = _get(kv, '1. 증권의 종류', '증권의 종류')
@@ -268,19 +272,31 @@ def parse_subscription_result(kv: dict) -> list:
         if n := _num(v):
             lines.append(f'🔢 발행예정: {n:,}주')
 
-    if v := _get(kv, '청약주식수(누계)(주)', '청약주식수(누계)'):
-        if n := _num(v):
-            lines.append(f'✅ 청약주식수: {n:,}주 (누계)')
-
-    if v := _get(kv, '청약률(%)', '청약률'):
-        if m := re.search(r'[\d.]+', v):
-            lines.append(f'📊 청약률: {m.group(0)}%')
-
-    if v := _get(kv, '3. 청약대상자', '청약대상자'):
-        lines.append(f'👥 대상: {_trunc(v, 40)}')
-
-    if v := _get(kv, '4. 청약일자', '청약일자'):
-        lines.append(f'📅 청약일: {_trunc(v, 30)}')
+    if is_issue:
+        # ── 발행결과 ──
+        if v := _get(kv, '실제발행주식수(주)', '실제발행주식수'):
+            if n := _num(v):
+                lines.append(f'✅ 실제발행: {n:,}주')
+        if m := re.search(r'[\d,]{4,}', actual_amt):
+            planned = _get(kv, '발행예정금액(원)', '발행예정금액')
+            short = ''
+            if planned and (pn := _num(planned)) and (an := _num(actual_amt)) and an < pn:
+                short = ' (예정 대비 미달)'
+            lines.append(f'💰 조달금액: {_fmt_amount(m.group(0))}원{short}')
+        if v := _get(kv, '납입일'):
+            lines.append(f'📅 납입일: {_trunc(v, 30)}')
+    else:
+        # ── 청약결과 ──
+        if v := _get(kv, '청약주식수(누계)(주)', '청약주식수(누계)'):
+            if n := _num(v):
+                lines.append(f'✅ 청약주식수: {n:,}주 (누계)')
+        if v := _get(kv, '청약률(%)', '청약률'):
+            if m := re.search(r'[\d.]+', v):
+                lines.append(f'📊 청약률: {m.group(0)}%')
+        if v := _get(kv, '3. 청약대상자', '청약대상자'):
+            lines.append(f'👥 대상: {_trunc(v, 40)}')
+        if v := _get(kv, '4. 청약일자', '청약일자'):
+            lines.append(f'📅 청약일: {_trunc(v, 30)}')
 
     return lines
 
