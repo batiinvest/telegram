@@ -65,6 +65,31 @@ def get_audit_opinion(rcept_no: str) -> str | None:
     return opinion
 
 
+def _attach_amend_summary(kv: dict) -> list:
+    """[첨부정정] 경량 요약 — 정정대상 서류 + 정정내용(핵심 변경).
+
+    첨부정정은 하위 보고서 파서가 실패하면 폴백이 정정표 헤더셀(항목/정정전/후)까지
+    노이즈로 쏟아냄. 정정대상 서류만 담긴 소형 KV일 때 이 요약으로 대체.
+    (보로노이 전환사채 매도청구권 행사자 지정 취소 등)"""
+    doc = _get(kv, '정정대상 공시서류')
+    if not doc:
+        return []
+    hdr = f'🔄 [첨부정정] {_trunc(doc, 40)}'
+    if date := _get(kv, '최초제출일'):
+        hdr += f' (최초 {date})'
+    lines = [hdr]
+    # 정정내용 — 헤더/날짜/서류명·의사록이 아닌, 실제 변경 설명(취소·변경·지정 등)
+    for k, v in kv.items():
+        if k.startswith('_'):
+            continue
+        vs = re.sub(r'\s+', ' ', v or '').strip()
+        if (len(vs) > 8 and any(w in vs for w in ('취소', '변경', '해지', '지정', '추가', '철회'))
+                and '의사록' not in vs and vs not in ('정 정 후', '정정후')):
+            lines.append(f'📋 정정내용: {_trunc(vs, 90)}')
+            break
+    return lines
+
+
 # ══════════════════════════════════════════════
 #  공개 인터페이스
 # ══════════════════════════════════════════════
@@ -132,6 +157,13 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
                 PARSER_STATS[parser.__name__] += 1
                 log.debug(f'[DART 파서] 카테고리 파서 사용 ({report_nm})')
                 return '\n'.join(lines)
+
+        # [첨부정정] 경량 요약 — 하위 파서 실패 시 정정표 노이즈 대신 정정대상·내용만
+        if report_nm.startswith('[첨부정정]'):
+            alines = _attach_amend_summary(kv)
+            if alines:
+                PARSER_STATS['attach_amend'] += 1
+                return '\n'.join(alines)
 
         # 범용 파서 fallback
         lines = parse_all_fields(kv)
