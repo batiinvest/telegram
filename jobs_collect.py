@@ -984,6 +984,27 @@ def job_collect_estimates():
         mark_failed(e)
 
 
+@_job('earnings_surprise', holiday=True)
+def job_snapshot_qtr_consensus():
+    """평일 장전 (08:40) — 네이버 분기 컨센서스 스냅샷 (어닝 서프라이즈 판정용)."""
+    import collect_qtr_consensus
+    n = collect_qtr_consensus.run()
+    logging.info(f"=== [분기컨센] 스냅샷 완료: {n}종목 ===")
+
+
+@_job('earnings_surprise', holiday=True)
+def job_earnings_surprise_briefing():
+    """평일 장 마감 후 (19:10) — 당일 어닝 서프라이즈 리스트 → 메인채널."""
+    import earnings_surprise
+    msg = earnings_surprise.build_briefing()
+    if msg:
+        stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
+        _log_notice(DEFAULT_CHAT_ID, "[어닝서프라이즈] 발송")
+        logging.info("📊 [어닝서프라이즈] 메인채널 발송 완료")
+    else:
+        logging.info("[어닝서프라이즈] 당일 대상 없음 — 발송 스킵")
+
+
 @_job(holiday=True)
 def job_collect_investor_market():
     """평일 장 마감 후 (18:20) — KIS 시장별 투자자매매동향 수집 (시황 투자자별 카드)"""

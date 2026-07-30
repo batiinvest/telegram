@@ -412,6 +412,13 @@ class DartRoutingBot:
             trend = self._earnings_trend(stock_code, rcept_no)
             if trend:
                 detail = f"{detail}\n\n{trend}".strip()
+            # 어닝 서프라이즈 — 컨센 대비 발표 영업익 기록 (실패해도 공시 발송 무관)
+            try:
+                import earnings_surprise
+                earnings_surprise.record_from_disclosure(
+                    stock_code.split('.')[0], corp_name, rcept_no)
+            except Exception:
+                logging.exception("⚠️ [서프라이즈] 기록 실패")
         msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
 
         # ── 채널 라우팅 — 정책은 dart_rules.decide_targets (순수 함수) ──

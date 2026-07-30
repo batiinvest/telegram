@@ -1,0 +1,154 @@
+"""
+earnings_surprise.py
+────────────────────
+어닝 서프라이즈 판정 + 메인채널 요약 메시지.
+
+흐름:
+  1) DART 잠정실적 공시 도착 → record_from_disclosure() [main.py 훅에서 호출]
+     - 공시 원문에서 발표 영업익(실제) 추출 (dart_parser.extract_preliminary_current)
+     - 해당 분기 컨센서스 조회 (quarterly_consensus 스냅샷 우선, 없으면 네이버 라이브)
+     - surprise = (실제-컨센)/컨센*100, 임계(+10%) 이상이면 earnings_surprise 적재
+  2) 장 마감 후 build_briefing() → 당일 서프라이즈 리스트 메시지 → 메인채널 발송
+
+단위: 컨센=네이버 억원, 발표 실제=DART 원 단위 → 억원 변환.
+주의(MVP 한계): 잠정실적의 '당기실적'을 단일 분기값으로 가정(financials is_cumulative=False
+  추이 표시와 동일 가정). 누적 보고 종목은 오차 가능. 컨센 커버리지 밖(≈32%)·적자 컨센은 제외.
+"""
+
+import html
+import logging
+from datetime import date, datetime
+
+from logger_config import get_logger
+from db_client import get_supabase_client
+
+log = get_logger(__name__)
+
+THRESHOLD_PCT = 10.0          # 컨센 대비 이 % 이상 상회 시 리스트 포함
+_WON_PER_EOK = 100_000_000    # 1억원 = 1e8 원
+
+
+def _quarter_key(year, quarter) -> str | None:
+    """(2026, 2) → '202606'. 분기→종료월(3/6/9/12)."""
+    if not year or quarter not in (1, 2, 3, 4):
+        return None
+    return f"{int(year)}{quarter * 3:02d}"
+
+
+def get_consensus_op(code: str, quarter: str) -> float | None:
+    """분기 컨센 영업익(억원). quarterly_consensus 스냅샷 우선, 없으면 네이버 라이브 fallback."""
+    code = code.split(".")[0]
+    # 1) 발표 전 스냅샷 (주 소스)
+    try:
+        sb = get_supabase_client()
+        r = (sb.table("quarterly_consensus")
+             .select("op_consensus")
+             .eq("stock_code", code).eq("quarter", quarter)
+             .limit(1).execute())
+        if r.data and r.data[0].get("op_consensus") is not None:
+            return float(r.data[0]["op_consensus"])
+    except Exception as e:
+        log.debug(f"[서프라이즈] 컨센 조회(테이블) 실패 {code} {quarter}: {e}")
+    # 2) 네이버 라이브 (아직 컨센=Y인 lag 구간 — 스냅샷 이력 없는 종목 커버)
+    try:
+        from collect_qtr_consensus import fetch_quarter_consensus
+        c = fetch_quarter_consensus(code)
+        if c and c.get("quarter") == quarter:
+            return c.get("op")
+    except Exception as e:
+        log.debug(f"[서프라이즈] 컨센 조회(네이버) 실패 {code} {quarter}: {e}")
+    return None
+
+
+def record_from_disclosure(code: str, corp_name: str, rcept_no: str) -> dict | None:
+    """DART 잠정실적 공시 → 발표 영업익 추출 → 컨센 대비 서프라이즈 판정·저장.
+    임계 미만/컨센 없음/적자 컨센이면 저장 없이 None. (호출부에서 예외 격리, 여기서도 방어)"""
+    # 발표 실제 영업익 (원 → 억원)
+    try:
+        from dart_doc import _fetch_html, _build_kv
+        from dart_parser import extract_preliminary_current
+        html_doc = _fetch_html(rcept_no)
+        cur = extract_preliminary_current(_build_kv(html_doc)) if html_doc else None
+    except Exception:
+        log.debug(f"[서프라이즈] 원문 추출 실패: {rcept_no}")
+        return None
+    if not cur:
+        return None
+    op_won = cur.get("operating_profit")
+    quarter = _quarter_key(cur.get("year"), cur.get("quarter"))
+    if op_won is None or not quarter:
+        return None
+    op_actual = round(op_won / _WON_PER_EOK, 1)   # 억원
+
+    cons = get_consensus_op(code, quarter)
+    if cons is None or cons <= 0:
+        return None   # 컨센 없거나 적자 컨센 → 서프라이즈 % 무의미
+    surprise = round((op_actual - cons) / cons * 100, 1)
+    if surprise < THRESHOLD_PCT:
+        return None
+
+    rec = {
+        "stock_code": code.split(".")[0],
+        "corp_name": corp_name,
+        "quarter": quarter,
+        "op_actual": op_actual,
+        "op_consensus": round(cons, 1),
+        "surprise_pct": surprise,
+        "base_date": date.today().isoformat(),
+    }
+    try:
+        sb = get_supabase_client()
+        sb.table("earnings_surprise").upsert(
+            rec, on_conflict="stock_code,quarter").execute()
+        log.info(f"[서프라이즈] {corp_name}({code}) {quarter} "
+                 f"실제 {op_actual}억 vs 컨센 {cons}억 = +{surprise}%")
+    except Exception as e:
+        log.warning(f"[서프라이즈] 저장 실패 (earnings_surprise 테이블 미생성?) {code}: {e}")
+        return None
+    return rec
+
+
+def _fmt_eok(v) -> str:
+    """억원 float → '629억' / '1.0조' 표시."""
+    if v is None:
+        return "-"
+    neg = v < 0
+    a = abs(v)
+    s = f"{a / 10000:.1f}조" if a >= 10000 else f"{a:,.0f}억"
+    return ("-" if neg else "") + s
+
+
+def build_briefing(base_date: str = None) -> str | None:
+    """당일 어닝 서프라이즈 리스트 메시지(HTML). 대상 없으면 None."""
+    bd = base_date or date.today().isoformat()
+    try:
+        sb = get_supabase_client()
+        rows = (sb.table("earnings_surprise")
+                .select("corp_name,op_actual,op_consensus,surprise_pct")
+                .eq("base_date", bd)
+                .order("surprise_pct", desc=True)
+                .execute().data or [])
+    except Exception as e:
+        log.warning(f"[서프라이즈] 브리핑 조회 실패: {e}")
+        return None
+    if not rows:
+        return None
+
+    d = datetime.strptime(bd, "%Y-%m-%d")
+    lines = [
+        f"🔴 <b>어닝 서프라이즈 리스트</b> ({d.year}년 {d.month}월 {d.day}일 기준)",
+        f"- 영업익 기준 선정 (컨센 대비 +{THRESHOLD_PCT:.0f}% 이상)",
+        "",
+        "(종목명 / 발표OP / 예상OP / 예상대비)",
+    ]
+    for r in rows:
+        name = html.escape(r.get("corp_name") or "")
+        lines.append(
+            f"{name} / {_fmt_eok(r.get('op_actual'))} / "
+            f"{_fmt_eok(r.get('op_consensus'))} (+{r.get('surprise_pct'):.1f}%)")
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    print(build_briefing() or "(당일 대상 없음)")
