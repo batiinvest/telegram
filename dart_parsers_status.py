@@ -440,8 +440,13 @@ def parse_market_measure(kv: dict) -> list:
             lines.append(f'📋 {t}')
         if body:
             body = re.sub(r'\s+', ' ', body).strip()
-            # 핵심 결과 상단 요약 — 산문에 묻힌 결론을 먼저 노출 (상장폐지 결정 등)
-            if '상장폐지기준에 해당' in body:
+            _tb = f"{title or ''} {body}"
+            # 핵심 결과 상단 요약 — 산문에 묻힌 결론을 먼저 노출.
+            # ※ 회사의 불복 대응(효력정지 가처분·집행정지)을 먼저 감지 — 본문에
+            #   '상장폐지결정'이 있어도 KRX 결정이 아니라 회사가 상폐에 불복한 것.
+            if any(k in _tb for k in ('효력정지', '가처분', '집행정지')):
+                lines.append('🛡 상장폐지 불복 — 효력정지 가처분 신청')
+            elif '상장폐지기준에 해당' in body:
                 lines.append('🚨 결과: 상장폐지기준 해당 (이의신청 가능)')
             elif '개선기간' in body and '부여' in body:
                 lines.append('🚨 결과: 개선기간 부여')
