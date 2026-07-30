@@ -406,12 +406,12 @@ class DartRoutingBot:
             prefix = ""
         detail = get_disclosure_detail(rcept_no, report_nm)
         if audit_note:
-            detail = f"{audit_note}\n{detail}".strip()
-        # 잠정실적 — 이번 분기(잠정)+직전 분기 추이 덧붙임
+            detail = f"{audit_note}\n\n{detail}".strip()
+        # 잠정실적 — 이번 분기(잠정)+직전 분기 추이 덧붙임 (블록 사이 빈 줄로 구분)
         if '잠정' in report_nm and stock_code:
             trend = self._earnings_trend(stock_code, rcept_no)
             if trend:
-                detail = f"{detail}\n{trend}".strip()
+                detail = f"{detail}\n\n{trend}".strip()
         msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
 
         # ── 채널 라우팅 — 정책은 dart_rules.decide_targets (순수 함수) ──
