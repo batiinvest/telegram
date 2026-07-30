@@ -60,10 +60,10 @@ def get_consensus_op(code: str, quarter: str) -> float | None:
     return None
 
 
-def record_from_disclosure(code: str, corp_name: str, rcept_no: str) -> dict | None:
-    """DART 잠정실적 공시 → 발표 영업익 추출 → 컨센 대비 서프라이즈 판정·저장.
-    임계 미만/컨센 없음/적자 컨센이면 저장 없이 None. (호출부에서 예외 격리, 여기서도 방어)"""
-    # 발표 실제 영업익 (원 → 억원)
+def compute_surprise(code: str, rcept_no: str) -> dict | None:
+    """DART 잠정실적 원문 → 발표 영업익 추출 + 컨센 조회 → 서프라이즈 계산(저장 안 함).
+    반환 {'quarter','op_actual','op_consensus','surprise_pct'} 또는
+    None(추출 실패 / 컨센 없음 / 적자·0 컨센)."""
     try:
         from dart_doc import _fetch_html, _build_kv
         from dart_parser import extract_preliminary_current
@@ -79,33 +79,61 @@ def record_from_disclosure(code: str, corp_name: str, rcept_no: str) -> dict | N
     if op_won is None or not quarter:
         return None
     op_actual = round(op_won / _WON_PER_EOK, 1)   # 억원
-
     cons = get_consensus_op(code, quarter)
     if cons is None or cons <= 0:
         return None   # 컨센 없거나 적자 컨센 → 서프라이즈 % 무의미
-    surprise = round((op_actual - cons) / cons * 100, 1)
-    if surprise < THRESHOLD_PCT:
-        return None
-
-    rec = {
-        "stock_code": code.split(".")[0],
-        "corp_name": corp_name,
+    return {
         "quarter": quarter,
         "op_actual": op_actual,
         "op_consensus": round(cons, 1),
-        "surprise_pct": surprise,
+        "surprise_pct": round((op_actual - cons) / cons * 100, 1),
+    }
+
+
+def record_if_surprise(code: str, corp_name: str, sp: dict) -> dict | None:
+    """계산 결과 sp가 임계(+10%) 이상이면 earnings_surprise 저장(당일 리스트용)."""
+    if not sp or sp["surprise_pct"] < THRESHOLD_PCT:
+        return None
+    rec = {
+        "stock_code": code.split(".")[0],
+        "corp_name": corp_name,
+        "quarter": sp["quarter"],
+        "op_actual": sp["op_actual"],
+        "op_consensus": sp["op_consensus"],
+        "surprise_pct": sp["surprise_pct"],
         "base_date": date.today().isoformat(),
     }
     try:
         sb = get_supabase_client()
         sb.table("earnings_surprise").upsert(
             rec, on_conflict="stock_code,quarter").execute()
-        log.info(f"[서프라이즈] {corp_name}({code}) {quarter} "
-                 f"실제 {op_actual}억 vs 컨센 {cons}억 = +{surprise}%")
+        log.info(f"[서프라이즈] {corp_name}({code}) {sp['quarter']} "
+                 f"실제 {sp['op_actual']}억 vs 컨센 {sp['op_consensus']}억 = +{sp['surprise_pct']}%")
     except Exception as e:
         log.warning(f"[서프라이즈] 저장 실패 (earnings_surprise 테이블 미생성?) {code}: {e}")
         return None
     return rec
+
+
+def record_from_disclosure(code: str, corp_name: str, rcept_no: str) -> dict | None:
+    """계산+저장 일괄(편의). 개별 단계는 compute_surprise · record_if_surprise."""
+    return record_if_surprise(code, corp_name, compute_surprise(code, rcept_no))
+
+
+def consensus_line(sp: dict) -> str:
+    """잠정실적 공시 메시지에 붙일 '컨센 대비' 한 줄(HTML). sp=compute_surprise 결과.
+    컨센 없으면 빈 문자열."""
+    if not sp:
+        return ""
+    pct = sp["surprise_pct"]
+    cons = _fmt_eok(sp["op_consensus"])
+    if pct >= THRESHOLD_PCT:
+        return f"🔴 <b>어닝 서프라이즈</b> — 영업익 컨센 <b>+{pct:.1f}%</b> 상회 (예상 {cons})"
+    if pct > 0:
+        return f"🎯 <b>컨센 상회</b> — 영업익 예상 대비 +{pct:.1f}% (예상 {cons})"
+    if pct < 0:
+        return f"🔻 컨센 하회 — 영업익 예상 대비 {pct:.1f}% (예상 {cons})"
+    return f"➖ 컨센 부합 — 영업익 예상 수준 (예상 {cons})"
 
 
 def _fmt_eok(v) -> str:
