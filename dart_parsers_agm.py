@@ -53,6 +53,8 @@ def parse_mgmt_event(kv: dict) -> list:
     # 시험결과 (임상시험결과 공시) — '- 섹션:' 구조면 섹션별 분리, 아니면 단순 표시
     result_val = _get(kv, '2) 결과값', '결과값')
     if result_val:
+        if lines:            # 시험 개요 ↔ 결과 블록 구분 (앞 내용 있을 때만 빈 줄)
+            lines.append('')
         sec_lines = _parse_clinical_result(result_val)
         if sec_lines:
             lines.append('🔬 결과:')

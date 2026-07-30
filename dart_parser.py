@@ -120,7 +120,8 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
                 # 카테고리 파서 또는 범용 파서로 원문 내용 추가
                 sub = (parser(kv) if parser else None) or (parse_all_fields(kv) if not has_changes else None)
                 if sub:
-                    lines.append('════════════')
+                    # 변경내역 ↔ 원공시 내용 블록 구분 — 구분선 앞뒤 빈 줄(가독성)
+                    lines.extend(['', '════════════', ''])
                     lines.extend(sub)
                 PARSER_STATS['amendment'] += 1
                 return '\n'.join(lines)
