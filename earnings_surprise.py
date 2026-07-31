@@ -80,19 +80,31 @@ def compute_surprise(code: str, rcept_no: str) -> dict | None:
         return None
     op_actual = round(op_won / _WON_PER_EOK, 1)   # 억원
     cons = get_consensus_op(code, quarter)
-    if cons is None or cons <= 0:
-        return None   # 컨센 없거나 적자 컨센 → 서프라이즈 % 무의미
+    if cons is None:
+        return None
+    if cons <= 0:
+        # 적자·보합 컨센 → %계산 불가. 발표가 흑자면 '흑자전환'(최대 서프라이즈)로 포함,
+        # 적자 발표면 판정 제외.
+        if op_actual > 0:
+            return {"quarter": quarter, "op_actual": op_actual,
+                    "op_consensus": round(cons, 1), "surprise_pct": None,
+                    "turnaround": True}
+        return None
     return {
         "quarter": quarter,
         "op_actual": op_actual,
         "op_consensus": round(cons, 1),
         "surprise_pct": round((op_actual - cons) / cons * 100, 1),
+        "turnaround": False,
     }
 
 
 def record_if_surprise(code: str, corp_name: str, sp: dict) -> dict | None:
-    """계산 결과 sp가 임계(+10%) 이상이면 earnings_surprise 저장(당일 리스트용)."""
-    if not sp or sp["surprise_pct"] < THRESHOLD_PCT:
+    """서프라이즈면 earnings_surprise 저장: 컨센 +10%↑ 상회 또는 흑자전환."""
+    if not sp:
+        return None
+    pct = sp.get("surprise_pct")
+    if not sp.get("turnaround") and (pct is None or pct < THRESHOLD_PCT):
         return None
     rec = {
         "stock_code": code.split(".")[0],
@@ -100,15 +112,16 @@ def record_if_surprise(code: str, corp_name: str, sp: dict) -> dict | None:
         "quarter": sp["quarter"],
         "op_actual": sp["op_actual"],
         "op_consensus": sp["op_consensus"],
-        "surprise_pct": sp["surprise_pct"],
+        "surprise_pct": pct,   # 흑자전환은 None(NULL) 저장 — 렌더 시 op_consensus≤0으로 판별
         "base_date": date.today().isoformat(),
     }
     try:
         sb = get_supabase_client()
         sb.table("earnings_surprise").upsert(
             rec, on_conflict="stock_code,quarter").execute()
+        _tag = "흑자전환" if sp.get("turnaround") else f"+{pct}%"
         log.info(f"[서프라이즈] {corp_name}({code}) {sp['quarter']} "
-                 f"실제 {sp['op_actual']}억 vs 컨센 {sp['op_consensus']}억 = +{sp['surprise_pct']}%")
+                 f"실제 {sp['op_actual']}억 vs 컨센 {sp['op_consensus']}억 = {_tag}")
     except Exception as e:
         log.warning(f"[서프라이즈] 저장 실패 (earnings_surprise 테이블 미생성?) {code}: {e}")
         return None
@@ -126,8 +139,10 @@ def consensus_line(sp: dict) -> str:
     여기서는 HTML 태그(<b> 등) 금지 — plain text만(강조는 이모지로)."""
     if not sp:
         return ""
-    pct = sp["surprise_pct"]
     cons = _fmt_eok(sp["op_consensus"])
+    if sp.get("turnaround"):
+        return f"🔴 어닝 서프라이즈 — 적자 예상({cons}) 뒤집고 흑자전환 (발표 {_fmt_eok(sp['op_actual'])})"
+    pct = sp["surprise_pct"]
     if pct >= THRESHOLD_PCT:
         return f"🔴 어닝 서프라이즈 — 영업익 컨센 +{pct:.1f}% 상회 (예상 {cons})"
     if pct > 0:
@@ -147,6 +162,12 @@ def _fmt_eok(v) -> str:
     return ("-" if neg else "") + s
 
 
+def _is_turnaround(r) -> bool:
+    """저장된 행이 흑자전환인지 판별: 적자·보합 컨센(≤0) + 흑자 발표(>0)."""
+    c = r.get("op_consensus")
+    return c is not None and c <= 0 and (r.get("op_actual") or 0) > 0
+
+
 def build_briefing(base_date: str = None) -> str | None:
     """당일 어닝 서프라이즈 리스트 메시지(HTML). 대상 없으면 None."""
     bd = base_date or date.today().isoformat()
@@ -155,7 +176,6 @@ def build_briefing(base_date: str = None) -> str | None:
         rows = (sb.table("earnings_surprise")
                 .select("corp_name,op_actual,op_consensus,surprise_pct")
                 .eq("base_date", bd)
-                .order("surprise_pct", desc=True)
                 .execute().data or [])
     except Exception as e:
         log.warning(f"[서프라이즈] 브리핑 조회 실패: {e}")
@@ -163,18 +183,24 @@ def build_briefing(base_date: str = None) -> str | None:
     if not rows:
         return None
 
+    # 흑자전환 최상단, 그다음 상회율 내림차순 (흑자전환은 surprise_pct=NULL)
+    rows.sort(key=lambda r: (0 if _is_turnaround(r) else 1,
+                             -(r.get("surprise_pct") or 0)))
     d = datetime.strptime(bd, "%Y-%m-%d")
     lines = [
         f"🔴 <b>어닝 서프라이즈 리스트</b> ({d.year}년 {d.month}월 {d.day}일 기준)",
-        f"- 영업익 기준 선정 (컨센 대비 +{THRESHOLD_PCT:.0f}% 이상)",
+        f"- 영업익 기준 선정 (컨센 +{THRESHOLD_PCT:.0f}% 이상 상회 · 흑자전환 포함)",
         "",
         "(종목명 / 발표OP / 예상OP / 예상대비)",
     ]
     for r in rows:
         name = html.escape(r.get("corp_name") or "")
-        lines.append(
-            f"{name} / {_fmt_eok(r.get('op_actual'))} / "
-            f"{_fmt_eok(r.get('op_consensus'))} (+{r.get('surprise_pct'):.1f}%)")
+        act = _fmt_eok(r.get("op_actual"))
+        cons = _fmt_eok(r.get("op_consensus"))
+        if _is_turnaround(r):
+            lines.append(f"{name} / {act} / {cons} (흑자전환)")
+        else:
+            lines.append(f"{name} / {act} / {cons} (+{r.get('surprise_pct'):.1f}%)")
     return "\n".join(lines)
 
 
