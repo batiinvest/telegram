@@ -16,8 +16,6 @@ log = get_logger(__name__)
 
 import sys, time, argparse
 from datetime import date, timedelta
-from urllib.parse import urlencode
-from bs4 import BeautifulSoup
 
 
 
@@ -46,53 +44,15 @@ def daterange(from_dt: date, to_dt: date):
 
 def fetch_reports_for_date(date_str: str, page_type: str,
                            history: HistoryManager, skip_history: bool) -> list:
-    """특정 날짜·유형의 리포트를 파싱해 리스트로 반환"""
-    base_url = sa.NAVER_REPORT_URLS[page_type]
-    reports, page = [], 1
+    """특정 날짜·유형의 리포트를 파싱해 리스트로 반환.
 
-    while True:
-        try:
-            params = {
-                "searchType": "writeDate",
-                "writeFromDate": date_str,
-                "writeToDate":   date_str,
-                "page": page,
-            }
-            res  = sa._session.get(f"{base_url}?{urlencode(params)}", timeout=10)
-            soup = BeautifulSoup(res.text, "html.parser")
-
-            table = soup.find("table", {"class": "type_1"})
-            if not table:
-                break
-
-            rows = table.find_all("tr")
-            if not rows:
-                break
-
-            page_has_data = False
-            for row in rows:
-                data = sa._parse_report_row(row, base_url, page_type)
-                if not data:
-                    continue
-                page_has_data = True
-                _, file_name, _ = data
-                if not skip_history and history.contains(file_name):
-                    log.debug(f"   [SKIP 중복] {file_name}")
-                    continue
-                reports.append(data)
-
-            total_pages = sa._get_total_pages(soup)
-            if not page_has_data or page >= total_pages:
-                break
-
-            page += 1
-            time.sleep(0.3)
-
-        except Exception as e:
-            log.error(f"크롤 오류 ({page_type} {date_str} p.{page}): {e}")
-            break
-
-    return reports
+    naver_report.crawl_report_pages(stock_api 재수출) 공용 크롤러에 위임.
+    백필 특성 유지: timeout=10(빠른 실패), stop_on_empty_page=True(빈 페이지 조기 종료).
+    """
+    return sa.crawl_report_pages(
+        page_type, date_str, history,
+        skip_history=skip_history, timeout=10, stop_on_empty_page=True,
+    )
 
 
 def backfill(from_dt: date, to_dt: date,

@@ -2075,6 +2075,7 @@ from naver_report import (   # noqa: E402
     _sanitize_filename, _safe_caption, _make_hashtag, _extract_firm,
     _report_hashtags, _get_total_pages, _parse_report_row,
     _fetch_pdf_file, _send_telegram_doc, _build_report_caption,
+    crawl_report_pages,
 )
 
 

@@ -295,6 +295,73 @@ def _build_report_caption(file_name: str, tag: str, hashtags: str, fields: dict 
     return "\n".join(lines)[:_CAPTION_LIMIT]
 
 
+def crawl_report_pages(page_type: str, date_str: str, history: HistoryManager,
+                       *, skip_history: bool = False, timeout=None,
+                       stop_on_empty_page: bool = False) -> list:
+    """네이버 리포트 목록을 페이지네이션하며 (pdf_url, file_name, tag) 튜플 리스트로 수집.
+
+    run_naver_report_job(오늘)·backfill_reports(과거 날짜) 공용 크롤러.
+      date_str            : 조회 기준일 (writeFromDate=writeToDate=date_str)
+      skip_history=False  : history 중복분 제외 (True면 재전송 허용)
+      timeout             : requests 타임아웃 (None=세션 기본/무제한)
+      stop_on_empty_page  : 파싱 가능한 행이 없는 페이지에서 조기 종료(백필용)
+    """
+    base_url = NAVER_REPORT_URLS[page_type]
+    reports, page = [], 1
+    while True:
+        try:
+            params = {"searchType": "writeDate", "writeFromDate": date_str,
+                      "writeToDate": date_str, "page": page}
+            res  = _session.get(f"{base_url}?{urlencode(params)}", timeout=timeout)
+            soup = BeautifulSoup(res.text, "html.parser")
+
+            table = soup.find("table", {"class": "type_1"})
+            if not table:
+                break
+            rows = table.find_all("tr")
+            if not rows:
+                break
+
+            page_has_data = False
+            for row in rows:
+                data = _parse_report_row(row, base_url, page_type)
+                if not data:
+                    continue
+                page_has_data = True
+                _, file_name, _ = data
+                if not skip_history and history.contains(file_name):
+                    continue
+                reports.append(data)
+
+            total_pages = _get_total_pages(soup)
+            if (stop_on_empty_page and not page_has_data) or page >= total_pages:
+                break
+
+            page += 1
+            time.sleep(_PAGE_DELAY_SEC)
+        except Exception as e:
+            log.error(f"[리포트 크롤] {page_type} {date_str} p.{page}: {e}")
+            break
+    return reports
+
+
+def _resolve_report_targets(page_type: str, tag) -> set:
+    """리포트 타입·태그에 따른 산업방/기업방 타겟 chat_id 집합 반환."""
+    targets = set()
+    if page_type == "산업분석":
+        mapped_ind = REPORT_INDUSTRY_MAP.get(tag)
+        if mapped_ind and mapped_ind in INDUSTRY_CHAT_IDS:
+            targets.add(INDUSTRY_CHAT_IDS[mapped_ind])
+    elif page_type == "기업분석":
+        if tag in COMPANY_CHAT_IDS:
+            targets.add(COMPANY_CHAT_IDS[tag])
+        if COMPANY_TO_INDUSTRY:
+            ind = COMPANY_TO_INDUSTRY.get(tag)
+            if ind and ind in INDUSTRY_CHAT_IDS:
+                targets.add(INDUSTRY_CHAT_IDS[ind])
+    return targets
+
+
 def run_naver_report_job():
     """네이버 리포트 수집/전송 (페이지네이션 + 중복 방지 + 메시지 분할)."""
     # DB에서 리포트 채널 ID 동적 로드 (app_config.report_chat_id)
@@ -314,47 +381,8 @@ def run_naver_report_job():
     history = HistoryManager("sent_reports.txt", max_len=_REPORT_HISTORY_MAX)
 
     for page_type in ["산업분석", "기업분석"]:
-        base_url = NAVER_REPORT_URLS[page_type]
-        reports = []
-        page = 1
-        
-        while True:
-            try:
-                # 페이지별 요청
-                params = {"searchType": "writeDate", "writeFromDate": today_str, "writeToDate": today_str, "page": page}
-                res = _session.get(f"{base_url}?{urlencode(params)}")
-                soup = BeautifulSoup(res.text, "html.parser")
-                
-                # 테이블 파싱
-                table = soup.find("table", {"class": "type_1"})
-                if not table: break # 테이블 없으면 종료
-
-                # 행 단위 데이터 추출
-                rows = table.find_all("tr")
-                # 데이터가 없는 경우 (네이버는 데이터 없어도 빈 테이블 구조일 수 있음)
-                if not rows: break 
-
-                for row in rows:
-                    data = _parse_report_row(row, base_url, page_type)
-                    if data:
-                        pdf_url, file_name, tag = data
-                        
-                        # 이미 보낸 리포트는 건너뜀 (중복 방지)
-                        if history.contains(file_name): continue
-                        
-                        reports.append(data)
-                
-                # 마지막 페이지 체크
-                total_pages = _get_total_pages(soup)
-                if page >= total_pages:
-                    break
-                
-                page += 1
-                time.sleep(_PAGE_DELAY_SEC) # 페이지 넘김 딜레이
-
-            except Exception as e:
-                log.error(f"Report Crawl Error ({page_type} p.{page}): {e}")
-                break
+        # 오늘자 리포트 수집 (공통 크롤러 — 중복 제외, 세션 기본 타임아웃)
+        reports = crawl_report_pages(page_type, today_str, history)
 
         if not reports:
             log.info(f"   -> {page_type}: 전송할 신규 리포트 없음")
@@ -403,23 +431,8 @@ def run_naver_report_job():
                 _send_telegram_doc(_report_cid, target_doc, file_name, caption)
 
 
-            # 2. 타겟 채널 찾기
-            targets = set()
-            
-            if page_type == "산업분석":
-                mapped_ind = REPORT_INDUSTRY_MAP.get(tag)
-                if mapped_ind and mapped_ind in INDUSTRY_CHAT_IDS:
-                    targets.add(INDUSTRY_CHAT_IDS[mapped_ind])
-            
-            elif page_type == "기업분석":
-                if tag in COMPANY_CHAT_IDS:
-                    targets.add(COMPANY_CHAT_IDS[tag])
-                if COMPANY_TO_INDUSTRY:
-                    ind = COMPANY_TO_INDUSTRY.get(tag)
-                    if ind and ind in INDUSTRY_CHAT_IDS:
-                        targets.add(INDUSTRY_CHAT_IDS[ind])
-
-            # 타겟 방들에 전송
+            # 2. 타겟 채널(산업방·기업방) 찾아 전송
+            targets = _resolve_report_targets(page_type, tag)
             for chat_id in targets:
                 if pdf_buf: pdf_buf.seek(0)
                 _send_telegram_doc(chat_id, target_doc, file_name, caption)
