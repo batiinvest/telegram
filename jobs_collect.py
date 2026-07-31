@@ -14,6 +14,7 @@ import datetime
 import stock_api
 from managers import market_timer
 from db_utils import fetch_all_pages
+from collect_utils import safe_execute
 from format_utils import fmt_change_pct
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, CHAT_IDS_BY_CODE
@@ -1121,9 +1122,9 @@ def job_watchlist_alert():
             pass  # 없으면 빈 세트로 시작
 
         # ── watchlist 전체 조회 ──
-        wl_res = sb.table('watchlist') \
-                   .select('stock_code,corp_name,watch_price,target_price,group_name') \
-                   .execute()
+        wl_res = safe_execute(sb.table('watchlist')
+                   .select('stock_code,corp_name,watch_price,target_price,group_name'),
+                   label='watchlist')
         watchlist = [
             w for w in (wl_res.data or [])
             if w.get('watch_price') or w.get('target_price')
@@ -1132,18 +1133,19 @@ def job_watchlist_alert():
             return
 
         # ── 최신 market_data 조회 (오늘 또는 최근 거래일) ──
-        date_res = sb.table('market_data') \
-                     .select('base_date').order('base_date', desc=True).limit(1).execute()
+        date_res = safe_execute(sb.table('market_data')
+                     .select('base_date').order('base_date', desc=True).limit(1),
+                     label='market_data date')
         max_date = (date_res.data or [{}])[0].get('base_date')
         if not max_date:
             return
 
         codes = list({w['stock_code'] for w in watchlist if w.get('stock_code')})
-        mkt_res = sb.table('market_data') \
-                    .select('stock_code,price,price_change_rate') \
-                    .eq('base_date', max_date) \
-                    .in_('stock_code', codes) \
-                    .execute()
+        mkt_res = safe_execute(sb.table('market_data')
+                    .select('stock_code,price,price_change_rate')
+                    .eq('base_date', max_date)
+                    .in_('stock_code', codes),
+                    label='market_data prices')
         price_map = {r['stock_code']: r for r in (mkt_res.data or [])}
 
         # ── 도달 여부 체크 ──
@@ -1201,14 +1203,14 @@ def job_watchlist_alert():
                 logging.info(f"📢 [관심가알림] {name} ({alert_type}) → {target}")
 
             # 오늘 알림 목록 저장 (중복 방지)
-            sb.table('app_config').upsert({
+            safe_execute(sb.table('app_config').upsert({
                 'key':         'watchlist_alerted_today',
                 'value':       json.dumps({
                     'date':    today,
                     'alerted': [list(k) for k in alerted_today],
                 }, ensure_ascii=False),
                 'description': f'{today} 관심가/목표가 알림 발송 이력'
-            }, on_conflict='key').execute()
+            }, on_conflict='key'), label='watchlist dedup')
 
         logging.info(
             f"📋 [관심가알림] 체크 완료 — {len(watchlist)}개 종목 중 {len(alerts)}개 발송"

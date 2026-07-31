@@ -15,6 +15,40 @@ import time
 
 log = logging.getLogger(__name__)
 
+try:
+    import httpx as _httpx
+except Exception:
+    _httpx = None
+
+_TRANSIENT_MARKERS = (
+    "server disconnected", "connection reset", "connection aborted",
+    "connection refused", "read timed out", "timed out", "temporarily unavailable",
+    "remote protocol", "connection error", "broken pipe", "eof occurred",
+)
+
+
+def safe_execute(builder, retries: int = 2, base_sleep: float = 0.6, label: str = ""):
+    """PostgREST 빌더의 .execute()를 일시적 연결오류(Server disconnected 등) 시
+    새 연결로 재시도. httpx keepalive 재사용 끊김 대응. 비일시 오류는 즉시 재발생.
+    (db_utils.fetch_all_pages와 동일하게 빌더에 .execute() 재호출.)"""
+    _tt = ()
+    if _httpx is not None:
+        _tt = (_httpx.RemoteProtocolError, _httpx.ReadError, _httpx.WriteError,
+               _httpx.ConnectError, _httpx.ConnectTimeout, _httpx.ReadTimeout,
+               _httpx.PoolTimeout)
+    for attempt in range(retries + 1):
+        try:
+            return builder.execute()
+        except Exception as e:
+            transient = isinstance(e, _tt) or any(
+                m in str(e).lower() for m in _TRANSIENT_MARKERS)
+            if attempt < retries and transient:
+                log.warning("[safe_execute] 재시도 %d/%d%s: %s"
+                            % (attempt + 1, retries, ((" " + label) if label else ""), e))
+                time.sleep(base_sleep * (attempt + 1))
+                continue
+            raise
+
 
 # ── 페이지네이션 ──────────────────────────────────────────────────────────────
 
@@ -60,7 +94,7 @@ def batch_upsert(sb, table: str, records: list,
             kwargs = {"on_conflict": conflict_col}
             if ignore_duplicates:
                 kwargs["ignore_duplicates"] = True
-            sb.table(table).upsert(batch, **kwargs).execute()
+            safe_execute(sb.table(table).upsert(batch, **kwargs), label=(table + " upsert"))
             total += len(batch)
             if progress_label:
                 log.info(f"{progress_label}: {min(i + chunk, total_recs)}/{total_recs}개")
@@ -102,8 +136,8 @@ def batch_update_existing(sb, table: str, records: list,
         existing = set()
         for i in range(0, len(codes), 500):
             try:
-                res = sb.table(table).select(k_code) \
-                        .eq(k_date, d).in_(k_code, codes[i:i + 500]).execute()
+                res = safe_execute(sb.table(table).select(k_code)
+                        .eq(k_date, d).in_(k_code, codes[i:i + 500]), label=(table + " select"))
                 existing.update(x[k_code] for x in (res.data or []))
             except Exception as e:
                 log.error(f"[collect_utils] batch_update_existing 존재조회 오류 ({table} {d}): {e}")
@@ -121,8 +155,8 @@ def batch_update_existing(sb, table: str, records: list,
         if not vals:
             continue
         try:
-            sb.table(table).update(vals) \
-                .eq(k_code, r[k_code]).eq(k_date, r[k_date]).execute()
+            safe_execute(sb.table(table).update(vals)
+                .eq(k_code, r[k_code]).eq(k_date, r[k_date]), label=(table + " update"))
             updated += 1
         except Exception as e:
             log.error(f"[collect_utils] batch_update_existing UPDATE 오류 ({table} {r[k_code]} {r[k_date]}): {e}")
