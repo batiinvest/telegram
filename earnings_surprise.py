@@ -121,16 +121,17 @@ def record_from_disclosure(code: str, corp_name: str, rcept_no: str) -> dict | N
 
 
 def consensus_line(sp: dict) -> str:
-    """잠정실적 공시 메시지에 붙일 '컨센 대비' 한 줄(HTML). sp=compute_surprise 결과.
-    컨센 없으면 빈 문자열."""
+    """잠정실적 공시 메시지에 붙일 '컨센 대비' 한 줄. sp=compute_surprise 결과.
+    컨센 없으면 빈 문자열. ⚠️ main._build_msg가 detail 전체를 html.escape 하므로
+    여기서는 HTML 태그(<b> 등) 금지 — plain text만(강조는 이모지로)."""
     if not sp:
         return ""
     pct = sp["surprise_pct"]
     cons = _fmt_eok(sp["op_consensus"])
     if pct >= THRESHOLD_PCT:
-        return f"🔴 <b>어닝 서프라이즈</b> — 영업익 컨센 <b>+{pct:.1f}%</b> 상회 (예상 {cons})"
+        return f"🔴 어닝 서프라이즈 — 영업익 컨센 +{pct:.1f}% 상회 (예상 {cons})"
     if pct > 0:
-        return f"🎯 <b>컨센 상회</b> — 영업익 예상 대비 +{pct:.1f}% (예상 {cons})"
+        return f"🎯 컨센 상회 — 영업익 예상 대비 +{pct:.1f}% (예상 {cons})"
     if pct < 0:
         return f"🔻 컨센 하회 — 영업익 예상 대비 {pct:.1f}% (예상 {cons})"
     return f"➖ 컨센 부합 — 영업익 예상 수준 (예상 {cons})"
