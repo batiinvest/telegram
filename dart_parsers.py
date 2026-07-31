@@ -25,6 +25,9 @@ from dart_parsers_status import *      # noqa: F401,F403
 
 
 _PARSER_MAP = [
+    # 거래정지는 최우선 — 제목 '(사유)'에 무상증자·유상증자·상장폐지 등이 붙어도
+    # 주권매매거래정지는 항상 거래정지 이벤트 (사유 파서로 새면 빈결과→폴백 노이즈)
+    (['거래정지', '매매거래정지'],           parse_trading_halt),
     (['유무상증자'],                         parse_combined_ci),
     # 청약결과·발행결과는 '유상증자'보다 먼저 — 제목에 유상증자가 있어 증자결정 파서로 새던 문제
     (['청약결과', '발행결과'],                 parse_subscription_result),
@@ -38,7 +41,6 @@ _PARSER_MAP = [
     (['투자판단관련주요경영사항'],           parse_mgmt_event),
     (['기타주요경영사항'],                   parse_misc_mgmt),
     (['임원ㆍ주요주주', '임원·주요주주'],     parse_insider_report),
-    (['거래정지', '매매거래정지'],           parse_trading_halt),
     # 불성실공시는 상장적격성보다 먼저 — 지정 서식에 '상장적격성 실질심사사유' 필드가
     # 있어 market_measure로 새면 안 됨
     (['불성실공시'],                           parse_unfaithful_disclosure),
