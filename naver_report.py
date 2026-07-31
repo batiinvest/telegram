@@ -6,7 +6,6 @@ stock_api 가 하위호환을 위해 주요 심볼을 재수출한다 (backfill_
 """
 import re
 import time
-import logging
 from io import BytesIO
 from urllib.parse import urljoin, urlencode
 from datetime import datetime
@@ -14,11 +13,14 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
+from logger_config import get_logger
 from managers import global_session as _session, HistoryManager, telegram_bot as _telegram_bot
 from config import (
     TELEGRAM_BOT_TOKEN,
     COMPANY_CHAT_IDS, INDUSTRY_CHAT_IDS, COMPANY_TO_INDUSTRY,
 )
+
+log = get_logger(__name__)
 
 # =================================================================================
 # 📑 [Naver Report] 네이버 증권 리포트 수집 및 전송 (통합 모듈)
@@ -56,6 +58,19 @@ REPORT_CONFIG = {
 
 ROBOT_KEYWORDS = ["로봇", "액츄에이터", "로보틱스", "휴머로이드", "AMR", "AGV", "감속기", "서보모터", "휴머노이드"]
 
+# ── 발송·크롤 튜닝 상수 (기존 하드코딩 값 그대로 상수화) ──────────
+_CAPTION_LIMIT          = 1024   # 텔레그램 캡션 최대 길이
+_SUMMARY_CHUNK_SIZE     = 30     # 요약 메시지 1건당 항목 수
+_REPORT_HISTORY_MAX     = 2000   # sent_reports.txt 보관 최대 줄 수
+_MAX_DOC_RETRY          = 3      # PDF 전송 최대 재시도 횟수
+_RATELIMIT_DEFAULT_WAIT = 10     # 429 응답에 retry_after 없을 때 대기(초)
+_NET_ERROR_RETRY_WAIT   = 5      # 네트워크 오류 시 재시도 대기(초)
+_DOC_SEND_INTERVAL_SEC  = 1.0    # 연속 문서 전송 간 간격(초)
+_SUMMARY_SEND_DELAY_SEC = 0.5    # 요약 청크 전송 간 간격(초)
+_PAGE_DELAY_SEC         = 0.2    # 페이지네이션 크롤 간 간격(초)
+_PDF_DOWNLOAD_TIMEOUT   = 30     # PDF 다운로드 타임아웃(초)
+_PDF_CHUNK_BYTES        = 8192   # PDF 스트리밍 청크 크기
+
 # -----------------------------------------------------------
 # 🛠️ [Internal] 리포트 파싱 및 유틸리티
 # -----------------------------------------------------------
@@ -64,7 +79,7 @@ def _sanitize_filename(file_name: str) -> str:
 
 def _safe_caption(file_name: str) -> str:
     base = file_name[:-4] if file_name.lower().endswith(".pdf") else file_name
-    return base.replace("_", " ")[:1024]
+    return base.replace("_", " ")[:_CAPTION_LIMIT]
 
 def _is_robot_topic(text: str) -> bool:
     return text and any(k.lower() in text.lower() for k in ROBOT_KEYWORDS)
@@ -104,7 +119,8 @@ def _get_total_pages(soup) -> int:
         last_page_tag = soup.select_one("td.pgRR a")
         if last_page_tag:
             return int(last_page_tag["href"].split("page=")[-1])
-    except: pass
+    except Exception:
+        pass
     return 1
 
 def _parse_report_row(row, base_url: str, page_type: str):
@@ -144,33 +160,31 @@ def _fetch_pdf_file(pdf_url: str) -> Optional[BytesIO]:
     """PDF 파일을 메모리로 다운로드 (global_session 사용)"""
     try:
         # 파일 다운로드는 stream=True 권장
-        with _session.get(pdf_url, stream=True, timeout=30) as r:
+        with _session.get(pdf_url, stream=True, timeout=_PDF_DOWNLOAD_TIMEOUT) as r:
             r.raise_for_status()
             buf = BytesIO()
-            for chunk in r.iter_content(chunk_size=8192):
+            for chunk in r.iter_content(chunk_size=_PDF_CHUNK_BYTES):
                 if chunk: buf.write(chunk)
             buf.seek(0)
             return buf
     except Exception as e:
-        logging.error(f"PDF Download Fail: {e}")
+        log.error(f"PDF Download Fail: {e}")
         return None
 
 def _send_telegram_doc(chat_id: str, document, file_name: str, caption: str = None, retry_count: int = 0):
-    """
-    [수정됨] 텔레그램 문서(PDF) 전송 (429 속도제한 발생 시 대기 후 재전송)
-    """
+    """텔레그램 문서(PDF) 전송 — 429 속도제한 시 대기 후 재전송."""
     if not TELEGRAM_BOT_TOKEN: return
-    
-    # 최대 3회까지만 재시도 (무한 루프 방지)
-    if retry_count > 3:
-        logging.error(f"❌ [Telegram] 3회 재시도 실패, 전송 포기 ({file_name})")
+
+    # 최대 _MAX_DOC_RETRY회까지만 재시도 (무한 루프 방지)
+    if retry_count > _MAX_DOC_RETRY:
+        log.error(f"❌ [Telegram] {_MAX_DOC_RETRY}회 재시도 실패, 전송 포기 ({file_name})")
         return
-    
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-    
+
     try:
-        data = {"chat_id": chat_id, "caption": caption[:1024], "parse_mode": "HTML"}
-        
+        data = {"chat_id": chat_id, "caption": caption[:_CAPTION_LIMIT], "parse_mode": "HTML"}
+
         # 문서 전송 시도
         if isinstance(document, str): # URL인 경우
             data["document"] = document
@@ -180,30 +194,30 @@ def _send_telegram_doc(chat_id: str, document, file_name: str, caption: str = No
             files = {"document": (file_name, document, "application/pdf")}
             # 헤더 충돌 방지
             res = _session.post(url, data=data, files=files, headers={"Content-Type": None})
-            
-        # 🚨 [핵심 수정] 429 Too Many Requests (속도 제한) 처리
+
+        # 429 Too Many Requests (속도 제한) 처리
         if res.status_code == 429:
-            wait_time = res.json().get("parameters", {}).get("retry_after", 10)
-            logging.warning(f"⏳ [Telegram] 속도 제한 감지! {wait_time}초 대기 후 재전송... ({file_name})")
-            
+            wait_time = res.json().get("parameters", {}).get("retry_after", _RATELIMIT_DEFAULT_WAIT)
+            log.warning(f"⏳ [Telegram] 속도 제한 감지! {wait_time}초 대기 후 재전송... ({file_name})")
+
             # 지정된 시간만큼 멈춤 (이때 스케줄러도 멈춰서 기다림)
             time.sleep(wait_time + 1)
-            
+
             # 재귀 호출로 다시 시도
             _send_telegram_doc(chat_id, document, file_name, caption, retry_count + 1)
             return
 
         if res.status_code != 200:
-            logging.error(f"⚠️ [Telegram] 전송 실패 ({res.status_code}): {res.text}")
+            log.error(f"⚠️ [Telegram] 전송 실패 ({res.status_code}): {res.text}")
 
-        # 성공 시에도 연속 전송 방지를 위해 약간 대기 (1초)
-        time.sleep(1.0)
-        
+        # 성공 시에도 연속 전송 방지를 위해 약간 대기
+        time.sleep(_DOC_SEND_INTERVAL_SEC)
+
     except Exception as e:
-        logging.error(f"❌ [Telegram] Doc Error ({chat_id}): {e}")
-        # 네트워크 에러 시에도 1번은 5초 뒤 재시도
+        log.error(f"❌ [Telegram] Doc Error ({chat_id}): {e}")
+        # 네트워크 에러 시에도 1번은 재시도
         if retry_count < 1:
-            time.sleep(5)
+            time.sleep(_NET_ERROR_RETRY_WAIT)
             _send_telegram_doc(chat_id, document, file_name, caption, retry_count + 1)
 
 
@@ -244,7 +258,7 @@ def _build_report_caption(file_name: str, tag: str, hashtags: str, fields: dict 
             f"📌 <a href='https://t.me/batiarchive'>바티아카이브</a> — 리포트·IR자료\n\n"
             f"{_safe_caption(file_name)}"
         )
-        return f"{head}\n\n{hashtags}"[:1024]
+        return f"{head}\n\n{hashtags}"[:_CAPTION_LIMIT]
 
     firm = _extract_firm(file_name)
     lines = [f"📑 <b>{tag}</b> · {firm}", "━━━━━━━━━━━━"]
@@ -278,13 +292,11 @@ def _build_report_caption(file_name: str, tag: str, hashtags: str, fields: dict 
     lines.append("📎 <a href='https://t.me/batiarchive'>바티아카이브</a>")
     lines.append(hashtags)
 
-    return "\n".join(lines)[:1024]
+    return "\n".join(lines)[:_CAPTION_LIMIT]
 
 
 def run_naver_report_job():
-    """
-    [최종 수정] 네이버 리포트 수집/전송 (페이지네이션 복원 + 중복 방지 + 메시지 분할)
-    """
+    """네이버 리포트 수집/전송 (페이지네이션 + 중복 방지 + 메시지 분할)."""
     # DB에서 리포트 채널 ID 동적 로드 (app_config.report_chat_id)
     # AI 요약 기능은 app_config.report_ai_summary 로 토글 (기본 OFF, 승인 후 'on')
     try:
@@ -296,10 +308,10 @@ def run_naver_report_job():
         _ai_summary_on = False
 
     today_str = datetime.now().strftime("%Y-%m-%d")
-    logging.info(f"📑 네이버 리포트 수집 시작 ({today_str})")
+    log.info(f"📑 네이버 리포트 수집 시작 ({today_str})")
 
     # 히스토리 매니저 로드
-    history = HistoryManager("sent_reports.txt", max_len=2000)
+    history = HistoryManager("sent_reports.txt", max_len=_REPORT_HISTORY_MAX)
 
     for page_type in ["산업분석", "기업분석"]:
         base_url = NAVER_REPORT_URLS[page_type]
@@ -338,20 +350,20 @@ def run_naver_report_job():
                     break
                 
                 page += 1
-                time.sleep(0.2) # 페이지 넘김 딜레이
+                time.sleep(_PAGE_DELAY_SEC) # 페이지 넘김 딜레이
 
             except Exception as e:
-                logging.error(f"Report Crawl Error ({page_type} p.{page}): {e}")
+                log.error(f"Report Crawl Error ({page_type} p.{page}): {e}")
                 break
 
         if not reports:
-            logging.info(f"   -> {page_type}: 전송할 신규 리포트 없음")
+            log.info(f"   -> {page_type}: 전송할 신규 리포트 없음")
             continue
 
-        # [수정] 요약본 메인방 전송 (길이 제한 고려하여 분할 전송)
+        # 요약본 메인방 전송 (길이 제한 고려하여 분할 전송)
         if _report_cid:
             header = f"📑 <b>[{today_str}] {page_type} 리포트</b> (총 {len(reports)}개)\n\n"
-            chunk_size = 30 # 한 번에 30개씩 끊어서 전송
+            chunk_size = _SUMMARY_CHUNK_SIZE # 한 번에 N개씩 끊어서 전송
 
             for i in range(0, len(reports), chunk_size):
                 chunk = reports[i:i+chunk_size]
@@ -365,7 +377,7 @@ def run_naver_report_job():
 
                 final_msg = "\n".join(msg_lines) + f"\n\n{_make_hashtag(page_type)}"
                 _telegram_bot.send_message(_report_cid, final_msg)
-                time.sleep(0.5)
+                time.sleep(_SUMMARY_SEND_DELAY_SEC)
 
         # 개별 파일 전송
         for pdf_url, file_name, tag in reports:
@@ -382,7 +394,7 @@ def run_naver_report_job():
                     from ai_analyst import summarize_report_pdf
                     ai_fields = summarize_report_pdf(pdf_buf.getvalue(), tag)
                 except Exception as e:
-                    logging.error(f"리포트 요약 호출 실패 ({file_name}): {e}")
+                    log.error(f"리포트 요약 호출 실패 ({file_name}): {e}")
 
             caption = _build_report_caption(file_name, tag, hashtags, ai_fields)
 
@@ -414,6 +426,6 @@ def run_naver_report_job():
             
             # [중요] 전송 성공 후에만 히스토리에 기록
             history.add(file_name)
-            logging.info(f"   -> 리포트 전송 완료: {file_name}")
+            log.info(f"   -> 리포트 전송 완료: {file_name}")
 
-    logging.info("📑 리포트 작업 종료")
+    log.info("📑 리포트 작업 종료")
