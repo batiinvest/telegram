@@ -67,6 +67,20 @@ def job_naver_report():
         mark_failed(e)
 
 
+@_job(holiday=True)
+def job_industry_summary():
+    """평일 19:10 — 산업별 하루 마감 브리핑 → 산업 채팅방.
+    18:55 daily_summary(종목요약·AI페이싱)·17:15 sector_summary 완료 후 실행."""
+    try:
+        logging.info("🌆 [산업브리핑] industry_summary 실행")
+        from industry_summary import run as run_industry_summary
+        sent = run_industry_summary()
+        _log_notice(DEFAULT_CHAT_ID, f"[산업브리핑] {sent}개 산업 발송")
+    except Exception as e:
+        logging.error(f"❌ [산업브리핑] 오류: {e}")
+        mark_failed(e)
+
+
 @_job("closing", holiday=True)
 def job_daily_closing():
     logging.info("🏁 [마감 브리핑] 시작")

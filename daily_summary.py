@@ -266,8 +266,8 @@ def generate(base_date: str = None) -> int:
             'items': {
                 'disclosures': [{
                     'category':  d.get('category') or '기타',
-                    # DART report_nm은 후행 공백이 다수 포함돼 옴
-                    'report_nm': (d.get('report_nm') or '').strip(),
+                    # DART report_nm은 후행·내부 공백이 다수 포함돼 옴 → 전부 단일 공백으로
+                    'report_nm': ' '.join((d.get('report_nm') or '').split()),
                     'rcept_no':  d.get('rcept_no'),
                 } for d in b['discs'][:MAX_DISC]],
                 'news': [{
@@ -315,7 +315,7 @@ def render_card(row: dict) -> str:
         lines.append(f"📋 <b>공시 {total_d}건</b>")
         for d in discs[:6]:
             cat = esc(d.get('category') or '기타')
-            nm  = esc((d.get('report_nm') or '').strip())
+            nm  = esc(' '.join((d.get('report_nm') or '').split()))
             rno = d.get('rcept_no')
             link = (f" <a href='https://dart.fss.or.kr/dsaf001/main.do?rcpNo={esc(rno)}'>[DART]</a>"
                     if rno else "")

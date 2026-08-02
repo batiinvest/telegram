@@ -43,6 +43,7 @@ from jobs_collect import (
 )
 from jobs_briefing import (
     job_lunch_briefing, job_naver_report, job_daily_closing, job_kind_ir,
+    job_industry_summary,
     job_pro_channel_check, job_daily_ops_summary, job_disclosure_digest,
     job_saturday_main_ranking, job_saturday_flow_summary, job_saturday_industry_report,
     job_sunday_industry_recap, job_sunday_company_diagnosis,
@@ -155,6 +156,7 @@ def run_scheduler():
     schedule.every().saturday.at("01:00").do(job_sync_listed_companies) # 새벽 상장사 동기화
     schedule.every().day.at("18:30").do(job_collect_financials)        # 장 마감 후 재무수집 (공시 기반)
     schedule.every().day.at("18:55").do(_threaded(job_daily_summary))  # 종목별 저녁 요약 생성 (18:30 공시 저장 완료 후)
+    schedule.every().day.at("19:10").do(_threaded(job_industry_summary))  # 산업별 마감 브리핑 → 산업 채팅방 (18:55 종목요약 AI페이싱 완료 후)
     schedule.every().day.at("18:35").do(_threaded(job_collect_analyst_opinions))  # 투자의견 (장후)
     schedule.every().day.at("18:40").do(job_collect_estimates)        # 종목추정실적 (미래 매출/영업이익 + 상향감지)
     schedule.every().day.at("08:40").do(_threaded(job_snapshot_qtr_consensus))  # 분기 컨센 스냅샷 (어닝 서프라이즈용, 장전)
