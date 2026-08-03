@@ -404,6 +404,49 @@ def extract_preliminary_current(kv: dict) -> dict | None:
     return out if any(x in out for x in ('revenue', 'operating_profit', 'net_income')) else None
 
 
+def parse_money_lending(kv: dict) -> list:
+    """금전대여결정 (자율공시) — 대상·금액·조건·목적·잔액."""
+    lines = []
+
+    name = _get(kv, '1. 성명(법인명)', '성명(법인명)', '법인명', '성명')
+    rel = _get(kv, '(회사와의 관계)', '회사와의 관계')
+    if name:
+        lines.append(f'👥 대상: {_trunc(name, 40)}' + (f' ({rel})' if rel else ''))
+
+    amt = _get(kv, '대여금액 (원)', '대여금액(원)', '대여금액')
+    ratio = _get(kv, '자기자본 대비(%)', '자기자본대비(%)')
+    note = _get(kv, '6. 기타 투자판단에 참고할 사항', '기타 투자판단에 참고할 사항') or ''
+    if amt:
+        parts = [f'{_fmt_amount(amt)}원']
+        fx = re.search(r'(USD|EUR|JPY|CNY)\s*([\d,]+)', note)
+        if fx:
+            parts.append(f'{fx.group(1)} {fx.group(2)}')
+        if ratio:
+            parts.append(f'자기자본 대비 {ratio}%')
+        lines.append('💵 대여금액: ' + ' · '.join(parts))
+
+    rate = _get(kv, '이율 (%)', '이율(%)', '이율')
+    start = _get(kv, '시작일')
+    end = _get(kv, '종료일')
+    cond = []
+    if rate:
+        cond.append(f'이율 {rate}%')
+    if start and end:
+        cond.append(f'기간 {start}~{end}')
+    if cond:
+        lines.append('📅 ' + ' · '.join(cond))
+
+    purpose = _get(kv, '3. 금전대여 목적', '금전대여 목적', '대여 목적')
+    if purpose:
+        lines.append(f'🎯 목적: {_trunc(purpose, 50)}')
+
+    total = _get(kv, '4. 금전대여 총잔액 (원)', '금전대여 총잔액 (원)', '총잔액')
+    if total:
+        lines.append(f'📊 총 대여잔액: {_fmt_amount(total)}원')
+
+    return lines
+
+
 def parse_value_enhancement(kv: dict) -> list:
     """기업가치제고계획 (자율공시)"""
     lines = []
