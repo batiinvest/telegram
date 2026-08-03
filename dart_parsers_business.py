@@ -211,6 +211,37 @@ def parse_debt_guarantee(kv: dict) -> list:
     return lines
 
 
+def _parse_auto_sales(html):
+    """자동차 등 '단위:대' 판매실적 표 파싱 (손익 공란이어도 판매량이 실적내용:
+    현대차·기아 월 판매실적 등). 국내/해외/계 행에서 당기값(idx1)·전년동기대비%(idx6).
+    반환: (당월라벨, {지역:(수량,YoY)}, 누적라벨, {지역:(수량,YoY)})."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html or '', 'html.parser')
+    mode = None
+    month, ytd = {}, {}
+    m_lbl, y_lbl = '', ''
+    for tr in soup.find_all('tr'):
+        cells = [re.sub(r'\s+', ' ', c.get_text(' ', strip=True)).strip()
+                 for c in tr.find_all(['td', 'th'])]
+        joined = ' '.join(cells)
+        if re.search(r'단위\s*[:：]\s*대', joined):
+            if '누적' in joined or '누계' in joined:
+                mode = 'ytd'
+                mm = re.search(r'당기누적\s*\(([^)]+)\)', joined)
+                y_lbl = mm.group(1).strip() if mm else ''
+            else:
+                mode = 'month'
+                mm = re.search(r'당기실적\s*\(([^)]+)\)', joined)
+                m_lbl = mm.group(1).strip() if mm else ''
+            continue
+        if mode and cells and cells[0] in ('국내', '해외', '계'):
+            qty = cells[1] if len(cells) > 1 else ''
+            yoy = cells[6] if len(cells) > 6 else ''
+            if qty and qty not in ('-', ''):
+                (month if mode == 'month' else ytd)[cells[0]] = (qty, yoy)
+    return m_lbl, month, y_lbl, ytd
+
+
 def parse_preliminary_earnings(kv: dict) -> list:
     """연결/별도 잠정실적 공정공시"""
     lines = []
@@ -309,6 +340,23 @@ def parse_preliminary_earnings(kv: dict) -> list:
                  '순이익' if k == '당기순이익' else
                  '지배순이익' if '지배기업' in k else '세전이익')
         lines.append(f'  {label}: {" / ".join(parts)}')
+
+    # ── 판매대수 표(자동차 월 판매 등 '단위:대') — 손익 공란이어도 판매량이 실적내용 ──
+    _msl, _mon, _ysl, _ytd = _parse_auto_sales(kv.get('_html', ''))
+    if _mon.get('계') or _ytd.get('계'):
+        def _yoy(v):
+            v = (v or '').strip()
+            if not v or v in ('-', ''):
+                return ''
+            return ' (YoY ' + (v if v.startswith('-') else '+' + v) + '%)'
+        lines.append('🚗 판매실적' + ((' (' + _msl + ')') if _msl else ''))
+        for _rg in ('국내', '해외', '계'):
+            if _rg in _mon:
+                _q, _y = _mon[_rg]
+                lines.append('  ' + ('합계' if _rg == '계' else _rg) + ': ' + _q + '대' + _yoy(_y))
+        if '계' in _ytd:
+            _q, _y = _ytd['계']
+            lines.append('  누적' + (('(' + _ysl + ')') if _ysl else '') + ': ' + _q + '대' + _yoy(_y))
 
     return lines
 
