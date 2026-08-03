@@ -238,6 +238,30 @@ def parse_insider_report(kv: dict) -> list:
     return lines
 
 
+def parse_tender_opinion(kv: dict) -> list:
+    """공개매수에관한의견표명서 — 대상회사가 공개매수에 밝히는 찬반 의견.
+
+    의견(찬성/반대/중립)은 KV 표엔 없고 산문 본문에 있음. 반대=경영권 방어 신호로
+    중요. 회사 자체 의견과 '주주 응모 권고'는 다를 수 있어(회사 찬성·주주 중립 등) 분리.
+    """
+    _OP = {'찬성': '✅ 찬성', '반대': '🚫 반대', '중립': '⚖️ 중립', '유보': '⚖️ 유보'}
+    lines = ['📢 공개매수 의견표명']
+
+    if v := _get(kv, '성 명 :', '성명'):
+        v = re.sub(r'^[ㆍ·\s]*성\s*명\s*[:：]\s*', '', v).strip()
+        lines.append(f'🏢 공개매수자: {_trunc(v, 30)}')
+    if v := _get(kv, '회 사 명 :', '회사명'):
+        lines.append(f'🎯 대상: {_trunc(v, 30)}')
+
+    txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', kv.get('_html', '')))
+    if m := re.search(r'공개매수에 대하여\s*(찬성|반대|중립|유보)', txt):
+        lines.append(f'📋 회사 의견: {_OP.get(m.group(1), m.group(1))}')
+    if m := re.search(r'응할지\s*여부에\s*대해서는\s*(찬성|반대|중립|유보)', txt):
+        lines.append(f'👥 주주 응모 권고: {_OP.get(m.group(1), m.group(1))}')
+
+    return lines
+
+
 def parse_tender_offer(kv: dict) -> list:
     """공개매수신고서/공고 — 매수자·대상·목적·가격·수량·기간·주관사.
 

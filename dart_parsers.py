@@ -79,6 +79,7 @@ _PARSER_MAP = [
     (['대량보유상황보고서'],                      parse_large_holding_report),
     (['공개매수신고서', '공개매수설명서', '공개매수공고'], parse_tender_offer),
     (['공개매수결과보고서', '공개매수청약'],       parse_tender_offer_result),
+    (['의견표명서', '공개매수에관한의견'],          parse_tender_opinion),
     # (['주식담보제공'], …) 는 위 최대주주변경 앞으로 이동함
 ]
 
