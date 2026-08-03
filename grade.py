@@ -271,14 +271,14 @@ def detect_trend_flags(quarters: list) -> dict:
     if rev_yoy is not None and op_yoy is not None and rev_yoy > 5 and op_yoy < -10:
         flags['op_leverage_fail'] = True
 
-    # ── 부채비율 급증: (total_debt / total_equity) QoQ +30%p 이상 ──
+    # ── 부채비율 급증: (total_liabilities / total_equity) QoQ +30%p 이상 ──
     if len(quarters) >= 2:
         prev_q = quarters[-2]
         cur_q  = quarters[-1]
         p_eq   = prev_q.get('total_equity') or 0
         c_eq   = cur_q.get('total_equity')  or 0
-        p_debt = prev_q.get('total_debt')   or 0
-        c_debt = cur_q.get('total_debt')    or 0
+        p_debt = prev_q.get('total_liabilities')   or 0
+        c_debt = cur_q.get('total_liabilities')    or 0
         if p_eq > 0 and c_eq > 0:
             prev_ratio = p_debt / p_eq * 100
             cur_ratio  = c_debt / c_eq * 100
@@ -327,7 +327,7 @@ def save_trend_flags(sb, year: str, quarter: str) -> int:
         batch = codes[i:i + 200]
         res = (sb.table('financials')
                .select('stock_code,bsns_year,quarter,revenue,operating_profit,'
-                       'revenue_yoy,op_profit_yoy,revenue_qoq,total_debt,total_equity')
+                       'revenue_yoy,op_profit_yoy,revenue_qoq,total_liabilities,total_equity')
                .in_('bsns_year', years_set)
                .in_('quarter',   quarters_set)
                .eq('fs_div', 'CFS')
