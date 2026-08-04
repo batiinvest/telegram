@@ -8,12 +8,14 @@
 """
 import dart_parsers as D
 
-# 빈 kv에서 헤더를 반환하는 4개 (나머지 40개는 [])
+# 빈 kv에서 헤더를 반환하는 6개 (나머지 41개는 [])
 EMPTY_HEADERS = {
     "parse_agm_notice":          ["🏛 주주총회 소집 — 안건은 공시 원문 참조"],
     "parse_hq_relocation":       ["📍 본점 이전"],
     "parse_preliminary_earnings": ["📊 별도 잠정실적"],
     "parse_tender_offer":        ["📢 공개매수"],
+    "parse_subscription_result": ["📢 유상증자 청약결과"],
+    "parse_tender_opinion":      ["📢 공개매수 의견표명"],
 }
 
 
@@ -22,8 +24,8 @@ def _all_parsers():
 
 
 def test_parser_count_stable():
-    """파서 수 44 — 예상치 못한 추가/삭제 감지."""
-    assert len(_all_parsers()) == 44
+    """파서 수 47 — 예상치 못한 추가/삭제 감지."""
+    assert len(_all_parsers()) == 47
 
 
 def test_all_parsers_empty_kv_return_list():

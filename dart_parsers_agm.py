@@ -60,7 +60,16 @@ def parse_mgmt_event(kv: dict) -> list:
             lines.append('🔬 결과:')
             lines.extend(sec_lines)
         else:
-            lines.append(f'🔬 결과: {_trunc_clean(result_val, 500)}')
+            # 섹션 헤더 없어도 '- ' 불릿이 여럿이면 줄바꿈 (단순 나열 가독성)
+            _rv = re.sub(r'\s+', ' ', result_val).strip()
+            _bul = [re.sub(r'^-\s*', '', b.strip())
+                    for b in re.split(r'\s+-\s+', _rv) if b.strip()]
+            if len(_bul) >= 2:
+                lines.append('🔬 결과:')
+                for b in _bul[:6]:
+                    lines.append(f'  • {_trunc_clean(b, 300)}')
+            else:
+                lines.append(f'🔬 결과: {_trunc_clean(result_val, 500)}')
 
     # 변경신청 사유 (변경승인 공시)
     if v := _get(kv, '3. 변경신청 사유', '변경신청 사유', '변경사유'):
