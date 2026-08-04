@@ -289,7 +289,7 @@ def parse_preliminary_earnings(kv: dict) -> list:
     def _fmt_amt(v: str) -> str:
         try:
             n = int(v.replace(',', ''))
-            return _fmt_amount(str(abs(n) * _unit_mult))
+            return ('-' if n < 0 else '') + _fmt_amount(str(abs(n) * _unit_mult))
         except (ValueError, AttributeError):
             return v
 
