@@ -682,6 +682,17 @@ def job_collect_new_high():
         mark_failed(e)
 
 
+def _new_high_streak_badge(streak: int, capped: bool = False, long: bool = False) -> str:
+    """52주 신고가 연속 경신 배지 텍스트.
+    streak<=1 → 신규(오늘 처음 경신), >=2 → N일 연속. capped면 '+' 표시.
+    long=True는 종목방 개별 알림용(경신 문구 포함), False는 메인방 한 줄용.
+    """
+    if not streak or streak <= 1:
+        return "🆕 오늘 신규 경신" if long else "🆕 신규"
+    plus = "+" if capped else ""
+    return f"🔥 {streak}일{plus} 연속 경신" if long else f"🔥 {streak}일{plus} 연속"
+
+
 def _alert_new_high(rows: list):
     """
     52주 신고가 갱신 알림 발송.
@@ -710,9 +721,13 @@ def _alert_new_high(rows: list):
         chg_pct  = r.get('chg_pct', 0) or 0
         d52_high = r.get('d52_high', 0) or 0
         d52_low  = r.get('d52_low',  0) or 0
+        streak   = int(r.get('streak', 1) or 1)
+        capped   = bool(r.get('streak_capped', False))
 
         chg_str  = fmt_change_pct(chg_pct)
         chg_icon = '🔺' if chg_pct > 0 else ('🔻' if chg_pct < 0 else '➖')
+        badge      = _new_high_streak_badge(streak, capped)             # 메인방 한 줄용
+        badge_long = _new_high_streak_badge(streak, capped, long=True)  # 종목방 개별용
 
         # ① 종목 채팅방 개별 알림
         if code in monitored:
@@ -720,13 +735,14 @@ def _alert_new_high(rows: list):
                 f"🏆 <b>[{name}] 52주 신고가 갱신!</b>\n"
                 f"════════════\n"
                 f"💰 현재가: {price:,}원 ({chg_icon}{chg_str})\n"
+                f"{badge_long}\n"
                 f"📈 52주 고가: {d52_high:,}원\n"
                 f"📉 52주 저가: {d52_low:,}원"
             )
             stock_api.send_telegram(monitored[code], msg)
 
         # ② 메인방 묶음용 라인 누적
-        main_lines.append(f"• <b>{name}</b>  {price:,}원 ({chg_icon}{chg_str})")
+        main_lines.append(f"• <b>{name}</b>  {price:,}원 ({chg_icon}{chg_str})  {badge}")
 
     # ② 메인 채팅방 묶음 발송
     if main_lines:

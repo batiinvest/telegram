@@ -343,6 +343,71 @@ def save_new_high_to_db(rows: list[dict], base_date: str, sb_client=None):
     logging.info(f"[신고가] {updated}/{len(rows)}개 market_data 업데이트")
 
 
+def annotate_new_high_streaks(rows: list[dict], sb_client=None, lookback: int = 40):
+    """각 신고가 종목의 '연속 신고가 일수'(streak)를 계산해 rows에 in-place 기록.
+
+    streak = 오늘부터 거래일 역순으로, 그날 52주 신고가를 새로 경신
+             (w52_high_date == base_date)한 날이 연속된 일수.
+        · streak == 1  → 신규 (오늘 처음 경신 — 어제는 신고가 아님)
+        · streak >= 2  → N일 연속 경신
+
+    실제 거래일 캘린더(005930 기준)에 맞춰 판정하므로 특정 거래일 행이
+    누락(gap)돼도 연속성을 잘못 세지 않는다. lookback일을 초과하는 streak는
+    lookback으로 상한 처리하고 rows[*]['streak_capped']=True로 표시한다.
+    각 row에 'streak'(int, 최소 1), 'streak_capped'(bool) 키를 추가한다.
+    """
+    if not rows:
+        return rows
+    if sb_client is None:
+        sb_client = get_supabase_client()
+
+    # 실제 거래일 캘린더 (오늘 → 과거, 유동 종목 005930 기준)
+    try:
+        cal_res = sb_client.table('market_data') \
+            .select('base_date').eq('stock_code', '005930') \
+            .order('base_date', desc=True).limit(lookback).execute()
+        cal = [r['base_date'] for r in (cal_res.data or []) if r.get('base_date')]
+    except Exception as e:
+        logging.warning(f"[신고가] 거래일 캘린더 조회 실패 — streak 생략: {e}")
+        cal = []
+    if not cal:
+        for r in rows:
+            r['streak'] = 1
+            r['streak_capped'] = False
+        return rows
+
+    codes = sorted({str(r['code']).strip() for r in rows if r.get('code')})
+    earliest = cal[-1]
+
+    # 종목별 {base_date: w52_high_date} — 종목수×거래일수가 1000행을 넘을 수 있어 페이지네이션
+    hist: dict[str, dict] = {c: {} for c in codes}
+    try:
+        q = sb_client.table('market_data') \
+            .select('stock_code,base_date,w52_high_date') \
+            .in_('stock_code', codes) \
+            .gte('base_date', earliest)
+        hrows = _fetch_all_pages(q)
+    except Exception as e:
+        logging.warning(f"[신고가] streak 이력 조회 실패 — 전부 신규 처리: {e}")
+        hrows = []
+    for hr in hrows:
+        c = (hr.get('stock_code') or '').strip()
+        if c in hist:
+            hist[c][hr.get('base_date')] = hr.get('w52_high_date')
+
+    for r in rows:
+        m = hist.get(str(r.get('code', '')).strip(), {})
+        streak = 0
+        for d in cal:                 # 오늘 → 과거
+            if m.get(d) == d:         # 그날 52주 신고가 경신
+                streak += 1
+            else:
+                break
+        r['streak'] = streak if streak > 0 else 1
+        r['streak_capped'] = streak >= len(cal)
+    return rows
+
+
 def collect_new_high():
     """장 마감 확정 데이터(market_data) 기준으로 오늘 52주 신고가 갱신 종목 조회.
 
@@ -389,6 +454,7 @@ def collect_new_high():
         })
 
     logging.info(f"[신고가] market_data 기준 {len(result)}개 (오늘 갱신·상승마감·실거래)")
+    annotate_new_high_streaks(result, sb_client)   # 각 종목에 연속 신고가 일수(streak) 부여
     save_new_high_to_db(result, today, sb_client)
     return result
 
