@@ -717,7 +717,6 @@ def _alert_new_high(rows: list):
     for r in rows:
         code     = str(r.get('code', '')).strip()
         name     = r.get('name', code)
-        price    = r.get('price', 0) or 0
         chg_pct  = r.get('chg_pct', 0) or 0
         d52_high = r.get('d52_high', 0) or 0
         d52_low  = r.get('d52_low',  0) or 0
@@ -729,20 +728,19 @@ def _alert_new_high(rows: list):
         badge      = _new_high_streak_badge(streak, capped)             # 메인방 한 줄용
         badge_long = _new_high_streak_badge(streak, capped, long=True)  # 종목방 개별용
 
-        # ① 종목 채팅방 개별 알림
+        # ① 종목 채팅방 개별 알림 (현재가는 신고가 당일 52주 고가와 동일해 생략, 등락률만 표시)
         if code in monitored:
             msg = (
                 f"🏆 <b>[{name}] 52주 신고가 갱신!</b>\n"
                 f"════════════\n"
-                f"💰 현재가: {price:,}원 ({chg_icon}{chg_str})\n"
-                f"{badge_long}\n"
+                f"{chg_icon}{chg_str}  {badge_long}\n"
                 f"📈 52주 고가: {d52_high:,}원\n"
                 f"📉 52주 저가: {d52_low:,}원"
             )
             stock_api.send_telegram(monitored[code], msg)
 
-        # ② 메인방 묶음용 라인 누적
-        main_lines.append(f"• <b>{name}</b>  {price:,}원 ({chg_icon}{chg_str})  {badge}")
+        # ② 메인방 묶음용 라인 누적 (현재가 생략, 등락률 + 연속 배지)
+        main_lines.append(f"• <b>{name}</b>  {chg_icon}{chg_str}  {badge}")
 
     # ② 메인 채팅방 묶음 발송
     if main_lines:
