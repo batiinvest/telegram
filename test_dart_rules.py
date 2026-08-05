@@ -88,7 +88,8 @@ eq(targets("major", "단일판매ㆍ공급계약체결", cap_main=False), [IND, 
 # major 라이선스·기술이전(투자판단 딜) → 메인 (1000억↑), 소형주 제외
 eq(targets("major", "투자판단관련주요경영사항(독점적 라이선스 계약 체결)"), [IND, COMP, MAIN], "major 라이선스 메인 포함")
 eq(targets("major", "투자판단관련주요경영사항(독점적 라이선스 계약 체결)", cap_main=False), [IND, COMP], "major 라이선스 소형주 제외")
-eq(targets("major", "투자판단관련주요경영사항(경영 관련 결정)"), [IND, COMP], "major 일반 투자판단 메인 제외")
+eq(targets("major", "투자판단관련주요경영사항(경영 관련 결정)"), [IND, COMP, MAIN], "major 일반 투자판단 메인 포함")
+eq(targets("major", "투자판단관련주요경영사항(경영 관련 결정)", cap_main=False), [IND, COMP], "major 투자판단 소형주 메인 제외")
 eq(targets("major", "[기재정정]단일판매ㆍ공급계약체결"), [IND, COMP], "major 기재정정 공급계약 메인 제외")
 # major 시장속보 → 메인
 eq(targets("major", "유상증자결정", market_wide=True), [IND, COMP, MAIN], "major 시장속보 메인 포함")
