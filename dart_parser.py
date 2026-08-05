@@ -124,6 +124,7 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
             log.debug(f'[DART 파서] KV 없음 — 산문 폴백 시도 ({report_nm})')
         kv['_html'] = html        # 일부 파서에서 원문 직접 파싱 용도
         kv['_rcept_no'] = rcept_no  # API fallback용 접수번호
+        kv['_report_nm'] = report_nm  # 연결/별도 등 제목 기반 판정용
 
         if report_nm.startswith('[기재정정]'):
             log.debug(f'[DART 파서] 기재정정 kv 키: {list(kv.keys())[:10]}')

@@ -260,8 +260,14 @@ def parse_preliminary_earnings(kv: dict) -> list:
             quarter_label = f"{m2.group(1)[2:]}.{m2.group(2)}Q"
             break
 
-    # 연결/별도 구분 (공시 제목 또는 1번 항목 키로 판단)
-    report_type = '연결' if any('연결' in k for k in list(kv.keys())[:15]) else '별도'
+    # 연결/별도 구분 — 제목의 '연결재무제표기준' 우선, 없으면 연결 전용 지표
+    # (지배기업 소유주지분) 존재로 판단. 이 서식은 KV 키에 '연결'이 없어 종전
+    # 'any 연결 in key' 판정이 연결 공시를 별도로 오표기하던 버그.
+    _rnm = kv.get('_report_nm', '')
+    report_type = '연결' if (
+        '연결' in _rnm
+        or any(('연결' in k or '지배' in k) for k in kv.keys() if not k.startswith('_'))
+    ) else '별도'
 
     header = f'📊 {report_type} 잠정실적'
     if quarter_label:
@@ -391,7 +397,13 @@ def extract_preliminary_current(kv: dict) -> dict | None:
     items = list(kv.items())
     _IS_NUM = re.compile(r'^-?[\d,]+(\.\d+)?$')
     _MAP = {'매출액': 'revenue', '영업이익': 'operating_profit', '당기순이익': 'net_income'}
-    out = {'year': year, 'quarter': q,
+    # 연결/별도 기준 — 추이에서 현분기 기준 명시용 (히스토리는 financials 기준과 다를 수 있음)
+    _rnm = kv.get('_report_nm', '')
+    _rtype = '연결' if (
+        '연결' in _rnm
+        or any(('연결' in k or '지배' in k) for k in kv.keys() if not k.startswith('_'))
+    ) else '별도'
+    out = {'year': year, 'quarter': q, 'report_type': _rtype,
            'label': f'{str(year)[2:]}.{q}Q' if (year and q) else ''}
     for idx, (k, _v) in enumerate(items):
         if k in _MAP and idx + 1 < len(items):
