@@ -2097,10 +2097,10 @@ def get_macro_briefing(data: dict, sectors: dict = None, sector_date: str = None
     from format_utils import fmt_change_pct
 
     def _chg(chg):
-        """등락률 포맷: (🔺/🔻/➖ +x.xx%). None이면 빈 문자열."""
+        """등락률 포맷: (🔺/🔹/➖ +x.xx%). None이면 빈 문자열."""
         if chg is None:
             return ''
-        icon = '🔺' if chg > 0 else '🔻' if chg < 0 else '➖'
+        icon = '🔺' if chg > 0 else '🔹' if chg < 0 else '➖'
         return f"  ({icon}{fmt_change_pct(chg)})"
 
     date_str = datetime.now().strftime('%m.%d')
@@ -2151,7 +2151,7 @@ def get_macro_briefing(data: dict, sectors: dict = None, sector_date: str = None
             if ups:
                 lines.append("🔺 " + " · ".join(f"{k} {fmt_change_pct(v, 1)}" for k, v in ups))
             if downs:
-                lines.append("🔻 " + " · ".join(f"{k} {fmt_change_pct(v, 1)}" for k, v in downs))
+                lines.append("🔹 " + " · ".join(f"{k} {fmt_change_pct(v, 1)}" for k, v in downs))
             lines.append("")
 
     # ── 미 10년물 + 달러/원 (자금흐름 핵심 지표) ─────────────────
