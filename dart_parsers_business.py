@@ -591,3 +591,101 @@ def parse_earnings_change(kv: dict) -> list:
     _f(lines, kv, '📋 결의일', '이사회결의일(결정일)', '이사회결의일')
 
     return lines
+
+
+def parse_intragroup_transaction(kv: dict) -> list:
+    """동일인 등 출자계열회사와의 상품ㆍ용역 거래(변경) — 공정거래법 제26조 대규모 내부거래.
+
+    거래상대방(계열사)·매출/매입/합계액·거래기간·주요 거래내역·변경사유를 요약.
+    표가 '매출/매입' 2단 헤더의 전치 매트릭스라 범용 폴백은 셀이 뒤섞여 깨짐 →
+    원문 표에서 요약행·거래내역행만 위치 기반으로 복원. 금액 단위 백만원(서식 고정)."""
+    html = kv.get('_html', '') or ''
+
+    def _eok(mwon: str) -> str:
+        """백만원 문자열 → '253억' (원 환산 후 _fmt_amount)."""
+        try:
+            won = int(mwon.replace(',', '').replace(' ', '')) * 1_000_000
+            return _fmt_amount(str(won))
+        except (ValueError, AttributeError):
+            return mwon
+
+    def _cells(start_kw: str, *end_kws: str) -> list:
+        i = html.find(start_kw)
+        if i < 0:
+            return []
+        end = -1
+        for kw in end_kws:
+            end = html.find(kw, i)
+            if end > i:
+                break
+        seg = html[max(0, i - 120): end if end > i else i + 4000]
+        cs = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', seg, re.S | re.I)
+        cs = [re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', c)).strip() for c in cs]
+        return [c for c in cs if c]
+
+    lines = []
+    group = _get(kv, '기업집단명')
+    lines.append('🏢 대규모 내부거래' + (f' ({group}그룹)' if group else ''))
+
+    # ── 거래상대방 요약행: 상대방 | 매출(B) | 매입(C) | 합계(D) | 매출대비(D/A,%)
+    sc = _cells('거래상대방(동일인', '상품ㆍ용역계약명', '상품·용역계약명')
+    parties = []
+    hstart = next((h for h, c in enumerate(sc) if c.startswith('거래상대방')), -1)
+    if hstart >= 0:
+        r = hstart + 5
+        while r + 3 < len(sc):
+            name = sc[r]
+            if name.startswith('5.') or re.fullmatch(r'[\d,.\s%]+', name):
+                break
+            b, c, d = sc[r + 1], sc[r + 2], sc[r + 3]
+            if not re.search(r'\d', d):
+                break
+            da = sc[r + 4] if r + 4 < len(sc) else ''
+            parties.append((name, b, c, d, da))
+            r += 5
+    for name, b, c, d, da in parties:
+        comp = []
+        if re.search(r'[1-9]', c):
+            comp.append(f'매입 {_eok(c)}')
+        if re.search(r'[1-9]', b):
+            comp.append(f'매출 {_eok(b)}')
+        tail = f" ({'·'.join(comp)})" if comp else ''
+        if re.fullmatch(r'[\d.]+', da or ''):
+            tail += f' · 매출대비 {da}%'
+        lines.append(f'🤝 {name} — 합계 {_eok(d)}{tail}')
+
+    if period := _get(kv, '2. 거래기간', '거래기간'):
+        lines.append(f'🗓 거래기간: {period}')
+
+    # ── 상품ㆍ용역 거래내역: 계약명|거래대상|거래조건|거래목적|금액|계약체결방식 (6셀/행)
+    dc = _cells('상품ㆍ용역계약명', '계약체결방식 유형별', '7. 관련공시일', '관련공시일')
+    HL = {'상품ㆍ용역계약명', '거래금액', '매출', '매입', '거래대상',
+          '거래조건', '거래목적', '계약체결방식'}
+    ds = next((k for k, c in enumerate(dc) if c not in HL), len(dc))
+    items = []
+    r = ds
+    while r + 4 < len(dc):
+        nm = dc[r]
+        if nm.startswith('6.') or nm.startswith('7.') or nm in HL:
+            break
+        amt = dc[r + 4]
+        if not re.fullmatch(r'[\d,]+', amt):
+            break
+        method = dc[r + 5] if r + 5 < len(dc) else ''
+        items.append((nm, amt, method))
+        r += 6
+    items.sort(key=lambda x: int(x[1].replace(',', '') or 0), reverse=True)
+    if items:
+        lines.append('📋 주요 거래:')
+        for nm, amt, method in items[:3]:
+            mtxt = ' · 수의계약' if method == '수의계약' else ''
+            lines.append(f'  • {_trunc(nm, 30)} {_eok(amt)}{mtxt}')
+
+    # ── 변경사유 (기타 첫 문장) — 신규 공시는 없을 수 있음
+    if etc := _get(kv, '8. 기타', '기타'):
+        etc = re.sub(r'\s+', ' ', etc).strip().lstrip('- ').strip()
+        first = etc.split('.')[0].strip()
+        if first and len(first) > 6:
+            lines.append(f'📝 {_trunc(first, 100)}')
+
+    return lines if (group or parties) else []

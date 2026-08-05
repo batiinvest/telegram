@@ -66,6 +66,9 @@ _PARSER_MAP = [
     (['자기주식처분'],                         parse_treasury_disposal),
     (['파생상품거래손실'],                     parse_derivative_loss),
     (['타법인주식', '출자증권취득'],           parse_equity_acquisition),
+    # 대규모 내부거래(공정거래법 제26조) — '매출/매입' 2단 매트릭스 표라 폴백이 깨짐
+    (['출자계열회사와의상품', '출자계열회사와의용역',
+      '동일인등출자계열회사'],                 parse_intragroup_transaction),
     (['금전대여'],                            parse_money_lending),
     (['기업설명회', 'IR개최'],               parse_ir_event),
     (['주주총회결과'],                        parse_agm_result),
