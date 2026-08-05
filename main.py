@@ -367,7 +367,11 @@ class DartRoutingBot:
             return 'filtered'
 
         is_my_stock         = (corp_name in COMPANY_CODES) or (bool(stock_code) and stock_code.split(".")[0] in CHAT_IDS_BY_CODE)
-        is_global_important = any(k in report_nm for k in GLOBAL_IMPORTANT_KEYWORDS)
+        # 관리종목 지정'우려'(사전경고)는 시장속보 대상에서 제외 — 비보유 소형주까지
+        # 전체 브로드캐스트하면 노이즈. 보유 종목은 major로 기업채널에만 전달됨.
+        # (실제 '관리종목지정'·상장폐지는 '지정우려' 문자열이 없어 그대로 시장속보 대상)
+        is_global_important = (any(k in report_nm for k in GLOBAL_IMPORTANT_KEYWORDS)
+                               and '지정우려' not in report_nm)
 
         # ④ 내 종목도 아니고 전체 중요 공시도 아니면 스킵
         if not is_my_stock and not is_global_important:
@@ -412,18 +416,6 @@ class DartRoutingBot:
             trend = self._earnings_trend(stock_code, rcept_no)
             if trend:
                 detail = f"{detail}\n\n{trend}".strip()
-            # 어닝 서프라이즈 — 컨센 대비 발표 영업익 (메시지 표기 + 리스트 적재)
-            try:
-                import earnings_surprise
-                _code0 = stock_code.split('.')[0]
-                _sp = earnings_surprise.compute_surprise(_code0, rcept_no)
-                if _sp:
-                    _cl = earnings_surprise.consensus_line(_sp)
-                    if _cl:
-                        detail = f"{detail}\n\n{_cl}".strip()
-                    earnings_surprise.record_if_surprise(_code0, corp_name, _sp)
-            except Exception:
-                logging.exception("⚠️ [서프라이즈] 처리 실패")
         msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
 
         # ── 채널 라우팅 — 정책은 dart_rules.decide_targets (순수 함수) ──

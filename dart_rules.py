@@ -95,6 +95,12 @@ def classify_disclosure(report_nm: str) -> str:
     공시 중요도 분류.
     반환: 'urgent' | 'major' | 'skip' | 'normal'
     """
+    # 관리종목 지정'우려'(기타시장안내 사전경고)는 실제 지정이 아닌 사전경고이므로
+    # URGENT '관리종목' 매칭 전에 major로 분류(2026-08-05 편집 결정) — 비보유 소형주가
+    # 시장속보로 도배되는 걸 막음. 실제 '관리종목지정'·상장폐지·실질심사는 '지정우려'
+    # 문자열이 없어 아래 URGENT 그대로 긴급 유지.
+    if '지정우려' in report_nm:
+        return 'major'
     # 긴급 최우선 — skip 키워드와 한 제목에서 겹칠 때 긴급이 이겨야 함
     # (키워드는 app_config에서 운영 변경되므로 겹침을 전제로 방어)
     if any(k in report_nm for k in URGENT_KEYWORDS):
