@@ -45,6 +45,9 @@ MAJOR_KEYWORDS = [
     "특허", "임상",
     "사업보고서", "분기보고서", "반기보고서",
     "영업양수", "영업양도", "주식소각", "액면", "배당",
+    # 투자판단관련주요경영사항 — 회사가 '투자판단에 중요'하다고 자진 신고하는 카테고리.
+    # 라이선스·기술이전 등 중대 계약이 많아 주요로 취급(메인 승격은 계약 키워드 조건부).
+    "투자판단",
 ]
 
 # 산업/메인 채널에서 스킵 (기업채널은 정상 발송)
@@ -141,9 +144,13 @@ def decide_targets(level: str, *, main_chat: str, ind_chat: str | None,
         # 원공시 맥락도 없음. 보유 종목 공급계약 정정을 빼던 규칙을 시장속보에도 통일.
         # (urgent 정정은 사안 자체가 중대하므로 urgent 분기에서 그대로 메인 유지)
         is_amend = "기재정정" in report_nm
+        # 메인 승격 계약 키워드 — 공급계약·수주 + 라이선스·기술이전/수출/도입.
+        # 투자판단관련주요경영사항으로 신고되는 라이선스 딜(제약·바이오 등)이 시총
+        # 관문(cap_ok_main) 위면 메인 발송. 일반 투자판단(계약 아님)은 메인 제외.
+        _MAIN_CONTRACT = ("공급계약", "수주", "라이선스", "기술이전", "기술수출", "기술도입")
         to_main = (is_market_wide and not is_amend) or (
             not is_amend
-            and any(k in report_nm for k in ("공급계약", "수주")))
+            and any(k in report_nm for k in _MAIN_CONTRACT))
         # 시총 가중: 대형주(1조↑)의 구조적 이벤트(증자·합병 등)는 메인 포함
         if not to_main and cap_ok_large and not is_amend \
                 and any(k in report_nm for k in MAIN_MAJOR_KEYWORDS):

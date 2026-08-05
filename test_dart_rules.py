@@ -48,6 +48,8 @@ CLASSIFY_CASES = {
     # 관리종목 지정'우려'(사전경고)는 major — '관리종목' URGENT 매칭보다 먼저
     # '지정우려' 가드가 잡음. 실제 '관리종목지정'(line 25)은 urgent 유지.
     "기타시장안내(관리종목지정우려종목)":       "major",
+    # 투자판단관련주요경영사항(라이선스·기술이전 등)은 major — 회사 자진신고 주요사항.
+    "투자판단관련주요경영사항(ALT-B4 독점적 라이선스 계약 체결)": "major",
     # normal
     "본점소재지변경":                          "normal",
     "타법인주식및출자증권취득결정":            "normal",
@@ -83,6 +85,10 @@ eq(targets("major", "유상증자결정"), [IND, COMP], "major 기본 메인 제
 # major 공급계약·수주 → 메인 (1000억↑)
 eq(targets("major", "단일판매ㆍ공급계약체결"), [IND, COMP, MAIN], "major 공급계약 메인 포함")
 eq(targets("major", "단일판매ㆍ공급계약체결", cap_main=False), [IND, COMP], "major 공급계약 소형주 제외")
+# major 라이선스·기술이전(투자판단 딜) → 메인 (1000억↑), 소형주 제외
+eq(targets("major", "투자판단관련주요경영사항(독점적 라이선스 계약 체결)"), [IND, COMP, MAIN], "major 라이선스 메인 포함")
+eq(targets("major", "투자판단관련주요경영사항(독점적 라이선스 계약 체결)", cap_main=False), [IND, COMP], "major 라이선스 소형주 제외")
+eq(targets("major", "투자판단관련주요경영사항(경영 관련 결정)"), [IND, COMP], "major 일반 투자판단 메인 제외")
 eq(targets("major", "[기재정정]단일판매ㆍ공급계약체결"), [IND, COMP], "major 기재정정 공급계약 메인 제외")
 # major 시장속보 → 메인
 eq(targets("major", "유상증자결정", market_wide=True), [IND, COMP, MAIN], "major 시장속보 메인 포함")
