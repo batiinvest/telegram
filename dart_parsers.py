@@ -45,6 +45,11 @@ _PARSER_MAP = [
     # 불성실공시는 상장적격성보다 먼저 — 지정 서식에 '상장적격성 실질심사사유' 필드가
     # 있어 market_measure로 새면 안 됨
     (['불성실공시'],                           parse_unfaithful_disclosure),
+    # 관리종목 지정우려(기타시장안내 산문형)는 market_measure보다 먼저 —
+    # 제목에 '관리종목'이 있어도 표 없는 산문이라 market_measure가 '(주)'서 문장을
+    # 쪼개 깨뜨림. 상장폐지·상장공시위원회 결과 등은 market_measure가 더 잘 처리하므로
+    # '기타시장안내' 전체가 아닌 '관리종목지정우려'로만 좁혀 라우팅.
+    (['관리종목지정우려'],                     parse_market_notice),
     (['상장폐지', '관리종목', '상장적격성'],   parse_market_measure),
     (['소송'],                                parse_lawsuit),
     (['횡령', '배임'],                         parse_embezzlement),

@@ -557,3 +557,54 @@ def parse_unfaithful_disclosure(kv: dict) -> list:
         lines.append(f'📅 결정일: {v}')
 
     return lines
+
+
+def parse_market_notice(kv: dict) -> list:
+    """KRX 기타시장안내(관리종목 지정우려) — 주가·시총·거래량·매출액 미달 산문 안내.
+
+    표 없는 산문 문서(KV 비어있음)라 범용 폴백이 '제목 : (주)…'의 첫 괄호
+    '(주)'에서 문장을 쪼개 헤더/불릿을 깨뜨림. 원문에서 안내유형·사유(헤더)와
+    본문 문장을 복원. 회사명·제목구(사유 중복)는 제거하고 문장 단위로만 분리.
+    (_PARSER_MAP은 '관리종목지정우려'로만 라우팅 — 상장폐지·상장공시위원회 결과
+    등 '1. 제목' 구조는 parse_market_measure가 더 정확히 처리하므로 제외.)"""
+    html = kv.get('_html', '') or ''
+    html = re.sub(r'<style[^>]*>.*?</style>', ' ', html, flags=re.S | re.I)
+    html = re.sub(r'<script[^>]*>.*?</script>', ' ', html, flags=re.S | re.I)
+    txt = re.sub(r'<[^>]+>', ' ', html)
+    txt = re.sub(r'\s+', ' ', txt).strip()
+    if not txt:
+        return []
+
+    # 헤더 — '기타시장안내(유형)(사유)' 프리픽스에서 유형·사유 추출.
+    # 프리픽스에 '기타시장안내(유형)'가 여러 번 나오므로 사유 괄호가 붙은 매치를 우선.
+    mh = None
+    for m in re.finditer(r'기타시장안내\s*\(([^)]+)\)(?:\s*\(([^)]+)\))?', txt):
+        mh = m
+        if m.group(2):
+            break
+    typ = mh.group(1).strip() if mh else '시장안내'
+    reason = (mh.group(2) or '').strip() if mh else ''
+    typ = re.sub(r'종목$', '', typ)          # 분류 접미 '…종목' 제거
+    typ = re.sub(r'(지정)', r' \1', typ).strip() or '시장안내'
+    header = f'⚠️ [기타시장안내] {typ}'
+    if reason:
+        header += f' ({reason})'
+    lines = [header]
+
+    # 본문 — '제목 :' 이후에서 선두 회사명·제목구(사유 중복) 제거 후 규정/설명 절부터.
+    # 제목·규정 앵커를 모두 못 찾으면(구조 상이) 프리픽스 노이즈를 뱉지 않도록 폴백에 위임.
+    mb = re.search(r'제목\s*:\s*(.*)', txt)
+    m2 = re.search(r'((?:유가증권|코스닥|코넥스)[^,]{0,8}상장규정.*)', txt)
+    if not mb and not m2:
+        return []
+    body = (mb.group(1) if mb else txt).strip()
+    body = re.sub(r'^\(주\)\S+\s*', '', body)                  # 선두 회사명
+    m2 = re.search(r'((?:유가증권|코스닥|코넥스)[^,]{0,8}상장규정.*)', body)
+    if m2:
+        body = m2.group(1)                                     # 제목구 뒤 본문부터
+    # 문장 분리('…다. ' 경계) — 괄호·(주)에서는 쪼개지 않음
+    for s in re.split(r'(?<=다\.)\s+', body)[:4]:
+        s = s.strip()
+        if len(s) > 4:
+            lines.append(f'  • {_trunc_clean(s, 220)}')
+    return lines if len(lines) > 1 else []
