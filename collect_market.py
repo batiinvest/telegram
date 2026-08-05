@@ -408,6 +408,41 @@ def annotate_new_high_streaks(rows: list[dict], sb_client=None, lookback: int = 
     return rows
 
 
+def annotate_new_high_sectors(rows: list[dict], sb_client=None):
+    """각 신고가 종목에 broad 섹터 버킷을 in-place 부여.
+
+    companies.sector(DART 표준산업분류, 전 상장사 채워짐)를 조회해
+    sector_classify.classify_sector로 ~20개 broad 섹터로 매핑한다.
+    각 row에 'sector_group'(버킷명)·'sector_raw'(원문 sector) 키를 추가한다.
+    companies에 없거나 sector 미기재면 '기타'.
+    """
+    if not rows:
+        return rows
+    if sb_client is None:
+        sb_client = get_supabase_client()
+
+    from sector_classify import classify_sector
+
+    # code 정규화(.KS/.KQ 접미사 방어) 후 companies.sector 일괄 조회
+    codes = sorted({str(r.get('code', '')).split('.')[0].strip()
+                    for r in rows if r.get('code')})
+    sec_by_code: dict = {}
+    if codes:
+        try:
+            res = sb_client.table('companies') \
+                .select('code,sector').in_('code', codes).execute()
+            for c in (res.data or []):
+                sec_by_code[(c.get('code') or '').split('.')[0].strip()] = c.get('sector')
+        except Exception as e:
+            logging.warning(f"[신고가] 섹터 조회 실패 — 전부 기타 처리: {e}")
+
+    for r in rows:
+        raw = sec_by_code.get(str(r.get('code', '')).split('.')[0].strip())
+        r['sector_raw']   = raw or ''
+        r['sector_group'] = classify_sector(raw)
+    return rows
+
+
 def collect_new_high():
     """장 마감 확정 데이터(market_data) 기준으로 오늘 52주 신고가 갱신 종목 조회.
 
@@ -455,6 +490,7 @@ def collect_new_high():
 
     logging.info(f"[신고가] market_data 기준 {len(result)}개 (오늘 갱신·상승마감·실거래)")
     annotate_new_high_streaks(result, sb_client)   # 각 종목에 연속 신고가 일수(streak) 부여
+    annotate_new_high_sectors(result, sb_client)   # 각 종목에 broad 섹터(sector_group) 부여
     save_new_high_to_db(result, today, sb_client)
     return result
 

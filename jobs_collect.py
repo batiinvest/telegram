@@ -702,8 +702,7 @@ def _alert_new_high(rows: list):
     if not rows:
         return
 
-    # 등락률 내림차순 정렬 (상한가/강한 돌파가 위로)
-    rows = sorted(rows, key=lambda x: (x.get('chg_pct') or 0), reverse=True)
+    from sector_classify import SECTOR_EMOJI
 
     today = datetime.date.today().isoformat()
 
@@ -712,7 +711,8 @@ def _alert_new_high(rows: list):
     for code, chat_id in CHAT_IDS_BY_CODE.items():
         monitored[str(code).strip()] = chat_id
 
-    main_lines = []  # 메인방 묶음용
+    # 메인방 섹터별 그룹핑용: sector_group → [(chg_pct, line), ...]
+    by_sector: dict = {}
 
     for r in rows:
         code     = str(r.get('code', '')).strip()
@@ -722,34 +722,51 @@ def _alert_new_high(rows: list):
         d52_low  = r.get('d52_low',  0) or 0
         streak   = int(r.get('streak', 1) or 1)
         capped   = bool(r.get('streak_capped', False))
+        sector   = r.get('sector_group') or '기타'
 
         chg_str  = fmt_change_pct(chg_pct)
         chg_icon = '🔺' if chg_pct > 0 else ('🔻' if chg_pct < 0 else '➖')
         badge      = _new_high_streak_badge(streak, capped)             # 메인방 한 줄용
         badge_long = _new_high_streak_badge(streak, capped, long=True)  # 종목방 개별용
 
-        # ① 종목 채팅방 개별 알림 (현재가는 신고가 당일 52주 고가와 동일해 생략, 등락률만 표시)
+        # ① 종목 채팅방 개별 알림 (현재가는 신고가 당일 52주 고가와 동일해 생략)
         if code in monitored:
+            sec_emoji = SECTOR_EMOJI.get(sector, '▫️')
             msg = (
                 f"🏆 <b>[{name}] 52주 신고가 갱신!</b>\n"
                 f"════════════\n"
                 f"{chg_icon}{chg_str}  {badge_long}\n"
+                f"🏷️ 섹터: {sec_emoji} {sector}\n"
                 f"📈 52주 고가: {d52_high:,}원\n"
                 f"📉 52주 저가: {d52_low:,}원"
             )
             stock_api.send_telegram(monitored[code], msg)
 
-        # ② 메인방 묶음용 라인 누적 (현재가 생략, 등락률 + 연속 배지)
-        main_lines.append(f"• <b>{name}</b>  {chg_icon}{chg_str}  {badge}")
-
-    # ② 메인 채팅방 묶음 발송
-    if main_lines:
-        header = (
-            f"🏆 <b>[52주 신고가 갱신] {today}</b>\n"
-            f"════════════\n"
+        # ② 메인방 섹터별 그룹핑용 라인 누적 (현재가 생략, 등락률 + 연속 배지)
+        by_sector.setdefault(sector, []).append(
+            (chg_pct, f"  • <b>{name}</b>  {chg_icon}{chg_str}  {badge}")
         )
-        stock_api.send_telegram(DEFAULT_CHAT_ID, header + "\n".join(main_lines))
-        logging.info(f"🏆 [신고가 알림] 메인방 {len(main_lines)}개 발송")
+
+    # ② 메인 채팅방 묶음 발송 — 섹터별 그룹핑
+    if by_sector:
+        # 섹터 정렬: 구성 종목 수 desc → 섹터 내 최고 등락률 desc
+        ordered = sorted(
+            by_sector.items(),
+            key=lambda kv: (len(kv[1]), max((c for c, _ in kv[1]), default=0)),
+            reverse=True,
+        )
+        blocks = []
+        for sec, items in ordered:
+            items.sort(key=lambda t: t[0], reverse=True)   # 섹터 내 등락률 desc
+            sec_emoji = SECTOR_EMOJI.get(sec, '▫️')
+            blocks.append(
+                f"{sec_emoji} <b>{sec}</b> ({len(items)})\n"
+                + "\n".join(line for _, line in items)
+            )
+
+        header = f"🏆 <b>[52주 신고가 갱신] {today}</b> · {len(rows)}종목\n════════════\n"
+        stock_api.send_telegram(DEFAULT_CHAT_ID, header + "\n".join(blocks))
+        logging.info(f"🏆 [신고가 알림] 메인방 {len(rows)}개 / {len(ordered)}섹터 발송")
 
 
 @_job("collect_us_etf")
