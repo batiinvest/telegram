@@ -147,6 +147,18 @@ def _fmt_payment_terms(raw: str) -> list[str]:
         cleaned = re.sub(r'\s+', ' ', raw)
         return [f'  {_trunc(cleaned, 80)}']
 
+    # 항목들이 공통 접두(계약명 등)를 반복하면 제거 — 예 '누리호 FM7 …' / '누리호 FM8 …'
+    # 의 '누리호 '. 계약명에 이미 있어 중복이고 truncate 예산을 잡아먹음.
+    if len(sections) >= 2:
+        _lo, _hi = min(sections), max(sections)
+        _n = 0
+        while _n < len(_lo) and _lo[_n] == _hi[_n]:
+            _n += 1
+        _pre = _lo[:_n]
+        _pre = _pre[:_pre.rfind(' ') + 1] if ' ' in _pre else ''   # 단어 경계까지
+        if len(_pre.strip()) >= 6:
+            sections = [s[len(_pre):].lstrip() for s in sections]
+
     result = []
     for sec in sections[:5]:
         # 하위 항목 분리 (1) 2) 3) …)
@@ -170,7 +182,9 @@ def _fmt_payment_terms(raw: str) -> list[str]:
         if subs:
             result.append(f'  • {title_part}: {" / ".join(subs)}')
         elif title_part:
-            result.append(f'  • {_trunc(title_part, 60)}')
+            # 하위항목 없는 섹션은 통째 표시 — 지급률·지체상금률이 값 중간에서
+            # 잘리지 않도록 한도 넉넉히(구 60자는 긴 접두 시 '지체상금률:0.…' 잘림).
+            result.append(f'  • {_trunc(title_part, 100)}')
 
     return result
 
