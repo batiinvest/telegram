@@ -824,7 +824,7 @@ def _check_market_warnings():
         # 최신 거래일 경보 종목 (전체시장 — PostgREST 1000행 한도 회피)
         alerts = fetch_all_pages(
             sb.table('market_data')
-              .select('stock_code,corp_name,market_warn_code,is_caution,price,price_change_rate')
+              .select('stock_code,corp_name,market_warn_code,is_caution')
               .eq('base_date', latest)
               .or_('is_caution.eq.true,market_warn_code.neq.00')
         )
@@ -850,10 +850,6 @@ def _check_market_warnings():
         # 시장 전체 정보 → 메인채팅방 발송 (개인/관리자방 아님)
         target = DEFAULT_CHAT_ID
 
-        def _chg_str(a):
-            r = a.get('price_change_rate') or 0
-            return fmt_change_pct(r)
-
         # 그룹별 분류
         GROUPS = [
             ('03', '🆘 투자위험 종목 지정',   lambda a: a.get('market_warn_code') == '03'),
@@ -861,17 +857,24 @@ def _check_market_warnings():
             ('01', '⚠️ 투자주의 종목 지정',   lambda a: a.get('market_warn_code') == '01'),
             ('ca', '🔵 투자유의 종목 지정',   lambda a: a.get('is_caution') and (a.get('market_warn_code') or '00') == '00'),
         ]
+        # 지정 효력 안내 (거래소 시장경보제도 기준) — 헤더 밑 한 줄로 노출
+        NOTES = {
+            '03': "지정 당일 1일 매매거래정지 · 위탁증거금 100%·신용 금지 · 해제 시 투자경고로 하향",
+            '02': "위탁증거금 100%(현금)·신용/미수 금지 · 추가 급등 시 1일 매매정지 가능 · 최소 10거래일 유지",
+            '01': "당일 1일만 효력 → 다음 거래일 자동 해제 · 매매 제약 없는 주의 환기용",
+        }
 
         sections = []
-        for _, label, fn in GROUPS:
+        for code, label, fn in GROUPS:
             group = [a for a in new_alerts if fn(a)]
             if not group:
                 continue
-            lines = [
-                f"• <b>{a['corp_name']}</b> ({a.get('price', 0):,}원 {_chg_str(a)})"
-                for a in group
-            ]
-            sections.append(f"<b>{label} ({len(group)})</b>\n" + "\n".join(lines))
+            names = " · ".join(a['corp_name'] for a in group)
+            head = f"<b>{label} ({len(group)})</b>"
+            note = NOTES.get(code)
+            if note:
+                head += f"\n<i>ℹ️ {note}</i>"
+            sections.append(head + "\n" + names)
 
         if not sections:
             return
