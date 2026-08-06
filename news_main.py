@@ -37,10 +37,35 @@ except Exception:
 
 # 중복 판정 유사도 임계 (어절+문자 bigram 자카드). app_config 'news_dup_similarity'로 조정 가능.
 DUP_SIM_THRESHOLD = 0.45
-# 이벤트키 중복은 제목이 이 정도는 겹쳐야 인정 — 순수 키워드 충돌(예: ETF'상장' vs ADR'상장') 오탐 방지. 고정.
-DUP_EVENT_GATE = 0.30
+# 이벤트키 중복은 제목이 이 정도는 겹쳐야 인정 — 순수 키워드 충돌(예: ETF'상장' vs ADR'상장') 오탐 방지.
+# 0.30(구)은 대형 단일 이벤트(예: 기술수출 계약)에서 언론사별 표현차로 게이트에 다 걸려 flood를 못 막았다.
+# 0.20 = 보수적 완화(실측 오탐 0). app_config 'news_dup_event_gate'로 런타임 조정 가능.
+DUP_EVENT_GATE = 0.20
 
 _KST = datetime.timezone(datetime.timedelta(hours=9))
+
+
+def _parse_db_ts(s: str) -> datetime.datetime:
+    """
+    notice_history created_at(ISO, UTC) → 서버(KST) 나이브 datetime 변환.
+
+    py3.10의 datetime.fromisoformat은 소수 자리를 3 또는 6자리만 허용한다.
+    PostgREST는 마이크로초 뒷자리 0을 잘라 '.56231'(5자리) 등으로 반환해
+    구현이 ValueError를 except로 삼켜 캐시 복원 시 ~9%가 조용히 드롭됐다.
+    → 소수 자리수를 6자리로 정규화하고 'Z'·무(無)오프셋도 처리한다.
+    """
+    s = s.strip().replace('Z', '+00:00')
+    m = re.match(
+        r'^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?([+-]\d{2}:?\d{2})?$', s)
+    if m:
+        base, frac, off = m.group(1), m.group(2), m.group(3) or '+00:00'
+        micro = '.' + frac[:6].ljust(6, '0') if frac else ''
+        dt = datetime.datetime.fromisoformat(base + micro + off)
+    else:
+        dt = datetime.datetime.fromisoformat(s)  # 폴백
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.astimezone().replace(tzinfo=None)
 
 
 def _load_news_filters():
@@ -48,7 +73,8 @@ def _load_news_filters():
     app_config에서 스팸패턴/실질보도 키워드 로드.
     DB에 없는 기본값은 최초 1회 시드 후 로드.
     """
-    global SPAM_PATTERNS, _SPAM_RE, MEANINGFUL_KEYWORDS, LOW_TRUST_SOURCES, DUP_SIM_THRESHOLD
+    global SPAM_PATTERNS, _SPAM_RE, MEANINGFUL_KEYWORDS, LOW_TRUST_SOURCES
+    global DUP_SIM_THRESHOLD, DUP_EVENT_GATE
     if not _BRIDGE_OK:
         return
     _bridge.seed_defaults({
@@ -56,6 +82,7 @@ def _load_news_filters():
         "news_meaningful_keywords": ",".join(MEANINGFUL_KEYWORDS),
         "news_low_trust_sources":   ",".join(LOW_TRUST_SOURCES),
         "news_dup_similarity":      str(DUP_SIM_THRESHOLD),
+        "news_dup_event_gate":      str(DUP_EVENT_GATE),
     })
     try:
         client = _bridge._get_client()
@@ -63,7 +90,8 @@ def _load_news_filters():
             return
         res = client.table('app_config').select('key,value').in_(
             'key', ['news_spam_patterns', 'news_meaningful_keywords',
-                    'news_low_trust_sources', 'news_dup_similarity']
+                    'news_low_trust_sources', 'news_dup_similarity',
+                    'news_dup_event_gate']
         ).execute()
         cfg = {r['key']: r['value'] for r in (res.data or [])}
 
@@ -92,6 +120,15 @@ def _load_news_filters():
                 if 0 < v <= 1:
                     DUP_SIM_THRESHOLD = v
                     logging.info(f"✅ [뉴스봇] 중복 유사도 임계 {DUP_SIM_THRESHOLD} DB에서 로드")
+            except (TypeError, ValueError):
+                pass
+
+        if cfg.get('news_dup_event_gate'):
+            try:
+                v = float(cfg['news_dup_event_gate'])
+                if 0 <= v <= 1:
+                    DUP_EVENT_GATE = v
+                    logging.info(f"✅ [뉴스봇] 이벤트키 게이트 {DUP_EVENT_GATE} DB에서 로드")
             except (TypeError, ValueError):
                 pass
     except Exception as e:
@@ -161,6 +198,8 @@ MEANINGFUL_KEYWORDS = [
     # 제품/기술
     '출시', '개발', '특허', '인허가', '승인', 'FDA', '식약처',
     '임상', '상용화', '양산',
+    # 기술이전/라이선스 (바이오 핵심 이벤트 — 누락 시 같은 딜이 계약/매출/개발로 흩어져 flood)
+    '기술수출', '기술이전', '라이선스', '수출',
     # 시장/거시
     '규제', '법안', '정책', '관세', '제재',
     '파업', '리콜', '화재', '사고',
@@ -470,8 +509,8 @@ class NaverNewsBot:
                     continue
                 try:
                     # DB는 UTC — 서버(KST) 나이브 now()와 맞추기 위해 로컬 나이브로 변환
-                    ts = datetime.datetime.fromisoformat(
-                        row['created_at']).astimezone().replace(tzinfo=None)
+                    # (마이크로초 자리수 편차로 인한 무음 드롭 방지 — _parse_db_ts)
+                    ts = _parse_db_ts(row['created_at'])
                 except Exception:
                     continue
                 norm_t = self._normalize_title(title)
