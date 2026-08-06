@@ -765,7 +765,8 @@ def _alert_new_high(rows: list):
             )
 
         header = f"🏆 <b>[52주 신고가 갱신] {today}</b> · {len(rows)}종목\n════════════\n"
-        stock_api.send_telegram(DEFAULT_CHAT_ID, header + "\n".join(blocks))
+        # 섹터 블록 사이 빈 줄로 가독성 확보
+        stock_api.send_telegram(DEFAULT_CHAT_ID, header + "\n\n".join(blocks))
         logging.info(f"🏆 [신고가 알림] 메인방 {len(rows)}개 / {len(ordered)}섹터 발송")
 
 
