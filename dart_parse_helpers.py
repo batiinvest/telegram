@@ -244,8 +244,15 @@ def _parse_numbered_body(text: str, max_items: int = 8, val_limit: int = 300) ->
                 items.append(f'  • {key}: {_trunc_clean(val, val_limit)}')
         else:
             short = re.sub(r'\s+', ' ', content).strip()
+            # 선두 문장 + ' - ' 나열(대상/조건/예외 목록)이 있으면 개행 정렬 —
+            # 'KBO리그 경기 - 신인드래프트 - 단, IPTV 제외'류가 한 줄로 뭉치는 것 방지.
+            _subs = [s.strip() for s in re.split(r'\s+-\s+', short) if s.strip()]
+            if len(_subs) >= 3:
+                items.append(f'  • {_trunc_clean(_subs[0], val_limit)}')
+                for _s in _subs[1:7]:
+                    items.append(f'      - {_trunc_clean(_s, 140)}')
             # 단순 섹션 헤더(짧고 콜론/값 없는 것)는 생략
-            if 10 <= len(short) <= val_limit:
+            elif 10 <= len(short) <= val_limit:
                 items.append(f'  • {short}')
         i += 2
         if len(items) >= max_items:
