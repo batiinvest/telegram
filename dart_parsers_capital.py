@@ -51,6 +51,34 @@ def parse_rights_offering(kv: dict) -> list:
         else:
             lines.append('🏢 배정대상:\n' + '\n'.join(f'  • {a}' for a in formatted))
 
+    # ── 한글 번호 키 서식 폴백 (종속회사의 주요경영사항 유상증자 등) ──
+    # 이 서식은 '5. 증자방식'처럼 번호 접두 한글 키라 위 영문 _f가 전부 실패 →
+    # 범용 폴백이 raw KV(번호 키 그대로)를 덤프하던 문제. 핵심 필드만 구조화.
+    if not lines:
+        if sub := _get(kv, '종속회사인', '종속회사명'):
+            lines.append(f'🏢 종속회사: {_trunc(sub, 50)}')
+        if v := _get(kv, '보통주식(주)'):
+            lines.append(f'🔢 신주식수: {v}주')
+        if v := _get(kv, '보통주식(원)', '예정발행가'):
+            _hint = ' (액면가)' if '액면가' in (_get(kv, '7. 발행가 산정방법') or '') else ''
+            lines.append(f'💵 발행가액: {v}원{_hint}')
+        if v := _get(kv, '5. 증자방식', '증자방식'):
+            lines.append(f'📋 방식: {v}')
+        for fk, flabel in (('시설자금(원)', '시설'), ('영업양수자금(원)', '영업양수'),
+                           ('운영자금(원)', '운영'), ('채무상환자금(원)', '채무상환'),
+                           ('타법인 증권 취득자금(원)', '타법인취득'), ('기타자금(원)', '기타')):
+            v = _get(kv, fk)
+            if v and v.replace(',', '').strip() not in ('', '-', '0'):
+                lines.append(f'💰 조달: {flabel}자금 {_fmt_amount(v)}원')
+                break
+        if v := _get(kv, '8. 신주배정기준일', '신주배정기준일'):
+            lines.append(f'📅 신주배정기준일: {v}')
+        s, e = _get(kv, '시작일'), _get(kv, '종료일')
+        if s and s != '-':
+            lines.append(f'📅 청약: {s}' + (f' ~ {e}' if e and e not in ('-', s) else ''))
+        if v := _get(kv, '18. 이사회결의일(결정일)', '이사회결의일(결정일)'):
+            lines.append(f'📋 결의일: {v}')
+
     return lines
 
 
