@@ -234,12 +234,37 @@ def _parse_numbered_body(text: str, max_items: int = 8, val_limit: int = 300) ->
     """
     # 번호 목록 분리: '1)' / '1. ' / '1.임상'(공백없음) 모두 지원.
     # (?!\d): '0.56'·날짜('06.30')·소수는 분리 안 함. (?<!\w): '제3상'·'GV1001' 보호.
-    parts = re.split(r'\s*(?<!\w)(\d{1,2})[.)](?!\d)\s*', text)
+    # [.)）]: 반각 '.'·')' + 전각 '）'(일부 공시가 '3）'처럼 전각 사용).
+    # (?<![\w"“”]): 앞이 단어문자·인용부호면 분리 안 함 — '상기 "2) 적응증"' 같은
+    # 문장 내 번호 참조를 새 항목으로 오분리하던 문제 방지.
+    parts = re.split(r'\s*(?<![\w"“”])(\d{1,2})[.)）](?!\d)\s*', text)
     # parts = ['prefix', '1', 'content1 ', '2', 'content2 ', ...]
     items = []
     i = 1
     while i < len(parts) - 1:
         content = parts[i + 1].strip()
+        # 원문자 하위섹션(①②③…) 분리 — '임상시험 관련 사항 ①승인일…②등록번호…③경과…
+        # ④결과…'가 한 줄로 뭉치고 뒤가 잘리던 문제. 선두(항목명) + 원문자별
+        # '마커 헤더: 값 / 값' 하위줄을 하나의 멀티라인 항목으로(max_items 카운팅 정합).
+        circ = re.split(r'\s*([①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮])\s*', content)
+        if len(circ) >= 3:
+            lead = re.sub(r'\s+', ' ', circ[0]).strip().rstrip(':').strip()
+            sub_lines = []
+            for j in range(1, len(circ) - 1, 2):
+                seg = re.sub(r'\s+', ' ', circ[j + 1]).strip()
+                seg_subs = [s.strip() for s in re.split(r'\s+-\s+', seg) if s.strip()]
+                if len(seg_subs) >= 2:
+                    hd = seg_subs[0].rstrip(':').strip()
+                    body = ' / '.join(_trunc_clean(s, 90) for s in seg_subs[1:5])
+                    sub_lines.append(f'      {circ[j]} {hd}: {body}')
+                elif seg:
+                    sub_lines.append(f'      {circ[j]} {_trunc_clean(seg, 200)}')
+            if sub_lines:
+                items.append((f'  • {lead}\n' if lead else '  • ') + '\n'.join(sub_lines))
+                i += 2
+                if len(items) >= max_items:
+                    break
+                continue
         # 'key: value' 또는 'key - value' 분리 (콜론이 먼저 오면 콜론 우선 매칭)
         m = re.match(r'^(.{1,40}?)\s*[:－-]\s*(.+)', content, re.DOTALL)
         if m:
