@@ -144,9 +144,17 @@ def parse_major_shareholder_change(kv: dict) -> list:
             detail = f' ({after_shares}주 / {after_ratio}%)' if after_shares else ''
             lines.append(f'  변경후: {after_name}{detail}')
 
-    # 변경사유
+    # 변경사유 — 선두 대시 제거 + ' - ' 절 분리(거래내용/부가설명). 종전 60자
+    # 절단은 '…및 한앤…'처럼 인수 상대·주식수를 잘라 핵심 거래를 잃었음.
     if v := _get(kv, '2. 변경사유', '변경사유'):
-        lines.append(f'📋 사유: {_trunc(v, 60)}')
+        v = re.sub(r'^\s*[-·•]\s*', '', re.sub(r'\s+', ' ', v).strip())
+        subs = [s.strip() for s in re.split(r'\s+-\s+', v) if s.strip()]
+        if len(subs) >= 2:
+            lines.append('📋 사유:')
+            for s in subs[:3]:
+                lines.append(f'  • {_trunc_clean(s, 150)}')
+        else:
+            lines.append(f'📋 사유: {_trunc_clean(v, 150)}')
 
     # 인수자금
     fund = _get(kv, '자기자금(원)')

@@ -447,8 +447,10 @@ def parse_market_measure(kv: dict) -> list:
                     else:
                         title = seg
         if title:
-            t = _trunc_clean(re.sub(r'\s+', ' ', title), 100)
-            lines.append(f'📋 {t}')
+            t = re.sub(r'\s+', ' ', title).strip()
+            # 제목 뒤에 본문 번호섹션('1. 법원 결정'…)이 붙어 크램되면 첫 섹션에서 절단
+            t = re.split(r'\s[1-9]\.\s', t, maxsplit=1)[0].strip()
+            lines.append(f'📋 {_trunc_clean(t, 100)}')
         if body:
             body = re.sub(r'\s+', ' ', body).strip()
             _tb = f"{title or ''} {body}"
@@ -457,7 +459,20 @@ def parse_market_measure(kv: dict) -> list:
             #   불복(효력정지 가처분) → 상폐기준 해당(결정) → 개선기간 종료(심사 예정)
             #   → 개선기간 부여 → 심의대상 → 상폐 결정
             if any(k in _tb for k in ('효력정지', '가처분', '집행정지')):
-                lines.append('🛡 상장폐지 불복 — 효력정지 가처분 신청')
+                # 가처분은 신청/인용/기각 구분 필수 — '기각'인데 '불복 신청'으로
+                # 표기하면 보유자가 상폐 정지로 오해(실제는 불복 실패→정리매매 재개).
+                if '기각' in _tb or '각하' in _tb:
+                    _m = '🚨 결과: 효력정지 가처분 기각'
+                    if '재개' in _tb or '정리매매' in _tb:
+                        _m += ' — 상장폐지 절차 재개'
+                    lines.append(_m)
+                    mtm = re.search(r"정리매매\s*\(?\s*('?[\d.]+\s*~\s*'?[\d.]+)", _tb)
+                    if mtm:
+                        lines.append(f'🕐 정리매매: {mtm.group(1).strip()}')
+                elif '인용' in _tb:
+                    lines.append('🛡 결과: 효력정지 가처분 인용 — 상장폐지 절차 정지')
+                else:
+                    lines.append('🛡 상장폐지 불복 — 효력정지 가처분 신청')
             elif '상장폐지기준에 해당' in body:
                 lines.append('🚨 결과: 상장폐지기준 해당 (이의신청 가능)')
                 _appeal = True
