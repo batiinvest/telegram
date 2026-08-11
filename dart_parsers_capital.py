@@ -110,6 +110,65 @@ def parse_cb(kv: dict) -> list:
     return lines
 
 
+def parse_bond_acquisition(kv: dict) -> list:
+    """발행 후 만기전 사채취득 — 콜옵션/조기상환 등으로 CB·BW를 만기 전 취득(자기사채).
+
+    발행사가 콜옵션(매도청구권)을 행사해 CB를 조기 취득하면 잠재 희석 물량이
+    소멸 → 오버행 축소. 취득 권면총액·취득후 잔여·전환가·사유(콜/풋)를 요약.
+    한글 번호 키 서식이라 parse_cb(영문 발행 서식)로는 안 잡혀 폴백으로 새던 유형."""
+    lines = []
+
+    rnd = _get(kv, '전환사채(해외전환사채)', '신주인수권부사채', '회차')
+    hdr = '🔄 만기전 사채취득'
+    if rnd:
+        hdr += f' ({rnd.strip()})'
+    lines.append(hdr)
+
+    if kind := _get(kv, '사채의 종류'):
+        lines.append(f'📋 종류: {_trunc(kind, 40)}')
+
+    # 취득 권면총액(+취득금액) — 취득금액은 원금+이자라 권면과 다를 수 있음
+    face = _get(kv, '- 취득한 사채의 권면(전자등록)총액 (통화단위)',
+                '취득한 사채의 권면(전자등록)총액')
+    amt = _get(kv, '2. 사채 취득금액 (통화단위)', '사채 취득금액')
+    if face:
+        line = f'💰 취득 권면총액: {_fmt_amount(face)}원'
+        if amt and amt.replace(',', '') != face.replace(',', ''):
+            line += f' (취득금액 {_fmt_amount(amt)}원)'
+        lines.append(line)
+    elif amt:
+        lines.append(f'💰 취득금액: {_fmt_amount(amt)}원')
+
+    if rest := _get(kv, '3. 취득후 사채의 권면(전자등록)총액 (통화단위)',
+                    '취득후 사채의 권면(전자등록)총액'):
+        lines.append(f'📊 취득후 잔여: {_fmt_amount(rest)}원')
+
+    if v := _get(kv, '- 취득일자', '취득일자'):
+        lines.append(f'📅 취득일: {v}')
+
+    conv = _get(kv, '주당 전환가액(원)', '전환가액(원)')
+    mat = _get(kv, '만기일')
+    if conv:
+        lines.append(f'💵 전환가: {conv}원' + (f' / 만기 {mat}' if mat else ''))
+
+    if reason := _get(kv, '4. 만기전 취득사유 및 향후 처리방법',
+                      '만기전 취득사유 및 향후 처리방법'):
+        bullets = _parse_numbered_body(reason, max_items=4)
+        if bullets:
+            lines.append('📋 취득사유:')
+            lines.extend(bullets)
+        else:
+            lines.append(f'📋 취득사유: {_trunc_clean(reason, 150)}')
+
+    tail = [x for x in (_get(kv, '6. 사채의 취득방법', '사채의 취득방법'),
+                        _get(kv, '5. 취득자금의 원천', '취득자금의 원천')) if x]
+    if tail:
+        lines.append(f'📋 방법: {" · ".join(tail)}')
+
+    # 헤더 외 실제 값이 하나도 없으면(서식 상이) 폴백에 위임
+    return lines if len(lines) > 1 else []
+
+
 def parse_ex_rights(kv: dict) -> list:
     """권리락 — 기준가·실시일·사유 추출.
     KV 구조: 6열 테이블이 (헤더1:헤더2, 코드:기준가, 날짜:사유) 쌍으로 저장됨."""
