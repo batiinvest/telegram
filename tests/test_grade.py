@@ -108,8 +108,8 @@ def test_trend_op_leverage_fail():
 
 def test_trend_debt_surge():
     flags = G.detect_trend_flags([
-        {"total_debt": 50, "total_equity": 100},
-        {"total_debt": 90, "total_equity": 100}])
+        {"total_liabilities": 50, "total_equity": 100},
+        {"total_liabilities": 90, "total_equity": 100}])
     assert flags["debt_surge"] is True
 
 
@@ -117,5 +117,5 @@ def test_trend_clean():
     flags = G.detect_trend_flags([
         {"revenue_qoq": 10},
         {"revenue_qoq": 12, "revenue_yoy": 10, "op_profit_yoy": 15,
-         "total_debt": 50, "total_equity": 100}])
+         "total_liabilities": 50, "total_equity": 100}])
     assert flags == {"rev_slowdown": False, "op_leverage_fail": False, "debt_surge": False}

@@ -21,8 +21,6 @@ import config
 from db_client import get_supabase_client
 from telegram_utils import get_admin_chat_id
 import stock_api
-# 대형/긴급 판단 기준은 종목요약과 단일 출처 공유
-from daily_summary import SIGNIFICANT_CATS
 
 KST = datetime.timezone(datetime.timedelta(hours=9))
 WD = ['월', '화', '수', '목', '금', '토', '일']

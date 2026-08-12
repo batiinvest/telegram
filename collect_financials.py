@@ -22,6 +22,7 @@ import argparse
 from datetime import datetime
 from typing import Optional
 from collect_utils import batch_upsert
+from format_utils import get_prev_quarter
 
 try:
     from db_client import get_supabase_client as _get_sb
@@ -579,9 +580,6 @@ def calc_growth(new_val, old_val) -> Optional[float]:
         return round((new_val - old_val) / abs(old_val) * 100, 2)
     except Exception:
         return None
-
-
-from format_utils import get_prev_quarter   # 공통 유틸로 이관
 
 
 def get_prev_year_quarter(year: str, quarter: str) -> tuple:

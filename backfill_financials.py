@@ -46,12 +46,10 @@ load_dotenv()
 from collect_financials import (
     collect_one,
     convert_to_pure_quarter,
-    calc_ratios,
     calculate_growth_rates,
     get_q3_cumulative,
     build_fin_cache,
     FLOW_COLS,
-    CASHFLOW_COLS,
     auto_detect_quarter,
 )
 

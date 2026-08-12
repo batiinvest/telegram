@@ -17,14 +17,13 @@ import hashlib
 
 from email.utils import parsedate_to_datetime
 from typing import Dict
-from collections import deque
 
 from managers import market_timer, HistoryManager, get_session
 import stock_api
 
 from config import (
     NAVER_KEYS, DEFAULT_CHAT_ID, COMPANY_KEYWORDS,
-    COMPANY_CODES, INDUSTRY_CHAT_IDS, INDUSTRY_HIERARCHY, COMMON_BUTTON,
+    COMPANY_CODES, INDUSTRY_CHAT_IDS, COMMON_BUTTON,
     COMPANY_TO_INDUSTRY
 )
 

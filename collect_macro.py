@@ -15,7 +15,7 @@ log = get_logger(__name__)
 """
 
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -94,11 +94,6 @@ def fetch_price_and_chg(ticker_sym: str) -> tuple:
             if price and prev and not math.isnan(price) and not math.isnan(prev) and prev > 0:
                 chg = round((price - prev) / prev * 100, 2)
                 # 데이터 날짜: regularMarketTime 있으면 사용, 없으면 오늘(KST)
-                from datetime import datetime, timedelta
-                try:
-                    ts = fi.last_volume  # fast_info에 직접 날짜 없으므로 history 1행으로 날짜만 추출
-                except Exception:
-                    pass
                 hist1 = t.history(period='2d', auto_adjust=False)
                 if not hist1.empty:
                     last_idx = hist1.index[-1]
@@ -109,7 +104,6 @@ def fetch_price_and_chg(ticker_sym: str) -> tuple:
                     else:
                         data_date = last_idx.strftime('%Y-%m-%d')
                 else:
-                    from datetime import datetime, timedelta
                     kst_today = (datetime.now(_tz.utc) + timedelta(hours=9)).strftime('%Y-%m-%d')
                     data_date = kst_today
                 log.debug(f"[{ticker_sym}] fast_info → {price} ({chg}%) [{data_date}]")
@@ -130,7 +124,6 @@ def fetch_price_and_chg(ticker_sym: str) -> tuple:
             return None, None, None
         last_idx = closes.index[-1]
         if hasattr(last_idx, 'tzinfo') and last_idx.tzinfo is not None:
-            from datetime import timedelta
             last_idx_utc = last_idx.astimezone(_tz.utc)
             data_date = (last_idx_utc + timedelta(hours=9)).strftime('%Y-%m-%d')
         else:
@@ -152,7 +145,6 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
     """
     try:
         from managers import kis_auth
-        from datetime import datetime, timedelta, timezone
 
         kst_now   = datetime.now(timezone.utc) + timedelta(hours=9)
         end_date  = kst_now.strftime('%Y%m%d')

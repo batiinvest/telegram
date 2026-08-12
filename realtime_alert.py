@@ -4,7 +4,6 @@ import time
 import logging
 import threading
 import uuid
-import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from managers import market_timer, HistoryManager
 from format_utils import fmt_change_pct
@@ -17,7 +16,6 @@ from config import (
     COMPANY_CODES,
     COMPANY_CHAT_IDS,
     INDUSTRY_CHAT_IDS,
-    COMPANY_TO_INDUSTRY,
 )
 
 try:

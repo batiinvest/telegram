@@ -21,13 +21,10 @@ from dart_parser import get_disclosure_detail, get_audit_opinion
 
 from config import (
     DART_API_KEY,
-    TELEGRAM_BOT_TOKEN,
     INDUSTRY_CHAT_IDS,
-    INDUSTRY_HIERARCHY,
-    COMPANY_CHAT_IDS,
     CHAT_IDS_BY_CODE,
     COMPANY_CODES,
-    AI_TRIGGER_KEYWORDS,
+    AI_TRIGGER_KEYWORDS,   # 참조: AI 분석 블록(임시 비활성화, 복구 시 사용)
     GLOBAL_IMPORTANT_KEYWORDS,
     COMPANY_TO_INDUSTRY
 )
