@@ -460,6 +460,21 @@ def parse_tender_offer_result(kv: dict) -> list:
     return lines
 
 
+def _lead_int(s):
+    """콤마 포함 정수 문자열에서 선두 정수만 안전 추출.
+    셀 밀림으로 여러 숫자 토큰이 뭉친 값이면(신뢰 불가) None 반환."""
+    if not s:
+        return None
+    s = s.strip()
+    m = re.match(r'[0-9,]+', s)
+    if not m:
+        return None
+    rest = s[m.end():].lstrip()
+    if rest[:1].isdigit() or rest[:1] == '.':
+        return None  # 다음 토큰도 숫자 → 셀 밀림
+    return int(m.group(0).replace(',', ''))
+
+
 def parse_share_pledge(kv: dict) -> list:
     """주식담보제공계약체결 — 담보제공자, 금액, 기간 핵심 요약."""
     lines = []
@@ -478,14 +493,17 @@ def parse_share_pledge(kv: dict) -> list:
     shares   = _get(kv, '소유 주식 수(주)', '소유주식수(주)')
     exec_raw = _get(kv, '담보권 전부 실행시')
     exec_m   = re.search(r'[\d,]{3,}', exec_raw) if exec_raw else None
-    if shares:
+    shares_n = _lead_int(shares)
+    if shares_n is None:
+        shares_n = _lead_int(_get(kv, '공시일 현재'))  # 정정 서식 셀밀림 폴백
+    if shares_n is not None:
         if exec_m:
-            lines.append(f'📊 보유주식: {int(shares.replace(",", "")):,}주'
-                         f' → 담보실행시 {int(exec_m.group(0).replace(",", "")):,}주')
+            exec_n = int(exec_m.group(0).replace(',', ''))
+            lines.append(f'📊 보유주식: {shares_n:,}주 → 담보실행시 {exec_n:,}주')
         else:
             ratio = _get(kv, '지분율(%)', '지분율')
             ratio_str = f' ({ratio}%)' if ratio else ''
-            lines.append(f'📊 보유지분: {int(shares.replace(",", "")):,}주{ratio_str}')
+            lines.append(f'📊 보유지분: {shares_n:,}주{ratio_str}')
 
     # 채무금액 / 담보설정금액
     debt = _get(kv, '2. 채무(차입)금액 총액(원)', '채무(차입)금액 총액(원)', '채무금액')
@@ -496,9 +514,9 @@ def parse_share_pledge(kv: dict) -> list:
         lines.append(f'🔒 담보설정: {_fmt_amount(coll)}원')
 
     # 담보제공 주식수 (누적)
-    pledge_sh = _get(kv, '누적 담보제공 주식 총수(주)', '담보제공주식수(주)')
-    if pledge_sh:
-        lines.append(f'📌 담보주식: {int(pledge_sh.replace(",", "")):,}주')
+    pledge_n = _lead_int(_get(kv, '누적 담보제공 주식 총수(주)', '담보제공주식수(주)'))
+    if pledge_n is not None:
+        lines.append(f'📌 담보주식: {pledge_n:,}주')
 
     # 담보 종류
     kind = _get(kv, '담보권 종류', '담보종류')
