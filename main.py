@@ -218,6 +218,108 @@ class DartRoutingBot:
             logging.exception(f"⚠️ [공시] 실적추이 조회 실패: {stock_code}")
             return ''
 
+    @staticmethod
+    def _yoy_str(cur, prev, is_profit=False) -> str:
+        """YoY 문자열 — 이익은 부호전환(적자/흑자전환·적자지속) 우선, 기저 근처0의
+        %폭발은 배수 표기('14배'), 그 외 '±N%'."""
+        if cur is None or prev is None:
+            return ''
+        if is_profit:
+            if prev < 0 and cur < 0:
+                return ' 적자지속'
+            if prev >= 0 > cur:
+                return ' 적자전환'
+            if prev < 0 <= cur:
+                return ' 흑자전환'
+        if prev == 0:
+            return ''
+        if cur > 0 and prev > 0 and cur / prev >= 4:
+            return f' YoY {cur / prev:.0f}배'
+        g = (cur - prev) / abs(prev) * 100
+        return f" YoY {'+' if g >= 0 else ''}{g:.0f}%"
+
+    def _periodic_financials_summary(self, stock_code: str, report_nm: str) -> str:
+        """정기보고서(사업/반기/분기) 핵심 재무 요약 — financials에서 보고기간 누적
+        실적(매출·영업익·순익 YoY)+재무건전성(부채/유동비율·ROE). 본문이 skip이라
+        비어있는 정기보고서 알림 보강용. 보고기간 분기가 아직 미수집이면 '' (헤더만)."""
+        if not _BRIDGE_OK or not stock_code:
+            return ''
+        m = re.search(r'\((\d{4})\.(\d{2})\)', report_nm)
+        if not m:
+            return ''
+        year, month = int(m.group(1)), int(m.group(2))
+        qmap = {3: ([1], '1분기'), 6: ([1, 2], '상반기'),
+                9: ([1, 2, 3], '3분기 누적'), 12: ([1, 2, 3, 4], '연간')}
+        if month not in qmap:
+            return ''
+        qs, plabel = qmap[month]
+        try:
+            code = stock_code.split('.')[0]
+            sb = _bridge._get_client()
+            if not sb:
+                return ''
+            rows = (sb.table('financials')
+                    .select('bsns_year,quarter,fs_div,revenue,operating_profit,'
+                            'net_income,debt_ratio,current_ratio,roe')
+                    .eq('stock_code', code).eq('is_cumulative', False)
+                    .execute().data or [])
+            if not rows:
+                return ''
+            fs = 'CFS' if any(r.get('fs_div') == 'CFS' for r in rows) else 'OFS'
+            rows = [r for r in rows if r.get('fs_div') == fs]
+
+            def _qn(r):
+                return int(str(r.get('quarter', '')).replace('Q', '') or 0)
+
+            def _agg(yr):
+                sel = [r for r in rows if int(r.get('bsns_year', 0)) == yr and _qn(r) in qs]
+                if len(sel) < len(qs):      # 보고기간 분기 미수집 → 누적 불가
+                    return None
+                out = {}
+                for k in ('revenue', 'operating_profit', 'net_income'):
+                    vals = [r[k] for r in sel if r.get(k) is not None]
+                    out[k] = sum(vals) if vals else None
+                return out
+
+            cur, prev = _agg(year), _agg(year - 1)
+            if not cur:
+                return ''
+
+            def _part(label, k, prof=False):
+                v = cur.get(k)
+                if v is None:
+                    return None
+                return f'{label} {self._fmt_eok(v)}{self._yoy_str(v, (prev or {}).get(k), prof)}'
+
+            parts = [x for x in (_part('매출', 'revenue'),
+                                 _part('영업익', 'operating_profit', True),
+                                 _part('순익', 'net_income', True)) if x]
+            if not parts:
+                return ''
+            lines = [f"📊 {year} {plabel} ({'연결' if fs == 'CFS' else '별도'}): "
+                     + ' · '.join(parts)]
+
+            def _latest_ratio(col):
+                cands = sorted([r for r in rows if int(r.get('bsns_year', 0)) == year
+                                and _qn(r) in qs and r.get(col) is not None], key=_qn)
+                return cands[-1][col] if cands else None
+
+            h = []
+            dr, crr, roe = (_latest_ratio('debt_ratio'), _latest_ratio('current_ratio'),
+                            _latest_ratio('roe'))
+            if dr is not None:
+                h.append(f'부채비율 {dr:.0f}%')
+            if crr is not None:
+                h.append(f'유동비율 {crr:.0f}%')
+            if roe is not None:
+                h.append(f'ROE {roe:.1f}%')
+            if h:
+                lines.append('💪 ' + ' · '.join(h))
+            return '\n'.join(lines)
+        except Exception:
+            logging.exception(f'⚠️ [공시] 정기보고서 재무요약 실패: {stock_code}')
+            return ''
+
     def ai_worker(self, chat_id, corp_name, report_nm, rcept_no):
         logging.info(f"🤖 AI Analyzing: {corp_name}")
         result = analyze_disclosure_gemini(corp_name, report_nm, rcept_no)
@@ -419,6 +521,11 @@ class DartRoutingBot:
             trend = self._earnings_trend(stock_code, rcept_no, report_nm=report_nm)
             if trend:
                 detail = f"{detail}\n\n{trend}".strip()
+        # 정기보고서(사업/반기/분기) — 본문 skip이라 빈 알림 → financials 핵심 요약 덧붙임
+        elif any(k in report_nm for k in ('사업보고서', '반기보고서', '분기보고서')) and stock_code:
+            fin = self._periodic_financials_summary(stock_code, report_nm)
+            if fin:
+                detail = f"{detail}\n\n{fin}".strip()
         msg = self._build_msg(corp_name, report_nm, rcept_no, stock_code, prefix, detail)
 
         # ── 채널 라우팅 — 정책은 dart_rules.decide_targets (순수 함수) ──
