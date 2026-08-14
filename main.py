@@ -21,10 +21,13 @@ from dart_parser import get_disclosure_detail, get_audit_opinion
 
 from config import (
     DART_API_KEY,
+    TELEGRAM_BOT_TOKEN,
     INDUSTRY_CHAT_IDS,
+    INDUSTRY_HIERARCHY,
+    COMPANY_CHAT_IDS,
     CHAT_IDS_BY_CODE,
     COMPANY_CODES,
-    AI_TRIGGER_KEYWORDS,   # 참조: AI 분석 블록(임시 비활성화, 복구 시 사용)
+    AI_TRIGGER_KEYWORDS,
     GLOBAL_IMPORTANT_KEYWORDS,
     COMPANY_TO_INDUSTRY
 )
@@ -271,37 +274,50 @@ class DartRoutingBot:
             def _qn(r):
                 return int(str(r.get('quarter', '')).replace('Q', '') or 0)
 
-            def _agg(yr):
-                sel = [r for r in rows if int(r.get('bsns_year', 0)) == yr and _qn(r) in qs]
-                if len(sel) < len(qs):      # 보고기간 분기 미수집 → 누적 불가
-                    return None
+            def _sum(sel):
                 out = {}
                 for k in ('revenue', 'operating_profit', 'net_income'):
                     vals = [r[k] for r in sel if r.get(k) is not None]
                     out[k] = sum(vals) if vals else None
                 return out
 
-            cur, prev = _agg(year), _agg(year - 1)
-            if not cur:
-                return ''
+            cur_rows = [r for r in rows if int(r.get('bsns_year', 0)) == year and _qn(r) in qs]
+            if len(cur_rows) >= len(qs):          # 보고기간 분기 전부 수집됨 → 누적
+                prev_rows = [r for r in rows
+                             if int(r.get('bsns_year', 0)) == year - 1 and _qn(r) in qs]
+                cur = _sum(cur_rows)
+                prev = _sum(prev_rows) if len(prev_rows) >= len(qs) else {}
+                head, endq = f'{year} {plabel}', (year, max(qs))
+            else:                                 # 폴백: 최신 가용 분기 + 전년 동분기
+                latest = max(rows, key=lambda r: (int(r.get('bsns_year', 0)), _qn(r)),
+                             default=None)
+                if not latest or int(latest.get('bsns_year', 0)) < year - 1:
+                    return ''                     # 너무 오래된 데이터면 생략
+                ly, lq = int(latest['bsns_year']), _qn(latest)
+                pv = next((r for r in rows if int(r.get('bsns_year', 0)) == ly - 1
+                           and _qn(r) == lq), None)
+                cur = _sum([latest])
+                prev = _sum([pv]) if pv else {}
+                head, endq = f'최근 {str(ly)[2:]}.{lq}Q', (ly, lq)
 
             def _part(label, k, prof=False):
                 v = cur.get(k)
                 if v is None:
                     return None
-                return f'{label} {self._fmt_eok(v)}{self._yoy_str(v, (prev or {}).get(k), prof)}'
+                return f'{label} {self._fmt_eok(v)}{self._yoy_str(v, prev.get(k), prof)}'
 
             parts = [x for x in (_part('매출', 'revenue'),
                                  _part('영업익', 'operating_profit', True),
                                  _part('순익', 'net_income', True)) if x]
             if not parts:
                 return ''
-            lines = [f"📊 {year} {plabel} ({'연결' if fs == 'CFS' else '별도'}): "
-                     + ' · '.join(parts)]
+            lines = [f"📊 {head} ({'연결' if fs == 'CFS' else '별도'}): " + ' · '.join(parts)]
 
             def _latest_ratio(col):
-                cands = sorted([r for r in rows if int(r.get('bsns_year', 0)) == year
-                                and _qn(r) in qs and r.get(col) is not None], key=_qn)
+                cands = sorted([r for r in rows
+                                if (int(r.get('bsns_year', 0)), _qn(r)) <= endq
+                                and r.get(col) is not None],
+                               key=lambda r: (int(r.get('bsns_year', 0)), _qn(r)))
                 return cands[-1][col] if cands else None
 
             h = []
