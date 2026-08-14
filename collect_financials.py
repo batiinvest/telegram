@@ -337,6 +337,70 @@ CASHFLOW_COLS = [
 # 전체 FLOW_COLS (캐시 저장용)
 FLOW_COLS = INCOME_COLS + CASHFLOW_COLS
 
+# ── 파생 현금흐름 컬럼 ──
+# base 컬럼에서 계산되는 값 → base가 '순분기'로 변환된 뒤 반드시 재계산해야 한다.
+# (누적 상태로 저장되면 프론트 4분기 합산에서 최대 ~2배 과대집계됨)
+DERIVED_CF_COLS = ["capex_total", "da", "ebitda", "fcf", "fcf_direct", "fcf_indirect"]
+
+
+def calc_cashflow_derived(row: dict) -> dict:
+    """
+    현금흐름 파생값 계산: D&A · CapEx합계 · EBITDA · FCF(직접/간접).
+    ⚠️ base 컬럼(operating_cashflow·capex·capex_intangible·operating_profit·
+       net_income·depreciation·amortization)이 '순분기' 값일 때 호출해야 정확하다.
+       Q2/Q3/Q4는 convert_to_pure_quarter가 base를 순분기로 변환한 뒤 재호출한다.
+    """
+    result = {}
+    op          = row.get("operating_profit")
+    ni          = row.get("net_income")
+    ocf         = row.get("operating_cashflow")
+    capex_tan   = row.get("capex")            # 유형자산취득
+    capex_int   = row.get("capex_intangible") # 무형자산취득
+    dep         = row.get("depreciation")     # 감가상각비
+    amo         = row.get("amortization")     # 무형자산상각비
+
+    # D&A 합계 (어느 하나라도 있으면 계산)
+    da = None
+    if dep is not None or amo is not None:
+        da = (dep or 0) + (amo or 0)
+        if da > 0:
+            result["da"] = da
+
+    # CapEx 합계 (유형+무형, DART 음수 표기 → 절댓값)
+    capex_total = None
+    if capex_tan is not None or capex_int is not None:
+        capex_total = abs(capex_tan or 0) + abs(capex_int or 0)
+        result["capex_total"] = capex_total
+
+    # EBITDA = 영업이익 + D&A
+    if op is not None and da is not None:
+        result["ebitda"] = op + da
+
+    # FCF 직접법 = OCF - CapEx 합계  (가장 신뢰도 높음)
+    fcf_direct = None
+    if ocf is not None and capex_total is not None:
+        fcf_direct = ocf - capex_total
+        result["fcf_direct"] = fcf_direct
+    elif ocf is not None and capex_tan is not None:
+        # capex_intangible 없을 때 유형만으로 계산
+        fcf_direct = ocf - abs(capex_tan)
+        result["fcf_direct"] = fcf_direct
+
+    # FCF 간접법 = 순이익 + D&A - CapEx 합계  (OCF 없는 분기 폴백)
+    fcf_indirect = None
+    if ni is not None and da is not None and capex_total is not None:
+        fcf_indirect = ni + da - capex_total
+        result["fcf_indirect"] = fcf_indirect
+
+    # FCF 최선값: 직접법 → 간접법 → OCF 근사 순
+    if fcf_direct is not None:
+        result["fcf"] = fcf_direct
+    elif fcf_indirect is not None:
+        result["fcf"] = fcf_indirect
+    elif ocf is not None:
+        result["fcf"] = ocf  # CapEx 없음 — OCF 근사 (보수적)
+    return result
+
 
 def is_cumulative_by_comparison(cur_val: int, prev_val: int) -> bool:
     """
@@ -427,6 +491,14 @@ def convert_to_pure_quarter(row: dict, prev_row: Optional[dict]) -> dict:
         # Q2/Q3: DART thstrm_amount는 당해 단독값 → 변환 불필요
         # (일부 금융사 누적 제공 케이스는 thstrm_amount도 단독값 제공)
         pass
+
+    # ── 파생 현금흐름 재계산 ──
+    # capex_total·da·ebitda·fcf 계열은 calc_ratios가 '원본(누적)' base로 1차 계산해 둔 값.
+    # base를 순분기로 변환한 지금 다시 계산해야 분기 순액·연간 합산이 맞다.
+    # (미변환 시 프론트 4분기 합산에서 FCF·CapEx가 최대 ~2배 과대집계됨)
+    for c in DERIVED_CF_COLS:
+        converted.pop(c, None)
+    converted.update(calc_cashflow_derived(converted))
 
     converted["is_cumulative"] = False
     return converted
@@ -522,53 +594,9 @@ def calc_ratios(row: dict) -> dict:
         if ta and ni and ta != 0:
             result["roa"] = round(ni / ta * 100, 2)
 
-        # ── D&A / CapEx 합계 / EBITDA / FCF ──
-        ocf         = row.get("operating_cashflow")
-        capex_tan   = row.get("capex")           # 유형자산취득
-        capex_int   = row.get("capex_intangible")# 무형자산취득
-        dep         = row.get("depreciation")    # 감가상각비
-        amo         = row.get("amortization")    # 무형자산상각비
-
-        # D&A 합계 (어느 하나라도 있으면 계산)
-        da = None
-        if dep is not None or amo is not None:
-            da = (dep or 0) + (amo or 0)
-            if da > 0:
-                result["da"] = da
-
-        # CapEx 합계 (유형+무형, DART 음수 표기 → 절댓값)
-        capex_total = None
-        if capex_tan is not None or capex_int is not None:
-            capex_total = abs(capex_tan or 0) + abs(capex_int or 0)
-            result["capex_total"] = capex_total
-
-        # EBITDA = 영업이익 + D&A
-        if op is not None and da is not None:
-            result["ebitda"] = op + da
-
-        # FCF 직접법 = OCF - CapEx 합계  (가장 신뢰도 높음)
-        fcf_direct = None
-        if ocf is not None and capex_total is not None:
-            fcf_direct = ocf - capex_total
-            result["fcf_direct"] = fcf_direct
-        elif ocf is not None and capex_tan is not None:
-            # capex_intangible 없을 때 유형만으로 계산
-            fcf_direct = ocf - abs(capex_tan)
-            result["fcf_direct"] = fcf_direct
-
-        # FCF 간접법 = 순이익 + D&A - CapEx 합계  (OCF 없는 분기 폴백)
-        fcf_indirect = None
-        if ni is not None and da is not None and capex_total is not None:
-            fcf_indirect = ni + da - capex_total
-            result["fcf_indirect"] = fcf_indirect
-
-        # FCF 최선값: 직접법 → 간접법 → OCF 근사 순
-        if fcf_direct is not None:
-            result["fcf"] = fcf_direct
-        elif fcf_indirect is not None:
-            result["fcf"] = fcf_indirect
-        elif ocf is not None:
-            result["fcf"] = ocf  # CapEx 없음 — OCF 근사 (보수적)
+        # ── D&A / CapEx합계 / EBITDA / FCF (원본 base 기준 1차 계산) ──
+        # 순분기 변환 후 convert_to_pure_quarter가 재계산해 최종값을 확정한다.
+        result.update(calc_cashflow_derived(row))
 
     except Exception as e:
         log.debug(f"calc_ratios 오류 {corp}: {e}")
