@@ -54,6 +54,8 @@ _PARSER_MAP = [
     # '기타시장안내' 전체가 아닌 '관리종목지정우려'로만 좁혀 라우팅.
     (['관리종목지정우려'],                     parse_market_notice),
     (['상장폐지', '관리종목', '상장적격성'],   parse_market_measure),
+    # 회생절차(개시신청·개시결정 등) — 국/영문 이중언어라 폴백이 중복 덤프.
+    (['회생절차'],                            parse_rehabilitation),
     (['소송'],                                parse_lawsuit),
     (['횡령', '배임'],                         parse_embezzlement),
     (['배당결정'],                             parse_dividend),

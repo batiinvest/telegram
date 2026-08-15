@@ -623,3 +623,34 @@ def parse_market_notice(kv: dict) -> list:
         if len(s) > 4:
             lines.append(f'  • {_trunc_clean(s, 220)}')
     return lines if len(lines) > 1 else []
+
+
+def parse_rehabilitation(kv: dict) -> list:
+    """회생절차 개시신청/개시결정/계획인가 등 — 관할법원·신청사유·신청일·향후대책.
+
+    회생절차 주요사항보고서는 국/영문 이중언어 서식이라 범용 폴백이 양쪽 필드를
+    중복 덤프하고 정정표 헤더셀(항목/정정전/후)까지 노출. 영문 키(Competent court/
+    Reasons/Date/Actions)가 값 정렬이 안정적이라 이를 기준으로 추출."""
+    rnm = kv.get('_report_nm', '')
+    m = re.search(r'회생절차\s*([가-힣]*)', rnm)
+    sub = (m.group(1) if m else '') or '개시신청'
+    lines = [f'⚖️ 회생절차 {sub}']
+
+    if v := _get(kv, '2. Competent court', 'Competent court', '관할법원'):
+        lines.append(f'🏛 관할법원: {v}')
+    if v := _get(kv, '3. Reasons for application', 'Reasons for application',
+                 '신청의 사유', '신청사유'):
+        lines.append(f'📋 신청사유: {_trunc_clean(v, 90)}')
+    if v := _get(kv, '4. Date of application', 'Date of application', '신청일자', '신청일'):
+        lines.append(f'📅 신청일: {v}')
+
+    # 향후대책 — 국문 요약('5. 향후대책 및 일정', 간결) 우선, 장문/부재면 영문 Actions
+    plan = _get(kv, '5. 향후대책 및 일정', '향후대책 및 일정')
+    if not plan or len(plan) > 120:
+        plan = plan or _get(kv, '5. Actions to be taken and schedule',
+                            'Actions to be taken and schedule')
+    if plan:
+        plan = re.sub(r'^-\s*', '', re.sub(r'\s+', ' ', plan)).strip()
+        lines.append(f'📋 향후대책: {_trunc_clean(plan, 150)}')
+
+    return lines if len(lines) > 1 else []
