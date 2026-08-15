@@ -56,6 +56,8 @@ _PARSER_MAP = [
     (['상장폐지', '관리종목', '상장적격성'],   parse_market_measure),
     # 회생절차(개시신청·개시결정 등) — 국/영문 이중언어라 폴백이 중복 덤프.
     (['회생절차'],                            parse_rehabilitation),
+    # 회사합병결정 — 국/영문 이중언어 + 소멸회사 재무제표 덤프.
+    (['회사합병'],                            parse_merger),
     (['소송'],                                parse_lawsuit),
     (['횡령', '배임'],                         parse_embezzlement),
     (['배당결정'],                             parse_dividend),

@@ -613,3 +613,42 @@ def parse_conversion_adjust(kv: dict) -> list:
     _f(lines, kv, '📅 적용일', '조정가액 적용일')
 
     return lines
+
+
+def parse_merger(kv: dict) -> list:
+    """회사합병결정 — 존속/소멸회사·합병비율(무증자 여부)·목적·합병기일·소규모합병.
+
+    합병 주요사항보고서는 국/영문 이중언어 + 소멸회사 재무제표 수십 행이라 폴백이
+    통째 덤프. 값 정렬이 안정적인 영문 키(Merger method/ratio/Purpose)로 핵심만 추출."""
+    method = _get(kv, '1. Merger method', 'Merger method') or ''
+    ms = re.search(r'([^()※]+?)\(존속회사\)', method)
+    me = re.search(r'([^()※]+?)\(소멸회사\)', method)
+    surv = ms.group(1).strip() if ms else None
+    ext = (me.group(1).strip() if me else None) or _get(kv, '8. Merger counterparty', 'Merger counterparty')
+
+    lines = ['🤝 회사합병 (흡수합병)']
+    if surv and ext:
+        lines.append(f'🏢 존속 {surv} ← 소멸 {ext}')
+    elif surv or ext:
+        lines.append(f'🏢 {surv or ext}')
+    if biz := _get(kv, 'Main business', '주요사업'):
+        lines.append(f'🏭 소멸회사 사업: {_trunc(biz, 40)}')
+
+    # 합병비율 (+무증자: 신주 미발행)
+    mr = re.search(r'=\s*([\d.]+)\s*:\s*([\d.]+)', _get(kv, '4. Merger ratio', 'Merger ratio') or '')
+    if mr:
+        a = '%g' % float(mr.group(1))
+        b = '%g' % float(mr.group(2))
+        noshare = float(mr.group(2)) == 0
+        lines.append(f'📊 합병비율 {a} : {b}' + (' · 무증자(신주 미발행)' if noshare else ''))
+
+    if v := _get(kv, '2. Purpose of merger', 'Purpose of merger'):
+        lines.append(f'🎯 목적: {_trunc_clean(v, 60)}')
+    if v := _get(kv, '합병기일', 'Merger date'):
+        lines.append(f'📅 합병기일: {v}')
+
+    appr = _get(kv, '13. Matters related to the appraisal rights') or ''
+    if '소규모합병' in appr or '매수청구권이 인정되지 않' in appr:
+        lines.append('📌 소규모합병 — 주식매수청구권 없음')
+
+    return lines if len(lines) > 1 else []
