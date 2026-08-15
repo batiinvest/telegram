@@ -654,3 +654,40 @@ def parse_rehabilitation(kv: dict) -> list:
         lines.append(f'📋 향후대책: {_trunc_clean(plan, 150)}')
 
     return lines if len(lines) > 1 else []
+
+
+def parse_investee_rehab(kv: dict) -> list:
+    """출자법인의 회생절차/파산 신청·사실발생 — 출자법인·신청구분·출자규모·사유.
+
+    투자자(당사)가 출자한 법인의 회생/파산 상태 공시. 신청구분(개시신청/종결/파산
+    등)이 핵심 — 종결·인가는 회복, 개시신청·파산은 부실. 한글 번호 키 서식이라
+    회사 자신의 회생용 parse_rehabilitation(영문키)과 별개."""
+    kind = _get(kv, '3. 신청내역 구분', '신청내역 구분', '신청내역', '구분내용')
+    lines = ['🏢 출자법인 회생·파산' + (f' — {kind}' if kind else '')]
+
+    # 출자법인명 — 표 헤더가 '회사명/대표자/…'라 이름 셀의 값이 다음 헤더 '대표자'
+    name = next((k for k, v in kv.items()
+                 if not k.startswith('_') and (v or '').strip() == '대표자'), None)
+    rel = _get(kv, '회사와의 관계')
+    biz = _get(kv, '주요사업')
+    if name:
+        tail = ' · '.join(x for x in (rel, _trunc(biz, 24) if biz else None) if x)
+        lines.append(f'🏭 출자법인: {name}' + (f' ({tail})' if tail else ''))
+
+    amt = _get(kv, '출자금액(원)', '출자금액')
+    ratio = _get(kv, '자기자본대비(%)')
+    if amt and re.search(r'\d', amt):
+        lines.append(f'💰 출자금액: {_fmt_amount(amt)}원'
+                     + (f' (자기자본대비 {ratio}%)' if ratio else ''))
+
+    if v := _get(kv, '- 신청사유', '신청사유', '사유'):
+        v = re.sub(r'^-\s*', '', re.sub(r'\s+', ' ', v)).strip()
+        lines.append(f'📋 사유: {_trunc_clean(v, 120)}')
+
+    court = _get(kv, '5. 관할법원', '관할법원')
+    date = _get(kv, '4. 신청일자', '신청일자', '신청일', '확인일자')
+    seg = [x for x in (court, (f'신청일 {date}' if date else None)) if x]
+    if seg:
+        lines.append('🏛 ' + ' · '.join(seg))
+
+    return lines if len(lines) > 1 else []
