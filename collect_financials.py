@@ -538,6 +538,15 @@ def calc_ratios(row: dict) -> dict:
     qtr   = row.get("quarter", "")
 
     try:
+        # ── 부채총계 파생교정 ──
+        # 일부 공시(부채총계 태그 부재)에서 '자본과부채총계(=자산총계)'가 total_liabilities로
+        # 오매칭돼 tl==ta가 됨 → 부채비율이 자산/자본으로 부풀려짐. 자산·자본이 있으면
+        # 부채 = 자산 − 자본으로 역산(자본잠식 등 정상 tl≈ta도 같은 식이라 안전).
+        # 아래 debt_ratio도 교정된 tl을 사용한다.
+        if ta is not None and te is not None and (
+                tl is None or (tl and abs(tl - ta) < abs(ta) * 0.001)):
+            tl = ta - te
+            result["total_liabilities"] = tl
         # ── 매출원가/매출총이익 역산 ──
         if rev and rev != 0:
             # 매출원가 음수면 절댓값 사용
