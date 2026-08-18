@@ -436,7 +436,7 @@ class TelegramBotManager:
 
         for attempt in range(3):
             try:
-                res = global_session.post(url, json=payload, timeout=10)
+                res = global_session.post(url, json=payload, timeout=(5, 20))  # connect 5s·read 20s (일시 슬로우다운 1차 실패 감소, 08-18)
             except Exception as e:
                 # global_session이 연결 계층 재시도를 이미 수행한 뒤의 실패
                 logging.error(f"⚠️ 텔레그램 연결 에러 ({chat_id}): {e}")
