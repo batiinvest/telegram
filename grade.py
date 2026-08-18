@@ -27,7 +27,7 @@ score (정렬용):
 from typing import Optional
 from format_utils import get_prev_quarter  # 공통 유틸로 이관
 from logger_config import get_logger
-from collect_utils import batch_upsert
+from collect_utils import batch_upsert, safe_execute
 
 log = get_logger(__name__)
 
@@ -150,10 +150,9 @@ def save_grade_history(sb, year: str, quarter: str) -> dict:
     prev_y, prev_q = get_prev_quarter(year, quarter)
     prev_cache = {}
     if prev_q and prev_y:
-        res = (sb.table('financials')
+        res = safe_execute(sb.table('financials')
                .select('stock_code,revenue,operating_profit,operating_margin,revenue_yoy')
-               .eq('bsns_year', prev_y).eq('quarter', prev_q).eq('fs_div', 'CFS')
-               .execute())
+               .eq('bsns_year', prev_y).eq('quarter', prev_q).eq('fs_div', 'CFS'), label='grade-prev')
         for r in (res.data or []):
             prev_cache[r['stock_code']] = r
 
@@ -161,29 +160,26 @@ def save_grade_history(sb, year: str, quarter: str) -> dict:
     prev2_cache = {}
     prev2_y, prev2_q = get_prev_quarter(prev_y or year, prev_q or quarter) if prev_q else (None, None)
     if prev2_q and prev2_y:
-        res = (sb.table('financials')
+        res = safe_execute(sb.table('financials')
                .select('stock_code,revenue,operating_profit')
-               .eq('bsns_year', prev2_y).eq('quarter', prev2_q).eq('fs_div', 'CFS')
-               .execute())
+               .eq('bsns_year', prev2_y).eq('quarter', prev2_q).eq('fs_div', 'CFS'), label='grade-prev2')
         for r in (res.data or []):
             prev2_cache[r['stock_code']] = r
 
     # ── 전년동기 캐시 ──
     prev_year_cache = {}
-    res = (sb.table('financials')
+    res = safe_execute(sb.table('financials')
            .select('stock_code,revenue,operating_profit,operating_margin')
-           .eq('bsns_year', str(int(year) - 1)).eq('quarter', quarter).eq('fs_div', 'CFS')
-           .execute())
+           .eq('bsns_year', str(int(year) - 1)).eq('quarter', quarter).eq('fs_div', 'CFS'), label='grade-prevyear')
     for r in (res.data or []):
         prev_year_cache[r['stock_code']] = r
 
     # ── 이전 분기 등급 이력 (grade_change 계산용) ──
     prev_grade_cache = {}  # stock_code → 이전 분기 grade
     if prev_y and prev_q:
-        res = (sb.table('earnings_grade_history')
+        res = safe_execute(sb.table('earnings_grade_history')
                .select('stock_code,grade')
-               .eq('bsns_year', prev_y).eq('quarter', prev_q)
-               .execute())
+               .eq('bsns_year', prev_y).eq('quarter', prev_q), label='grade-prevgrade')
         for r in (res.data or []):
             prev_grade_cache[r['stock_code']] = r['grade']
 
@@ -325,14 +321,13 @@ def save_trend_flags(sb, year: str, quarter: str) -> int:
     all_hist = []
     for i in range(0, len(codes), 200):
         batch = codes[i:i + 200]
-        res = (sb.table('financials')
+        res = safe_execute(sb.table('financials')
                .select('stock_code,bsns_year,quarter,revenue,operating_profit,'
                        'revenue_yoy,op_profit_yoy,revenue_qoq,total_liabilities,total_equity')
                .in_('bsns_year', years_set)
                .in_('quarter',   quarters_set)
                .eq('fs_div', 'CFS')
-               .in_('stock_code', batch)
-               .execute())
+               .in_('stock_code', batch), label='trend-hist')
         all_hist.extend(res.data or [])
 
     by_code = {}
@@ -346,13 +341,12 @@ def save_trend_flags(sb, year: str, quarter: str) -> int:
     for code, hist in by_code.items():
         flags = detect_trend_flags(hist)
         # 신호 없는 경우도 빈 dict로 저장해 명시적으로 "검사 완료" 표시
-        (sb.table('financials')
+        safe_execute(sb.table('financials')
            .update({'trend_flags': flags})
            .eq('stock_code', code)
            .eq('bsns_year',  year)
            .eq('quarter',    quarter)
-           .eq('fs_div',     'CFS')
-           .execute())
+           .eq('fs_div',     'CFS'), label='trend-update')
         if any(flags.values()):
             flagged += 1
 
