@@ -518,6 +518,17 @@ def parse_amount(val: str) -> Optional[int]:
         return None
 
 
+def _clamp_ratio(v):
+    # NUMERIC(8,2) 컬럼 오버플로(22003) 방지: |v| < 10^6 (분모≈0 종목의 극단 비율 캡)
+    if v is None:
+        return None
+    if v > 999999.99:
+        return 999999.99
+    if v < -999999.99:
+        return -999999.99
+    return v
+
+
 def calc_ratios(row: dict) -> dict:
     """재무 비율 계산 + 매출원가/판관비 교차 검증"""
     rev  = row.get("revenue")
@@ -609,6 +620,9 @@ def calc_ratios(row: dict) -> dict:
 
     except Exception as e:
         log.debug(f"calc_ratios 오류 {corp}: {e}")
+    for _rk in ('cogs_ratio','gross_margin','sga_ratio','net_margin','operating_margin','debt_ratio','current_ratio','roe','roa'):
+        if result.get(_rk) is not None:
+            result[_rk] = _clamp_ratio(result[_rk])
     return result
 
 
@@ -617,7 +631,7 @@ def calc_growth(new_val, old_val) -> Optional[float]:
     try:
         if new_val is None or old_val is None or old_val == 0:
             return None
-        return round((new_val - old_val) / abs(old_val) * 100, 2)
+        return _clamp_ratio(round((new_val - old_val) / abs(old_val) * 100, 2))
     except Exception:
         return None
 
