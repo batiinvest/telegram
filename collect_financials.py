@@ -982,6 +982,11 @@ def auto_detect_quarter() -> tuple:
         return year, "Q3"
 
 
+def _is_spac(name):
+    """스팩(SPAC)은 표준 재무가 없어 재무수집 대상에서 제외."""
+    return '스팩' in (name or '')
+
+
 def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,
         monitored_only: bool = False, non_monitored_only: bool = False,
         corp_names: list = None):
@@ -1014,7 +1019,7 @@ def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,
                 raw_all.extend(res.data)
                 if len(res.data) < 1000: break
                 page += 1
-        targets_raw = raw_all
+        targets_raw = [t for t in raw_all if not _is_spac(t.get('name'))]
     else:
         # companies 테이블에서 로드
         q = sb.table("companies").select("name, code")
@@ -1039,6 +1044,7 @@ def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,
                 if len(res.data) < 1000: break
                 page += 1
 
+        targets_raw = [t for t in targets_raw if not _is_spac(t.get('name'))]
         # DART 전체 기업 목록에서 corp_code 매핑 (종목코드 기준)
         # corp_names 필터 적용
         if corp_names:

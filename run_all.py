@@ -31,7 +31,7 @@ except ImportError as e:
 
 from job_infra import _bridge, _BRIDGE_OK, set_expected_jobs
 from jobs_collect import (
-    job_sync_listed_companies, job_cleanup_market_data, job_collect_financials,
+    job_sync_listed_companies, job_cleanup_market_data, job_collect_financials, job_backfill_financials,
     job_collect_macro, job_collect_analyst_opinions, job_collect_foreign_institution,
     job_collect_new_high, job_collect_us_etf, job_collect_market,
     job_collect_market_closing, job_short_surge, job_collect_investor_trend,
@@ -154,6 +154,7 @@ def run_scheduler():
 
     schedule.every().saturday.at("00:30").do(job_cleanup_market_data)   # 새벽 market_data 정리
     schedule.every().saturday.at("01:00").do(job_sync_listed_companies) # 새벽 상장사 동기화
+    schedule.every().saturday.at("02:00").do(_threaded(job_backfill_financials))  # 실적시즌 재무 전수 백필(스킵-기존)
     schedule.every().day.at("18:30").do(job_collect_financials)        # 장 마감 후 재무수집 (공시 기반)
     schedule.every().day.at("18:55").do(_threaded(job_daily_summary))  # 종목별 저녁 요약 생성 (18:30 공시 저장 완료 후)
     schedule.every().day.at("19:10").do(_threaded(job_industry_summary))  # 산업별 마감 브리핑 → 산업 채팅방 (18:55 종목요약 AI페이싱 완료 후)

@@ -424,6 +424,12 @@ def job_collect_financials():
                         except Exception as _fe:
                             logging.warning(f"⚠️ [재무수집] 상장사 필터 실패 (전체 포함): {_fe}")
 
+                # 스팩(SPAC) 제외 — 표준 재무 없음
+                _spac = {c['corp_code'] for c in seen.values() if '스팩' in (c.get('corp_name') or '')}
+                if _spac:
+                    for _qk in list(quarter_groups.keys()):
+                        quarter_groups[_qk] = [cc for cc in quarter_groups[_qk] if cc not in _spac]
+                    logging.info(f"📊 [재무수집] 스팩 제외: {len(_spac)}개")
                 # 분기별로 나눠서 수집
                 total_ok, total_fail = 0, 0
                 for (y, q), codes in quarter_groups.items():
@@ -519,6 +525,26 @@ def job_collect_financials():
     except Exception as e:
         logging.error(f"❌ [재무수집] 오류: {e}")
         mark_failed(e)
+
+
+def job_backfill_financials():
+    """실적시즌 주말 — 당일공시 잡이 놓친 재무를 전수 백필(스킵-기존, 스팩 제외)."""
+    if not _is_enabled('collect_financials'):
+        logging.info("⏸ 재무백필 비활성화 (DB 설정)")
+        return
+    import datetime as _dt
+    m = _dt.date.today().month
+    if m not in (3, 4, 5, 8, 11):
+        logging.info(f"📊 [재무백필] 실적시즌 아님(월={m}) — 스킵")
+        return
+    try:
+        from backfill_financials import run_backfill
+        y = _dt.date.today().year - 1  # 연초(사업보고서 시즌)엔 전년도가 대상 → 최근 2년 커버
+        logging.info(f"📊 [재무백필] {y}~ 누락 재무 전수 백필 시작")
+        run_backfill(from_year=y)
+        logging.info("📊 [재무백필] 완료")
+    except Exception as e:
+        logging.error(f"❌ [재무백필] 실패: {e}")
 
 
 def job_save_grade_history(year: str = None, quarter: str = None):

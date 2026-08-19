@@ -157,6 +157,7 @@ def _load_companies(sb, monitored_only: bool = False,
         raw = [r for r in raw if r.get("name") in corp_names]
         log.info(f"🔍 종목명 필터: {corp_names} → {len(raw)}개")
 
+    raw = [r for r in raw if '스팩' not in (r.get('name') or '')]
     # corp_code 매핑
     targets = []
     for item in raw:
