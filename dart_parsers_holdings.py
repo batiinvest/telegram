@@ -119,21 +119,31 @@ def parse_major_shareholder_change(kv: dict) -> list:
     before_name = before_shares = before_ratio = ''
     after_name  = after_shares  = after_ratio  = ''
 
+    # '특수관계인' 제외 — '변경후 최대주주의 특수관계인'이 '변경후 최대주주'를
+    # 부분매칭해 컨소시엄(외 N인) 인수 시 소수지분 특수관계인을 최대주주로 오선정하던 문제.
     for idx, (k, v) in enumerate(items):
         if k.startswith('_'):
             continue
-        if '변경전 최대주주' in v and k not in ('-', '', '성명(법인명,조합명,기타단체명)'):
+        if ('변경전 최대주주' in v and '특수관계인' not in v
+                and k not in ('-', '', '성명(법인명,조합명,기타단체명)')):
             before_name = k
             if idx + 1 < len(items):
                 nk, nv = items[idx + 1]
                 if re.match(r'^[\d,]+$', nk) and re.match(r'^[\d.]+$', nv):
                     before_shares, before_ratio = nk, nv
-        elif '변경후 최대주주' in v and k not in ('-', '', '변경후'):
+        elif '변경후 최대주주' in v and '특수관계인' not in v and k not in ('-', '', '변경후'):
             after_name = k
             if idx + 1 < len(items):
                 nk, nv = items[idx + 1]
                 if re.match(r'^[\d,]+$', nk) and re.match(r'^[\d.]+$', nv):
                     after_shares, after_ratio = nk, nv
+
+    # 다자 컨소시엄 등으로 변경후 최대주주(리드)를 못 찾으면 요약('외 N인')으로 대체 —
+    # 관계셀이 국적으로 밀리는 서식에서도 정확한 신규 최대주주등을 표시.
+    if not after_name:
+        summ = _get(kv, '정정후_변경후', '변경후 최대주주등', '변경후최대주주등')
+        if summ and summ not in ('최대주주등', '변경후', '-', ''):
+            after_name = summ  # 요약이라 단일 지분율은 없음
 
     if before_name or after_name:
         lines.append('🔄 최대주주 변경')
