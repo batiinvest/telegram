@@ -10,6 +10,19 @@ def parse_trading_halt(kv: dict) -> list:
     """주권매매거래정지 / 기간변경 / 해제"""
     lines = []
 
+    # ── KRX 매매거래정지및정지해제(중요내용공시) 형식 (번호 키) ──
+    krx_type = _get(kv, '2. 매매거래정지 유형', '매매거래정지 유형')
+    krx_reason = _get(kv, '5. 매매거래정지 사유', '매매거래정지 사유')
+    if krx_type or krx_reason:
+        lines.append('🔒 매매거래정지' + (f' — {krx_type}' if krx_type else ''))
+        if krx_reason:
+            lines.append(f'📋 사유: {_trunc(krx_reason, 70)}')
+        if v := _get(kv, '3. 매매거래정지 일시', '매매거래정지 일시'):
+            lines.append(f'🕐 정지: {v}')
+        if (v := _get(kv, '4. 매매거래정지 해제일시', '매매거래정지 해제일시')) and v.strip() not in ('-', ''):
+            lines.append(f'🔓 해제: {v}')
+        return lines
+
     # ── 거래정지 해제 형식 ───────────────────────────────────────
     release = _get(kv, '2.해제사유', '해제사유')
     if release:

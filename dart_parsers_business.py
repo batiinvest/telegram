@@ -701,3 +701,28 @@ def parse_intragroup_transaction(kv: dict) -> list:
             lines.append(f'📝 {_trunc(first, 100)}')
 
     return lines if (group or parties) else []
+
+
+def parse_facility_investment(kv: dict) -> list:
+    """신규시설투자등 — 투자구분·투자금액(자기자본대비)·목적·투자기간.
+
+    설비/공장 신설 등 대형 capex. 폴백은 '1. 투자구분'·'8. 기타…' 번호 키를 그대로
+    노출하므로 핵심만 구조화."""
+    lines = []
+    kind = _get(kv, '1. 투자구분', '투자구분')
+    lines.append('🏭 신규시설투자' + (f' — {kind}' if kind else ''))
+
+    amt = _get(kv, '투자금액(원)', '투자금액')
+    ratio = _get(kv, '자기자본대비(%)', '자기자본대비')
+    if amt and re.search(r'\d', amt):
+        lines.append(f'💰 투자금액: {_fmt_amount(amt)}원'
+                     + (f' (자기자본대비 {ratio}%)' if ratio else ''))
+
+    if v := _get(kv, '3. 투자목적', '투자목적'):
+        lines.append(f'🎯 목적: {_trunc_clean(v, 70)}')
+
+    s, e = _get(kv, '시작일'), _get(kv, '종료일')
+    if s and s != '-':
+        lines.append(f'📅 기간: {s}' + (f' ~ {e}' if e and e != '-' else ''))
+
+    return lines if len(lines) > 1 else []
