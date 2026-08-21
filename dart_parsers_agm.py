@@ -86,7 +86,7 @@ def parse_mgmt_event(kv: dict) -> list:
 
     # 관련공시
     if v := _get(kv, '관련공시', '※ 관련 공시'):
-        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+        lines.append(f'🔗 관련: {_trunc(v, 110)}')
 
     return lines
 
@@ -231,7 +231,7 @@ def parse_executive_change(kv: dict) -> list:
         lines.append(f'📅 변경일: {v}')
 
     if v := _get(kv, '※ 관련공시', '관련공시'):
-        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+        lines.append(f'🔗 관련: {_trunc(v, 110)}')
 
     return lines
 
@@ -324,7 +324,7 @@ def parse_agm_notice(kv: dict) -> list:
     _f(lines, kv, '📍 장소', '2. 장소', '장소', 'Place', trunc=50)
     _f(lines, kv, '📋 구분', '-주주총회 구분', '주주총회 구분')
     _f(lines, kv, '📋 의결권기준일', '3. 의결권행사기준일', '의결권행사기준일')
-    _f(lines, kv, '🔗 관련', '관련공시', '※관련공시', trunc=50)
+    _f(lines, kv, '🔗 관련', '관련공시', '※관련공시', trunc=110)
 
     # KV 테이블에서 못 뽑음(소집공고 자유서식) → 본문 텍스트 파싱 폴백
     if not lines:
