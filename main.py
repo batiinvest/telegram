@@ -383,7 +383,7 @@ class DartRoutingBot:
         head = f"{prefix}{emoji} " if emoji else prefix
         return (
             f"{head}<b>[{corp_esc}]</b>\n"
-            f"{stock_msg}{report_nm_clean}{detail_block}\n"
+            f"{stock_msg}{report_nm_clean}{detail_block}\n\n"   # 본문↔링크 빈 줄 (가독성)
             f"🔗 <a href='{link}'>공시 원문</a> | "
             f"📈 <a href='https://finance.naver.com/item/main.nhn?code={target_code}'>네이버</a>"
         )
