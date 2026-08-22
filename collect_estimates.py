@@ -172,6 +172,18 @@ def _detect_revisions(code, name, new_records, existing_by_stock):
     return revisions
 
 
+def _all_targets(sb):
+    """companies 전체 active 종목(스팩 제외) → {name: code}. 컨센 커버리지 확대용.
+    컨센서스가 없는 종목은 KIS가 빈 응답 → covered 미집계(무해)."""
+    rows = fetch_all_pages(sb.table("companies").select("name,code").eq("active", True))
+    out = {}
+    for r in rows:
+        nm, cd = r.get("name"), (r.get("code") or "").split(".")[0]
+        if cd and nm and "스팩" not in nm:
+            out[nm] = cd
+    return out
+
+
 def run(codes: dict = None):
     """모니터링 종목 추정실적 수집. codes={name: code} (기본 COMPANY_CODES)."""
     if not kis_auth.get_token():   # 대량 작업 전 fast-fail (호출은 kis_get이 처리)
@@ -179,7 +191,7 @@ def run(codes: dict = None):
         return 0, 0
 
     sb = get_supabase_client()
-    targets = codes or COMPANY_CODES
+    targets = codes or _all_targets(sb)
     existing = _load_existing(sb)
 
     all_records, all_revisions, covered, failed = [], [], 0, 0
