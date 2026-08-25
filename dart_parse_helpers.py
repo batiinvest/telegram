@@ -257,8 +257,14 @@ def _parse_numbered_body(text: str, max_items: int = 8, val_limit: int = 300) ->
                     hd = seg_subs[0].rstrip(':').strip()
                     body = ' / '.join(_trunc_clean(s, 130) for s in seg_subs[1:5])
                     sub_lines.append(f'      {circ[j]} {hd}: {body}')
+                elif re.search(r'\[\s*[\d,]+\s*\]\s*억.*?\[\s*[\d,]+\s*\]\s*억', seg):
+                    # 마일스톤 표('… [ N ]억 원' 2회↑ 반복) → 단계별 줄바꿈 + '[ 10 ]'→'10'.
+                    _s = re.sub(r'\[\s*([\d,]+)\s*\]', r'\1', seg)
+                    ms = [m.strip() for m in re.split(r'(?<=억 원)\s+', _s) if m.strip()]
+                    sub_lines.append(f'      {circ[j]} {_trunc_clean(ms[0], 100)}')
+                    for m in ms[1:8]:
+                        sub_lines.append(f'          - {_trunc_clean(m, 90)}')
                 elif seg:
-                    # 한도 넉넉히 — 마일스톤 표(단계별 [ N ]억) 등 딜 경제성이 잘리지 않게
                     sub_lines.append(f'      {circ[j]} {_trunc_clean(seg, 350)}')
             if sub_lines:
                 items.append((f'  • {lead}\n' if lead else '  • ') + '\n'.join(sub_lines))
