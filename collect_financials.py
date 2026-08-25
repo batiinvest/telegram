@@ -145,6 +145,12 @@ ACCOUNT_MAP = {
     "법인세차감전이익":              "pretax_income",   # "순"자 없는 변형
     "법인세차감전손실":              "pretax_income",
     "법인세차감전이익(손실)":         "pretax_income",
+    # 금융손익 (이자상환능력용 — finance_cost=금융비용/금융원가, finance_income=금융수익)
+    "금융비용":                    "finance_cost",
+    "금융원가":                    "finance_cost",
+    "금융비용(순액)":               "finance_cost",
+    "금융수익":                    "finance_income",
+    "금융이익":                    "finance_income",
     # 재무상태표
     "자산총계":                   "total_assets",
     "자산 합계":                  "total_assets",
