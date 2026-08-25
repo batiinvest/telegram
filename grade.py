@@ -338,17 +338,34 @@ def save_trend_flags(sb, year: str, quarter: str) -> int:
         by_code[code].sort(key=lambda x: (x['bsns_year'], x['quarter']))
 
     flagged = 0
+    failed = 0
+    consec_fail = 0
     for code, hist in by_code.items():
         flags = detect_trend_flags(hist)
         # 신호 없는 경우도 빈 dict로 저장해 명시적으로 "검사 완료" 표시
-        safe_execute(sb.table('financials')
-           .update({'trend_flags': flags})
-           .eq('stock_code', code)
-           .eq('bsns_year',  year)
-           .eq('quarter',    quarter)
-           .eq('fs_div',     'CFS'), label='trend-update')
+        try:
+            safe_execute(sb.table('financials')
+               .update({'trend_flags': flags})
+               .eq('stock_code', code)
+               .eq('bsns_year',  year)
+               .eq('quarter',    quarter)
+               .eq('fs_div',     'CFS'), retries=3, base_sleep=1.0, label='trend-update')
+            consec_fail = 0
+        except Exception as e:
+            # 종목 하나 실패가 루프 전체를 죽이지 않게 격리 — 다음 실행이 자동 보정.
+            # 단 연속 실패가 쌓이면 진짜 연결장애로 보고 조기 중단(무의미한 그라인딩 방지).
+            failed += 1
+            consec_fail += 1
+            if consec_fail >= 20:
+                raise RuntimeError(
+                    f"추세신호 연속 {consec_fail}개 업데이트 실패 — 연결 장애로 중단 "
+                    f"(총 {failed}개 실패): {e}")
+            continue
         if any(flags.values()):
             flagged += 1
 
+    if failed:
+        log.warning(f"📈 [추세신호] {failed}/{len(by_code)}개 업데이트 실패 "
+                    f"(일시 연결 불안정) — 다음 실행 시 자동 보정")
     log.info(f"📈 [추세신호] {year} {quarter} — {flagged}개 경고 신호 (전체 {len(by_code)}개 종목)")
     return flagged
