@@ -255,10 +255,11 @@ def _parse_numbered_body(text: str, max_items: int = 8, val_limit: int = 300) ->
                 seg_subs = [s.strip() for s in re.split(r'\s+-\s+', seg) if s.strip()]
                 if len(seg_subs) >= 2:
                     hd = seg_subs[0].rstrip(':').strip()
-                    body = ' / '.join(_trunc_clean(s, 90) for s in seg_subs[1:5])
+                    body = ' / '.join(_trunc_clean(s, 130) for s in seg_subs[1:5])
                     sub_lines.append(f'      {circ[j]} {hd}: {body}')
                 elif seg:
-                    sub_lines.append(f'      {circ[j]} {_trunc_clean(seg, 200)}')
+                    # 한도 넉넉히 — 마일스톤 표(단계별 [ N ]억) 등 딜 경제성이 잘리지 않게
+                    sub_lines.append(f'      {circ[j]} {_trunc_clean(seg, 350)}')
             if sub_lines:
                 items.append((f'  • {lead}\n' if lead else '  • ') + '\n'.join(sub_lines))
                 i += 2
