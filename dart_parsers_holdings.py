@@ -60,8 +60,13 @@ def parse_large_holding_report(kv: dict) -> list:
     if reporter:
         lines.append(f'👤 보고자: {reporter}')
 
-    # 보유목적 (API에 없으므로 HTML KV 사용)
+    # 보유목적 (API에 없으므로 HTML KV 사용) — 코드('02' 등)면 HTML 디코딩 라벨로 변환
     purpose = _get(kv, 'Purpose of holding', '보유목적', '주식등의보유목적', '보유 목적')
+    if purpose and re.fullmatch(r'\d+', purpose.strip()):
+        _txt = re.sub(r'<[^>]+>', ' ', kv.get('_html', ''))
+        _m = re.search(r'보유\s*목적[\s:]*([가-힣]{2,10})', _txt)
+        purpose = (_m.group(1) if _m else
+                   {'01': '경영참여', '02': '단순투자', '03': '일반투자'}.get(purpose.strip(), purpose))
     if purpose and '?' not in purpose:
         lines.append(f'🎯 보유목적: {_trunc(purpose, 40)}')
 
@@ -81,8 +86,10 @@ def parse_large_holding_report(kv: dict) -> list:
         except ValueError:
             lines.append(f'📊 보유비율: {after_rt}%')
         if stkqy:
-            lines.append(f'🔢 보유주식: {stkqy}주')
-        if ctr_stkrt and ctr_stkrt != '0':
+            _sc = api.get('stkqy_irds', '')
+            _tail = f' (증감 {_sc}주)' if _sc and _sc not in ('-', '0', '') else ''
+            lines.append(f'🔢 보유주식: {stkqy}주{_tail}')
+        if ctr_stkrt and ctr_stkrt not in ('0', '-', ''):
             lines.append(f'📋 주요계약: {ctr_stkrt}%')
 
     # 보고사유 — API 우선 (인코딩 깨짐 없음)
