@@ -145,11 +145,11 @@ def parse_major_shareholder_change(kv: dict) -> list:
                 if re.match(r'^[\d,]+$', nk) and re.match(r'^[\d.]+$', nv):
                     after_shares, after_ratio = nk, nv
 
-    # 다자 컨소시엄 등으로 변경후 최대주주(리드)를 못 찾으면 요약('외 N인')으로 대체 —
-    # 관계셀이 국적으로 밀리는 서식에서도 정확한 신규 최대주주등을 표시.
+    # 변경후 최대주주(리드)를 관계라벨로 못 찾으면 요약 키로 대체 — 컨소시엄('외 N인'),
+    # 관계셀이 국적/요약으로 밀리는 서식('최대주주' 요약이 신규 최대주주명)에서도 표시.
     if not after_name:
-        summ = _get(kv, '정정후_변경후', '변경후 최대주주등', '변경후최대주주등')
-        if summ and summ not in ('최대주주등', '변경후', '-', ''):
+        summ = _get(kv, '정정후_변경후', '변경후 최대주주등', '변경후최대주주등', '최대주주')
+        if summ and summ not in ('최대주주등', '변경후', '-', '') and '?' not in summ:
             after_name = summ  # 요약이라 단일 지분율은 없음
 
     if before_name or after_name:

@@ -426,7 +426,9 @@ def parse_market_measure(kv: dict) -> list:
     if v := _get(kv, '근거규정', '근거'):
         lines.append(f'📋 근거: {_trunc(v, 60)}')
 
-    if v := _get(kv, '5.기타', '기타'):
+    # KRX 기타시장안내(1.제목/2.내용) 형은 아래 프로즈 경로가 더 정확(가처분 기각 등
+    # 결과 판정 포함)하므로, 약한 '기타' 불릿으로 lines를 선점해 폴백을 막지 않도록 제외.
+    if not (_get(kv, '제목') and _get(kv, '내용')) and (v := _get(kv, '5.기타', '기타')):
         lines.extend(_parse_etc_field(v)[:4])
 
     # KRX 기타시장안내형 폴백 — 정형 필드가 없으면 제목/내용 KV,
