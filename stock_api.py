@@ -1687,7 +1687,7 @@ def get_leading_stocks_summary(sb_client, top_n: int = 5) -> str:
     return "\n".join(lines)
 
 
-def get_daily_flow_summary(sb_client, monitored_only: bool = False) -> str:
+def get_daily_flow_summary(sb_client, monitored_only: bool = False, exclude_codes=None, out_codes=None) -> str:
     """
     오늘(최신 거래일) 외국인·기관 순매수/순매도 Top3 — 마감 브리핑용.
     monitored_only=True 면 관심종목(is_monitored)으로 한정 — 마감 브리핑 2번째
@@ -1730,14 +1730,24 @@ def get_daily_flow_summary(sb_client, monitored_only: bool = False) -> str:
     for r in rows:
         price = r.get('price') or 0
         flows.append({
+            'code': (r.get('stock_code') or '').split('.')[0],
             'name': r.get('corp_name', ''),
             'f': (r.get('foreign_net_buy') or 0) * price,
             'i': (r.get('institution_net_buy') or 0) * price,
         })
+    # ① 시장 전체에 이미 나온 종목은 ② 관심종목 수급에서 제외(중복 방지)
+    if exclude_codes:
+        flows = [x for x in flows if x['code'] not in exclude_codes]
+    if not flows:
+        return ""
 
     def _amt(n: int) -> str:
+        eok = n // 100_000_000
+        if abs(eok) >= 10000:            # 1조 이상은 조로 압축(가독성)
+            sign = '+' if eok >= 0 else ''
+            return f"{sign}{eok / 10000:,.2f}조"
         sign = '+' if n >= 0 else ''
-        return f"{sign}{n // 100_000_000:,}억"
+        return f"{sign}{eok:,}억"
 
     def _top(key, rev, n=3):
         return sorted(flows, key=lambda x: x[key], reverse=rev)[:n]
@@ -1787,6 +1797,10 @@ def get_daily_flow_summary(sb_client, monitored_only: bool = False) -> str:
     if not monitored_only and RANK_TURNOVER_MIN and ranked and min(ranked) < RANK_TURNOVER_MIN:
         note += f" · 거래대금 {RANK_TURNOVER_MIN // 100_000_000:,}억 이상 종목 기준"
     lines.append(f"<i>{note}</i>")
+    if out_codes is not None:
+        out_codes.update(x['code'] for x in both[:3])
+        for _lb, _items, _k in blocks:
+            out_codes.update(x['code'] for x in _items if x['name'])
     return "\n".join(lines)
 
 

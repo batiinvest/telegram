@@ -98,8 +98,9 @@ def job_daily_closing():
         _tags = stock_api.get_catalyst_tags(_sbc)
         _breadth = stock_api.get_market_breadth(_sbc)
         _flow = stock_api.get_flow_map(_sbc)
-        _daily_flow = stock_api.get_daily_flow_summary(_sbc)
-        _uni_flow = stock_api.get_daily_flow_summary(_sbc, monitored_only=True)
+        _dflow_codes = set()
+        _daily_flow = stock_api.get_daily_flow_summary(_sbc, out_codes=_dflow_codes)
+        _uni_flow = stock_api.get_daily_flow_summary(_sbc, monitored_only=True, exclude_codes=_dflow_codes)
     except Exception as _te:
         logging.error(f"[마감] 촉매태그/시장폭/수급 오류: {_te}")
         _tags = None

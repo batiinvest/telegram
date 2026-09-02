@@ -94,6 +94,8 @@ def _render_urgent(urgent):
         else:
             other.append(f"{corp} — {_base_type(nm)[:20]}")
 
+    _dd = lambda xs: list(dict.fromkeys(xs))
+    delist, watch, halt, resume, other = map(_dd, (delist, watch, halt, resume, other))
     lines = ['🚨 <b>긴급</b>']
     for d in delist:
         lines.append(f'• {d}')
@@ -183,7 +185,12 @@ def generate(sb=None) -> str:
         blocks.append('\n'.join(lines))
 
     if contract:
-        rows = sorted(contract, key=lambda x: -_amt_num(x[1]))
+        # 같은 종목 중복(신고서/정정 등 다른 서식)·빈 금액 제거 — 금액 큰 것 우선
+        best = {}
+        for _c, _a in contract:
+            if _c not in best or _amt_num(_a) > _amt_num(best[_c]):
+                best[_c] = _a
+        rows = sorted(best.items(), key=lambda x: -_amt_num(x[1]))
         lines = ['🤝 <b>공급계약·수주</b>']
         for corp, a in rows:
             lines.append(f'• {corp}: {a}' if a else f'• {corp}')
@@ -200,7 +207,7 @@ def generate(sb=None) -> str:
 
     if gov:
         lines = ['🔄 <b>지배구조·주주환원</b>']
-        for g in gov[:8]:
+        for g in list(dict.fromkeys(gov))[:8]:
             lines.append(f'• {g}')
         blocks.append('\n'.join(lines))
 
