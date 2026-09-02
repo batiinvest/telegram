@@ -545,7 +545,7 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
 
     # ⑤ 한 줄 요약 — 급락일이 최우선 (레짐 게이트와 동일 모순 방지)
     if kr_avg <= -2.0:
-        strategy = "당일 급락, 저가 매수를 자제하고 후속 하락·반대매매 소화를 먼저 확인"
+        strategy = "당일 급락, 성급한 저가 매수는 자제"  # 후속하락·반대매매 "확인"은 체크포인트가 전담(중복 제거)
     elif vix >= THR_VIX_HIGH:
         strategy = f"VIX {vix:.0f} 공포 구간, 추격을 멈추고 현금 비중 점검"
     elif market_regime == "risk-off":
