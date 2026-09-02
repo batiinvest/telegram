@@ -22,10 +22,10 @@ def fmt_change_pct(v: Optional[float], dec: int = 2) -> str:
 
 
 def chg_icon(v: Optional[float]) -> str:
-    """등락 방향 아이콘 (▲/▼/━)"""
+    """등락 방향 아이콘 (🔺/🔽/━)"""
     if v is None or v == 0:
         return '━'
-    return '▲' if v > 0 else '▼'
+    return '🔺' if v > 0 else '🔽'
 
 
 # ── 금액/시총 ─────────────────────────────────────────────────────────────────
