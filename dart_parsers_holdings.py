@@ -254,7 +254,7 @@ def parse_insider_report(kv: dict) -> list:
         if prev == 0:
             lines.append(f'📦 신규취득: {after:,}주{_ratio(after)}')
         else:
-            arrow = '🔺' if change >= 0 else '🔻'
+            arrow = '🔴' if change >= 0 else '🔵'
             lines.append(f'📦 보유: {prev:,}주{_ratio(prev)} {arrow} {after:,}주{_ratio(after)}')
 
     if change_date:

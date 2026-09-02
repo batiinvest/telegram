@@ -73,7 +73,7 @@ def get_weather_icon(rate: float) -> str:
     return "☔️"
 
 def get_arrow(val):
-    return "🔺" if val > 0 else "🔽" if val < 0 else ""
+    return "🔴" if val > 0 else "🔵" if val < 0 else ""
 
 def _get_industry_targets(industry_name: str) -> tuple[str, list, dict] | None:
     """
@@ -617,7 +617,7 @@ def get_stock_chart(code: str, name: str = None) -> Optional[str]:
             elif rsi_val >= 70:                             summary = "단기 과열 주의"
             elif is_squeeze:                                summary = "변동성 축소, 방향성 결정 임박"
 
-        arrow = "🔺" if change_val > 0 else "🔽" if change_val < 0 else ""
+        arrow = "🔴" if change_val > 0 else "🔵" if change_val < 0 else ""
         return (
             f"📈 <b>[{name or code}] 기술적 심층 진단</b>\n"
             f"════════════\n"
@@ -839,7 +839,7 @@ def get_sector_funds(industry_name: str) -> str:
 
     def to_eok(val): 
         eok = val // 100000000
-        icon = "🔺" if eok > 0 else "🔻" if eok < 0 else ""
+        icon = "🔴" if eok > 0 else "🔵" if eok < 0 else ""
         return f"{icon} {eok:+,}억"
 
     stock_flows.sort(key=lambda x: x['sum_major'], reverse=True)
@@ -955,7 +955,7 @@ def get_market_scoreboard(shared_prices: dict = None, breadth: str = None,
     def fmt_idx(data, name):
         if not data: return f"{name} (데이터 없음)"
         p, r = data['price'], data['rate']
-        icon = "🔺" if r > 0 else "🔽" if r < 0 else "➖"
+        icon = "🔴" if r > 0 else "🔵" if r < 0 else "➖"
         return f"<b>{name}</b> {p:,.2f} ({icon}{fmt_change_pct(r)})"
 
     # 1. 지수 조회 — 섹터 전용 호출은 지수를 쓰지 않으므로 KIS 2콜 생략
@@ -1035,7 +1035,7 @@ def get_market_scoreboard(shared_prices: dict = None, breadth: str = None,
 
     for i, sec in enumerate(sector_data):
         rank = i + 1
-        r_icon = '🔺' if sec['rate'] > 0 else '🔽' if sec['rate'] < 0 else '➖'
+        r_icon = '🔴' if sec['rate'] > 0 else '🔵' if sec['rate'] < 0 else '➖'
         msg += f"{rank}. <b>{sec['name']}</b> {r_icon} {fmt_change_pct(sec['rate'])}\n"
 
     msg += "════════════\n💡 <b>Tip:</b> 상세 분석은 각 산업방에서 <i>/업황</i> 또는 <i>/자금</i>"
@@ -1072,12 +1072,12 @@ def get_universe_ranking(shared_prices: dict = None, tag_map: dict = None) -> st
     from format_utils import fmt_change_pct
     for i, item in enumerate(top_5):
         _tag = tag_map.get(item['code'], '') if tag_map else ''
-        msg += f"{i+1}. <b>{item['name']}</b> (🔺{fmt_change_pct(item['rate'])})" + (f"  {_tag}" if _tag else "") + "\n"
+        msg += f"{i+1}. <b>{item['name']}</b> (🔴{fmt_change_pct(item['rate'])})" + (f"  {_tag}" if _tag else "") + "\n"
         
     msg += "\n💧 <b>급락 Bottom 5</b>\n"
     for i, item in enumerate(bottom_5):
         _tag = tag_map.get(item['code'], '') if tag_map else ''
-        msg += f"{i+1}. {item['name']} (🔽{fmt_change_pct(item['rate'])})" + (f"  {_tag}" if _tag else "") + "\n"
+        msg += f"{i+1}. {item['name']} (🔵{fmt_change_pct(item['rate'])})" + (f"  {_tag}" if _tag else "") + "\n"
 
     msg += f"════════════\n(총 {len(ranking_data)}개 종목 분석)"
     return msg
@@ -1266,14 +1266,14 @@ def get_industry_theme_ranking(industry_name: str, shared_prices: dict = None,
         t_name = item['theme']
         avg = item['avg']
         
-        icon = "🔥" if avg >= 1.0 else "🔺" if avg > 0 else "➖" if avg == 0 else "🔽"
+        icon = "🔥" if avg >= 1.0 else "🔴" if avg > 0 else "➖" if avg == 0 else "🔵"
         msg += f"<b>{rank}. {t_name}</b> {icon} {fmt_change_pct(avg)}\n"
         
         for stock in item['stocks']:
             s_name = stock['name']
             s_rate = stock['rate']
             cap_str = format_money(stock['cap'])
-            s_icon = "🔺" if s_rate > 0 else "🔽" if s_rate < 0 else "➖"
+            s_icon = "🔴" if s_rate > 0 else "🔵" if s_rate < 0 else "➖"
             # 상한가/하한가 배지 — prdy_vrss_sign(1=상한, 4=하한)이 등락률 임계보다 정확
             # (KIS 부호코드: 1상한·2상승·3보합·4하한·5하락 — 5는 일반 하락이라 배지 없음)
             _sign = str(stock.get("sign") or "")
@@ -1372,7 +1372,7 @@ def get_sector_fundamental_comparison(target_name: str) -> str:
     msg = f"📑 <b>[{mode}] 심층 비교 분석</b>\n════════════\n"
 
     for i, d in enumerate(results):
-        ti = {p: "🔺" if d[f't_{p}'] > 0 else "🔽" for p in ('5d', '20d', '60d')}
+        ti = {p: "🔴" if d[f't_{p}'] > 0 else "🔵" for p in ('5d', '20d', '60d')}
 
         msg += f"{i+1}️⃣ <b>{d['name']}</b> ({d['cap_str']})\n"
         msg += (
@@ -1750,10 +1750,10 @@ def get_daily_flow_summary(sb_client, monitored_only: bool = False) -> str:
         return "\n".join(lines)
 
     blocks = [
-        ("🔺 <b>외국인 순매수</b>", _top('f', True),  'f'),
-        ("🔻 <b>외국인 순매도</b>", _top('f', False), 'f'),
-        ("🔺 <b>기관 순매수</b>",   _top('i', True),  'i'),
-        ("🔻 <b>기관 순매도</b>",   _top('i', False), 'i'),
+        ("🔴 <b>외국인 순매수</b>", _top('f', True),  'f'),
+        ("🔵 <b>외국인 순매도</b>", _top('f', False), 'f'),
+        ("🔴 <b>기관 순매수</b>",   _top('i', True),  'i'),
+        ("🔵 <b>기관 순매도</b>",   _top('i', False), 'i'),
     ]
 
     # 양대 주체가 같이 산 종목 — 한쪽만 산 것보다 신호가 강하다.
@@ -1881,20 +1881,20 @@ def get_weekly_flow_summary(sb_client) -> str:
         f"💰 <b>[주간 스마트머니 동향]</b>\n"
         f"({week_str} 누적 · 관심종목 기준)\n"
         f"════════════\n"
-        f"🔺 <b>외국인 순매수 Top5</b>\n"
+        f"🔴 <b>외국인 순매수 Top5</b>\n"
     )
     for i, r in enumerate(f_buy, 1):
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['f_amt'])}\n"
 
-    msg += "\n🔻 <b>외국인 순매도 Top5</b>\n"
+    msg += "\n🔵 <b>외국인 순매도 Top5</b>\n"
     for i, r in enumerate(f_sell, 1):
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['f_amt'])}\n"
 
-    msg += "\n════════════\n🔺 <b>기관 순매수 Top5</b>\n"
+    msg += "\n════════════\n🔴 <b>기관 순매수 Top5</b>\n"
     for i, r in enumerate(i_buy, 1):
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['i_amt'])}\n"
 
-    msg += "\n🔻 <b>기관 순매도 Top5</b>\n"
+    msg += "\n🔵 <b>기관 순매도 Top5</b>\n"
     for i, r in enumerate(i_sell, 1):
         msg += f"{i}. <b>{r['name']}</b>  {_fmt_amt(r['i_amt'])}\n"
 
@@ -2097,10 +2097,10 @@ def get_macro_briefing(data: dict, sectors: dict = None, sector_date: str = None
     from format_utils import fmt_change_pct
 
     def _chg(chg):
-        """등락률 포맷: (🔺/🔽/➖ +x.xx%). None이면 빈 문자열."""
+        """등락률 포맷: (🔴/🔵/➖ +x.xx%). None이면 빈 문자열."""
         if chg is None:
             return ''
-        icon = '🔺' if chg > 0 else '🔽' if chg < 0 else '➖'
+        icon = '🔴' if chg > 0 else '🔵' if chg < 0 else '➖'
         return f"  ({icon}{fmt_change_pct(chg)})"
 
     date_str = datetime.now().strftime('%m.%d')
@@ -2149,9 +2149,9 @@ def get_macro_briefing(data: dict, sectors: dict = None, sector_date: str = None
                 tag = f"  (현지 {int(sector_date[5:7])}/{int(sector_date[8:10])})"
             lines.append(f"🏭 <b>간밤 미국 섹터</b>{tag}")
             if ups:
-                lines.append("🔺 " + " · ".join(f"{k} {fmt_change_pct(v, 1)}" for k, v in ups))
+                lines.append("🔴 " + " · ".join(f"{k} {fmt_change_pct(v, 1)}" for k, v in ups))
             if downs:
-                lines.append("🔽 " + " · ".join(f"{k} {fmt_change_pct(v, 1)}" for k, v in downs))
+                lines.append("🔵 " + " · ".join(f"{k} {fmt_change_pct(v, 1)}" for k, v in downs))
             lines.append("")
 
     # ── 미 10년물 + 달러/원 (자금흐름 핵심 지표) ─────────────────

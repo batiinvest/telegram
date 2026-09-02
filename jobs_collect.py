@@ -751,7 +751,7 @@ def _alert_new_high(rows: list):
         sector   = r.get('sector_group') or '기타'
 
         chg_str  = fmt_change_pct(chg_pct)
-        chg_icon = '🔺' if chg_pct > 0 else ('🔽' if chg_pct < 0 else '➖')
+        chg_icon = '🔴' if chg_pct > 0 else ('🔵' if chg_pct < 0 else '➖')
         badge      = _new_high_streak_badge(streak, capped)             # 메인방 한 줄용
         badge_long = _new_high_streak_badge(streak, capped, long=True)  # 종목방 개별용
 

@@ -148,7 +148,7 @@ def consensus_line(sp: dict) -> str:
     if pct > 0:
         return f"🎯 컨센 상회 — 영업익 예상 대비 +{pct:.1f}% (예상 {cons})"
     if pct < 0:
-        return f"🔻 컨센 하회 — 영업익 예상 대비 {pct:.1f}% (예상 {cons})"
+        return f"🔵 컨센 하회 — 영업익 예상 대비 {pct:.1f}% (예상 {cons})"
     return f"➖ 컨센 부합 — 영업익 예상 수준 (예상 {cons})"
 
 

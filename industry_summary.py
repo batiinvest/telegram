@@ -210,9 +210,9 @@ def build_message(industry, date_obj, sector, movers, summ_rows) -> str:
     # 상승/하락
     L.append("")
     if up:
-        L.append("🔺 " + "  ".join(f"{m['name']} {fmt_pct(m['chg'])}" for m in by_chg[:3] if (m['chg'] or 0) > 0))
+        L.append("🔴 " + "  ".join(f"{m['name']} {fmt_pct(m['chg'])}" for m in by_chg[:3] if (m['chg'] or 0) > 0))
     if dn:
-        L.append("🔽 " + "  ".join(f"{m['name']} {fmt_pct(m['chg'])}" for m in by_chg[::-1][:3] if (m['chg'] or 0) < 0))
+        L.append("🔵 " + "  ".join(f"{m['name']} {fmt_pct(m['chg'])}" for m in by_chg[::-1][:3] if (m['chg'] or 0) < 0))
 
     # 오늘의 공시·뉴스 (종목 리포트 카드와 용어 통일)
     L.append("")

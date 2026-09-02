@@ -487,7 +487,7 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
                 f"최근 5일 한국 {_fmt(r['kr'])}, 해외 {_fmt(r['us'])} (되돌림 단정 아님, 지속 여부 관찰)")
     if sync_down:
         inds = " · ".join(x["ind"] for x in sync_down[:3])
-        risk_factors.append(f"🔻 {inds}: 해외와 한국이 같이 밀리고 있습니다 (최근 5일 동반 하락)")
+        risk_factors.append(f"🔵 {inds}: 해외와 한국이 같이 밀리고 있습니다 (최근 5일 동반 하락)")
     if len(kr_only_down) >= 3:
         inds = " · ".join(x["ind"] for x in kr_only_down[:3])
         risk_factors.append(
