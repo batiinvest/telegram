@@ -652,3 +652,37 @@ def parse_merger(kv: dict) -> list:
         lines.append('📌 소규모합병 — 주식매수청구권 없음')
 
     return lines if len(lines) > 1 else []
+
+
+def parse_offering_price(kv: dict) -> list:
+    """유상증자 1차/확정 발행가액 결정 — 발행주식·발행가액·액면가·확정공고 예정.
+
+    유상증자결정 후속(가액 확정 단계). '유상증자' 키워드로 parse_rights_offering이
+    잡히나 발행가 폼(한글 번호키)은 안 맞아 폴백으로 새던 유형."""
+    rnm = kv.get('_report_nm', '')
+    stage = '확정' if '확정' in rnm else '1차'
+    lines = [f'💵 유상증자 {stage} 발행가액 결정']
+
+    qty = _get(kv, '나. 주식수(주)', '주식수(주)', '나.주식수(주)')
+    kind = _get(kv, '가. 주식의 종류', '주식의 종류')
+    if qty and re.search(r'\d', qty):
+        lines.append(f'🔢 발행주식: {qty}주' + (f' ({kind})' if kind else ''))
+
+    price = _get(kv, '2. 1차발행가액(1주당)', '2. 확정발행가액(1주당)',
+                 '1차발행가액(1주당)', '확정발행가액(1주당)', '발행가액(1주당)')
+    par = _get(kv, '3. 액면가(원)', '액면가(원)')
+    if price:
+        lines.append(f'💰 {stage} 발행가액: {price}' + (f' (액면 {par}원)' if par else ''))
+
+    if v := _get(kv, '4. 1차발행가액 산출일', '1차발행가액 산출일',
+                 '확정발행가액 산출일', '산출일'):
+        lines.append(f'📅 산출일: {v}')
+
+    # 확정발행가 공고 예정일 — 기타 문구에서 추출 (1차 단계에서만)
+    if stage == '1차':
+        etc = _get(kv, '5. 기타 투자판단에 참고할 사항', '기타 투자판단에 참고할 사항') or ''
+        m = re.search(r'확정발행가액[^0-9]{0,25}(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일', etc)
+        if m:
+            lines.append(f'📋 확정발행가: {m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d} 공고 예정')
+
+    return lines if len(lines) > 1 else []

@@ -24,8 +24,8 @@ def _all_parsers():
 
 
 def test_parser_count_stable():
-    """파서 수 54 — 예상치 못한 추가/삭제 감지."""
-    assert len(_all_parsers()) == 54
+    """파서 수 55 — 예상치 못한 추가/삭제 감지."""
+    assert len(_all_parsers()) == 55
 
 
 def test_all_parsers_empty_kv_return_list():

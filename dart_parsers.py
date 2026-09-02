@@ -32,6 +32,8 @@ _PARSER_MAP = [
     (['유무상증자'],                         parse_combined_ci),
     # 청약결과·발행결과는 '유상증자'보다 먼저 — 제목에 유상증자가 있어 증자결정 파서로 새던 문제
     (['청약결과', '발행결과'],                 parse_subscription_result),
+    # 발행가액결정(유상증자 가액확정 후속)은 유상증자결정용 parse_rights_offering보다 먼저.
+    (['발행가액결정', '발행가액의결정'],       parse_offering_price),
     (['유상증자'],                          parse_rights_offering),
     (['무상증자'],                          parse_bonus_issue),
     (['단일판매', '공급계약체결', '수주'],   parse_contract),
