@@ -27,7 +27,7 @@ def test_fmt_change_pct(args, expected):
 
 
 @pytest.mark.parametrize("v, expected", [
-    (None, "━"), (0, "━"), (3.1, "▲"), (-2.0, "▼"),
+    (None, "━"), (0, "━"), (3.1, "🔴"), (-2.0, "🔵"),
 ])
 def test_chg_icon(v, expected):
     assert chg_icon(v) == expected
