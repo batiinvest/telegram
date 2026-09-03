@@ -64,7 +64,8 @@ def _fetch_window(end_yyyymmdd: str) -> dict:
             except (KeyError, ValueError, TypeError):
                 merged.pop(iso, None)
     # 양 시장 6개 값이 모두 있는 완전한 행만
-    return {k: v for k, v in merged.items() if len(v) == 7}
+    _complete = 1 + len(MARKETS) * len(FIELDS)  # base_date + 각 시장·필드
+    return {k: v for k, v in merged.items() if len(v) == _complete}
 
 
 def _upsert(sb, rows: list) -> int:

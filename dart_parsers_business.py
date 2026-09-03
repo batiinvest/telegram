@@ -572,7 +572,7 @@ def parse_earnings_change(kv: dict) -> list:
         if not _NUM.match((v or '').replace(' ', '')):
             continue
         seen_metric.add(name)
-        curr = int(v.replace(',', ''))
+        curr = int(v.replace(',', '').replace(' ', ''))
 
         pct = flip = ''
         if idx + 2 < len(items):
