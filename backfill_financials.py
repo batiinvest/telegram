@@ -48,6 +48,7 @@ from collect_financials import (
     convert_to_pure_quarter,
     calculate_growth_rates,
     get_q3_cumulative,
+    cumulative_prev_cf,
     build_fin_cache,
     FLOW_COLS,
     auto_detect_quarter,
@@ -225,22 +226,10 @@ def _collect_and_save(dart, sb, fin_cache: dict, t: dict,
                 except Exception as e:
                     log.warning(f"[Q4폴백오류] {corp_name} {year}: {e}")
         else:
-            cached = fin_cache.get(stock_code, {}).get((year, prev_q, fs_div))
-            if cached:
-                prev_row = cached
-            else:
-                try:
-                    res = sb.table("financials") \
-                        .select(",".join(["bsns_year", "quarter", "fs_div"] + FLOW_COLS)) \
-                        .eq("stock_code", stock_code) \
-                        .eq("bsns_year", year) \
-                        .eq("quarter", prev_q) \
-                        .eq("fs_div", fs_div) \
-                        .limit(1).execute()
-                    if res.data:
-                        prev_row = {col: res.data[0].get(col) for col in FLOW_COLS}
-                except Exception as e:
-                    log.debug(f"[DB조회실패] {corp_name} {year} {prev_q}: {e}")
+            # Q2/Q3 현금흐름은 누적 → prev = 직전분기까지 '누적'(저장 단독 Q1..Q_{n-1} 합).
+            _cp = {pq: fin_cache.get(stock_code, {}).get((year, pq, fs_div))
+                   for pq in ("Q1", "Q2")}
+            prev_row = cumulative_prev_cf(sb, stock_code, year, quarter, fs_div, _cp)
 
     row = convert_to_pure_quarter(row, prev_row)
 

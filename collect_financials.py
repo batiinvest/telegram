@@ -451,6 +451,41 @@ def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> O
         return None
 
 
+def cumulative_prev_cf(sb, code, year, quarter, fs_div, cache_priors=None):
+    """Q2/Q3 현금흐름 순분기 변환용 prev = '직전분기까지 누적' 현금흐름.
+
+    현금흐름 thstrm_amount는 누적(YTD)이라 분기 단독 = 누적ₙ − 누적ₙ₋₁ 이고,
+    누적ₙ₋₁ = 이미 저장된 단독(Q1..Qₙ₋₁)의 합이다. 종전 버그: prev로 직전 '한 분기'
+    단독만 빼서 Q3가 정확히 Q1 금액만큼 과대(Q2는 Q1의 누적==단독이라 우연히 정상).
+    income은 Q2/Q3에서 변환하지 않으므로 현금흐름 컬럼만 합산해 반환한다.
+
+    cache_priors: {quarter: row_dict} — 배치 중 DB 미반영 분기를 위한 인메모리 우선조회.
+    """
+    priors = {"Q2": ["Q1"], "Q3": ["Q1", "Q2"]}.get(quarter)
+    if not priors:
+        return None
+    code = str(code).split(".")[0]
+    cache_priors = cache_priors or {}
+    acc = {}
+    for pq in priors:
+        src = cache_priors.get(pq)
+        if src is None:
+            try:
+                r = (sb.table("financials")
+                       .select(",".join(["quarter"] + CASHFLOW_COLS))
+                       .eq("stock_code", code).eq("bsns_year", year)
+                       .eq("quarter", pq).eq("fs_div", fs_div).limit(1).execute())
+                src = r.data[0] if r.data else None
+            except Exception:
+                src = None
+        if src:
+            for col in CASHFLOW_COLS:
+                v = src.get(col)
+                if v is not None:
+                    acc[col] = acc.get(col, 0) + v
+    return acc or None
+
+
 def convert_to_pure_quarter(row: dict, prev_row: Optional[dict]) -> dict:
     """
     DART 제공 방식:
@@ -884,6 +919,11 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
                             except Exception as _fe:
                                 log.warning(f"[Q4폴백오류] {corp_name}: {_fe}")
                         row = convert_to_pure_quarter(row, prev_row)
+                    elif quarter in ("Q2", "Q3"):
+                        # Q2/Q3 현금흐름 누적 → 순분기 변환 (prev = 직전분기까지 누적)
+                        fs_div_row = row.get("fs_div", "CFS")
+                        prev_row = cumulative_prev_cf(sb, row.get("stock_code"), year, quarter, fs_div_row)
+                        row = convert_to_pure_quarter(row, prev_row)
                     collected.append(row)
                 ok += 1
                 break
@@ -1167,35 +1207,17 @@ def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,
                             except Exception as _fb_e:
                                 log.warning(f"[Q4폴백오류] {t['corp_name']} {year}: {_fb_e}")
                     else:
-                        # Q2/Q3: 캐시 또는 DB에서 이전 분기 단독값 조회
+                        # Q2/Q3 현금흐름은 누적 → prev = 직전분기까지 '누적'(저장 단독 Q1..Q_{n-1} 합).
+                        # 캐시(배치 중 DB 미반영분) 우선, 헬퍼가 없으면 DB 조회.
                         normalized_code = t["stock_code"].split(".")[0]
-                        prev_cache_key = (year, prev_q, fs_div)
-                        cached = fin_cache.get(normalized_code, {}).get(prev_cache_key)
-                        if cached:
-                            prev_row = cached
-                            log.info(
-                                f"[캐시HIT] {t['corp_name']} {year} {prev_q} → {quarter} 변환 "
-                                f"(prev_revenue={cached.get('revenue')})"
+                        _cp = {pq: fin_cache.get(normalized_code, {}).get((year, pq, fs_div))
+                               for pq in ("Q1", "Q2")}
+                        prev_row = cumulative_prev_cf(sb, normalized_code, year, quarter, fs_div, _cp)
+                        if prev_row is None:
+                            log.warning(
+                                f"[변환prev없음] {t['corp_name']} {year} {quarter} — "
+                                f"이전분기 데이터 없음, 현금흐름 미변환(누적 유지)"
                             )
-                        else:
-                            try:
-                                res = sb.table("financials") \
-                                    .select(",".join(["bsns_year","quarter","fs_div"] + FLOW_COLS)) \
-                                    .eq("stock_code", normalized_code) \
-                                    .eq("bsns_year", year) \
-                                    .eq("quarter", prev_q) \
-                                    .eq("fs_div", fs_div) \
-                                    .limit(1).execute()
-                                if res.data:
-                                    prev_row = {col: res.data[0].get(col) for col in FLOW_COLS}
-                                    log.info(f"[DB조회] {t['corp_name']} {year} {prev_q} → {quarter} 변환")
-                                else:
-                                    log.warning(
-                                        f"[변환실패] {t['corp_name']} {year} {quarter} — "
-                                        f"이전분기({prev_q}) DB에 없음 (stock_code={normalized_code}, fs_div={fs_div})"
-                                    )
-                            except Exception as pe:
-                                log.warning(f"[DB조회실패] {t['corp_name']} {year} {prev_q}: {pe}")
 
                 row = convert_to_pure_quarter(row, prev_row)
 
