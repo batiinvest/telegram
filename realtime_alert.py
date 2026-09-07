@@ -235,8 +235,10 @@ class KisMyStockScanner:
         key = f"{market_timer.get_now().strftime('%Y%m%d')}_{key}"
         with self._lock:
             if not self.sent_history.contains(key):
-                stock_api.send_telegram(chat_id, msg)
-                self.sent_history.add(key)
+                # 발송 성공한 경우에만 기록 — 실패(429/네트워크 등) 시 미기록으로 다음 사이클 재시도.
+                # (급변동장 429는 급등·상한가 알림과 동시다발 → 무조건 기록하면 그 순간 알림 영구 소실)
+                if stock_api.send_telegram(chat_id, msg):
+                    self.sent_history.add(key)
 
     # ===============================================================
     # 🛠️ [Helper] 제보 및 관리자 기능 (기존 로직 복원)
