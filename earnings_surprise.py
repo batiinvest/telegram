@@ -27,6 +27,14 @@ log = get_logger(__name__)
 THRESHOLD_PCT = 10.0          # 컨센 대비 이 % 이상 상회 시 리스트 포함
 _WON_PER_EOK = 100_000_000    # 1억원 = 1e8 원
 
+# ── 영업이익 '폭증' 탐지 기준(컨센 무관, 재무 확정치 기반) ──
+SURGE_YOY_PCT   = 100.0   # 영업익 YoY 이 %↑ = 폭증(전년동기 흑자 기반일 때만)
+SURGE_QOQ_PCT   = 100.0   # 영업익 QoQ 이 %↑ = 폭증(직전분기 흑자 기반일 때만)
+MIN_REVENUE_EOK = 50.0    # 매출 하한(억) — 소형주 base effect 노이즈 방지
+MIN_OP_EOK      = 30.0    # 영업익 하한(억) — 같은 목적
+_MIN_BASE_WON      = 1_000_000_000   # 비교분기(전년/직전) 영업익 10억 하한 — 초저베이스發 허수 %(예: +16000%) 차단
+_MIN_CONSENSUS_EOK = 10.0            # 컨센 10억 하한 — 초소형 컨센發 허수 %(예: 컨센 1억→+5500%) 차단
+
 
 def _quarter_key(year, quarter) -> str | None:
     """(2026, 2) → '202606'. 분기→종료월(3/6/9/12)."""
@@ -168,39 +176,288 @@ def _is_turnaround(r) -> bool:
     return c is not None and c <= 0 and (r.get("op_actual") or 0) > 0
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  재무 확정치 기반 재조정(reconcile) — 실시간 훅 누락분 회수 + 영업익 폭증 탐지
+#  ⚠️ 실시간 잠정공시 훅과 별개로, 저녁 배치가 financials 확정치를 스캔해 적재.
+#     컨센 스냅샷이 늦게 잡히거나 실시간 경로가 빠져도 여기서 반드시 회수된다.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _digit_q(quarter) -> int | None:
+    """'Q2'/'2'/2 → 2."""
+    if quarter is None:
+        return None
+    s = str(quarter).upper().replace("Q", "").strip()
+    return int(s) if s in ("1", "2", "3", "4") else None
+
+
+def _pick_cfs(existing: dict, r: dict) -> bool:
+    """종목별 1행 선택: CFS(연결) 우선, 없으면 OFS(별도)."""
+    return existing is None or (r.get("fs_div") == "CFS" and existing.get("fs_div") != "CFS")
+
+
+def _op_cache(sb, year, quarter) -> dict:
+    """{stock_code: {'operating_profit':원, 'fs_div':..}} — 비교분기 영업익 캐시(CFS 우선)."""
+    if not year or not quarter:
+        return {}
+    from db_utils import fetch_all_pages
+    rows = fetch_all_pages(
+        sb.table("financials")
+          .select("stock_code,operating_profit,fs_div")
+          .eq("bsns_year", str(year)).eq("quarter", quarter))
+    out = {}
+    for r in rows or []:
+        c = r["stock_code"].split(".")[0]
+        if _pick_cfs(out.get(c), r):
+            out[c] = r
+    return out
+
+
+def _consensus_map(sb, qkey: str, codes: list) -> dict:
+    """{stock_code: op_consensus(억)} — quarterly_consensus 스냅샷 배치 조회."""
+    out = {}
+    for i in range(0, len(codes), 200):
+        batch = codes[i:i + 200]
+        try:
+            r = (sb.table("quarterly_consensus")
+                 .select("stock_code,op_consensus")
+                 .eq("quarter", qkey).in_("stock_code", batch).execute())
+            for x in (r.data or []):
+                if x.get("op_consensus") is not None:
+                    out[x["stock_code"]] = float(x["op_consensus"])
+        except Exception as e:
+            log.debug(f"[재조정] 컨센 배치 조회 실패: {e}")
+    return out
+
+
+def reconcile_quarter(year, quarter, persist: bool = True,
+                      monitored_only: bool = True, base_date: str = None) -> list:
+    """해당 분기 재무 확정치를 스캔해 어닝 서프라이즈/영업익 폭증을 판정·적재.
+
+    판정 사유(reasons):
+      - 'consensus'  : 발표 영업익이 컨센 +{THRESHOLD_PCT}%↑ 상회
+      - 'turnaround' : 흑자전환(컨센≤0 또는 직전분기 적자 → 발표 흑자)
+      - 'surge'      : 영업익 YoY/QoQ +{SURGE_*}%↑ 폭증(비교분기 흑자 기반)
+    소형주 노이즈 방지: 매출≥{MIN_REVENUE_EOK}억·발표OP≥{MIN_OP_EOK}억 게이트(폭증/흑자전환에만).
+
+    persist=False면 계산만(적재 안 함). 반환: 탐지된 rec 리스트(reasons 포함)."""
+    from db_utils import fetch_all_pages
+    sb = get_supabase_client()
+    qd = _digit_q(quarter)
+    qkey = _quarter_key(year, qd)
+    if not qkey:
+        log.warning(f"[재조정] 분기 파싱 실패: {year} {quarter}")
+        return []
+    bd = base_date or date.today().isoformat()
+
+    codes_filter = None
+    if monitored_only:
+        comp = fetch_all_pages(sb.table("companies").select("code").eq("is_monitored", True))
+        codes_filter = {r["code"].split(".")[0] for r in (comp or [])}
+
+    rows = fetch_all_pages(
+        sb.table("financials")
+          .select("stock_code,corp_name,operating_profit,revenue,"
+                  "op_profit_yoy,op_profit_qoq,fs_div")
+          .eq("bsns_year", str(year)).eq("quarter", str(quarter)))
+    cur = {}
+    for r in rows or []:
+        c = r["stock_code"].split(".")[0]
+        if codes_filter is not None and c not in codes_filter:
+            continue
+        if _pick_cfs(cur.get(c), r):
+            cur[c] = r
+    if not cur:
+        log.info(f"[재조정] {year} {quarter} 대상 재무 없음 — 스킵")
+        return []
+
+    from format_utils import get_prev_quarter
+    py, pq = get_prev_quarter(str(year), str(quarter))
+    prevq = _op_cache(sb, py, pq)
+    prevy = _op_cache(sb, str(int(year) - 1), str(quarter))
+    cons_map = _consensus_map(sb, qkey, list(cur.keys()))
+
+    detected = []
+    for code, r in cur.items():
+        op_won = r.get("operating_profit")
+        if op_won is None:
+            continue
+        op_eok  = round(op_won / _WON_PER_EOK, 1)
+        rev_eok = (r.get("revenue") or 0) / _WON_PER_EOK
+        name    = r.get("corp_name") or ""
+        op_yoy  = r.get("op_profit_yoy")
+        op_qoq  = r.get("op_profit_qoq")
+        prev_q_won = (prevq.get(code) or {}).get("operating_profit")
+        prev_y_won = (prevy.get(code) or {}).get("operating_profit")
+
+        reasons = set()
+        cons = cons_map.get(code)
+        surprise_pct = None
+        # ── 컨센 대비 ──
+        if cons is not None:
+            if cons <= 0 and op_eok > 0:
+                reasons.add("turnaround")
+            elif cons >= _MIN_CONSENSUS_EOK:          # 10억 미만 컨센은 허수 % 방지로 제외
+                surprise_pct = round((op_eok - cons) / cons * 100, 1)
+                if surprise_pct >= THRESHOLD_PCT:
+                    reasons.add("consensus")
+
+        # ── 영업익 폭증 / 흑자전환(재무 확정치 기반) — 규모 게이트 통과분만 ──
+        big_enough = op_eok >= MIN_OP_EOK and rev_eok >= MIN_REVENUE_EOK
+        if big_enough:
+            if prev_q_won is not None and prev_q_won < 0 and op_won > 0:
+                reasons.add("turnaround")             # 직전분기 적자→흑자
+            if (op_yoy is not None and op_yoy >= SURGE_YOY_PCT
+                    and (prev_y_won or 0) >= _MIN_BASE_WON):   # 전년 흑자(≥10억) 기반 YoY 폭증
+                reasons.add("surge")
+            if (op_qoq is not None and op_qoq >= SURGE_QOQ_PCT
+                    and (prev_q_won or 0) >= _MIN_BASE_WON):   # 직전분기 흑자(≥10억) 기반 QoQ 폭증
+                reasons.add("surge")
+
+        if not reasons:
+            continue
+
+        rec = {
+            "stock_code":   code,
+            "corp_name":    name,
+            "quarter":      qkey,
+            "op_actual":    op_eok,
+            "op_consensus": round(cons, 1) if cons is not None else None,
+            "surprise_pct": surprise_pct if "consensus" in reasons else None,
+            # 표시 정합성: base가 10억 미만이면 허수 %이므로 저장/표시하지 않음
+            "op_yoy":       round(op_yoy, 1) if (op_yoy is not None and (prev_y_won or 0) >= _MIN_BASE_WON) else None,
+            "op_qoq":       round(op_qoq, 1) if (op_qoq is not None and (prev_q_won or 0) >= _MIN_BASE_WON) else None,
+            "op_prev":      round(prev_q_won / _WON_PER_EOK, 1) if prev_q_won is not None else None,
+            "kind":         "+".join(sorted(reasons)),
+            "base_date":    bd,
+            "reasons":      reasons,   # 렌더/디버그용(DB엔 미저장)
+        }
+        detected.append(rec)
+
+    inserted = _persist_reconciled(sb, detected) if (persist and detected) else 0
+    log.info(f"[재조정] {year} {quarter} — 탐지 {len(detected)}건 "
+             f"(consensus {sum('consensus' in d['reasons'] for d in detected)} · "
+             f"surge {sum('surge' in d['reasons'] for d in detected)} · "
+             f"turnaround {sum('turnaround' in d['reasons'] for d in detected)})"
+             f"{f' → 신규 {inserted}건 적재' if persist else ' [계산만]'}")
+    return detected
+
+
+def _persist_reconciled(sb, detected: list) -> int:
+    """탐지 rec을 earnings_surprise에 적재하되 **신규 (종목,분기)만 삽입**한다.
+    이미 리스트에 오른 종목은 base_date를 갱신하지 않아(=재발송 안 함) 실적시즌 동안
+    매일 밤 같은 종목이 반복 발송되는 것을 막는다(각 종목은 최초 탐지일 1회만 노출)."""
+    from collections import defaultdict
+    by_q = defaultdict(list)
+    for d in detected:
+        by_q[d["quarter"]].append(d)
+    inserted = 0
+    for q, rows in by_q.items():
+        codes = [r["stock_code"] for r in rows]
+        existing = set()
+        for i in range(0, len(codes), 200):
+            try:
+                r = (sb.table("earnings_surprise").select("stock_code")
+                     .eq("quarter", q).in_("stock_code", codes[i:i + 200]).execute())
+                existing |= {x["stock_code"] for x in (r.data or [])}
+            except Exception as e:
+                log.warning(f"[재조정] 기존키 조회 실패 {q}: {e}")
+        new_rows = [{k: v for k, v in d.items() if k != "reasons"}
+                    for d in rows if d["stock_code"] not in existing]
+        if not new_rows:
+            continue
+        try:
+            sb.table("earnings_surprise").upsert(
+                new_rows, on_conflict="stock_code,quarter").execute()
+            inserted += len(new_rows)
+        except Exception as e:
+            log.warning(f"[재조정] 적재 실패(테이블/컬럼 확인 — kind/op_yoy/op_qoq/op_prev): {e}")
+    return inserted
+
+
+def _row_reasons(r) -> set:
+    """저장 행에서 사유 복원(kind 우선, 없으면 legacy 규칙)."""
+    kind = r.get("kind")
+    if kind:
+        return set(kind.split("+"))
+    # legacy(컨센 전용) 행: 흑자전환/컨센상회 규칙으로 복원
+    if _is_turnaround(r):
+        return {"turnaround"}
+    return {"consensus"}
+
+
 def build_briefing(base_date: str = None) -> str | None:
     """당일 어닝 서프라이즈 리스트 메시지(HTML). 대상 없으면 None."""
     bd = base_date or date.today().isoformat()
+    sb = get_supabase_client()
+    cols = "corp_name,op_actual,op_consensus,surprise_pct,kind,op_yoy,op_qoq,op_prev"
     try:
-        sb = get_supabase_client()
-        rows = (sb.table("earnings_surprise")
-                .select("corp_name,op_actual,op_consensus,surprise_pct")
-                .eq("base_date", bd)
-                .execute().data or [])
-    except Exception as e:
-        log.warning(f"[서프라이즈] 브리핑 조회 실패: {e}")
+        rows = (sb.table("earnings_surprise").select(cols)
+                .eq("base_date", bd).execute().data or [])
+    except Exception:
+        # kind 등 신규 컬럼 미생성(ALTER 前) — 레거시 컬럼으로 폴백
+        try:
+            rows = (sb.table("earnings_surprise")
+                    .select("corp_name,op_actual,op_consensus,surprise_pct")
+                    .eq("base_date", bd).execute().data or [])
+        except Exception as e:
+            log.warning(f"[서프라이즈] 브리핑 조회 실패: {e}")
+            return None
+    if not rows:
         return None
+    return _render_briefing(rows, bd)
+
+
+def _render_briefing(rows: list, bd: str) -> str | None:
+    """탐지/조회된 행 리스트 → HTML 메시지. build_briefing·드라이런 공용."""
     if not rows:
         return None
 
-    # 흑자전환 최상단, 그다음 상회율 내림차순 (흑자전환은 surprise_pct=NULL)
-    rows.sort(key=lambda r: (0 if _is_turnaround(r) else 1,
-                             -(r.get("surprise_pct") or 0)))
+    _PRIO = {"turnaround": 0, "surge": 1, "consensus": 2}
+
+    def _mag(r, reasons):
+        if "surge" in reasons:
+            return max(r.get("op_yoy") or 0, r.get("op_qoq") or 0)
+        if "consensus" in reasons:
+            return r.get("surprise_pct") or 0
+        return r.get("op_actual") or 0
+
+    def _line(r) -> str:
+        reasons = _row_reasons(r)
+        tag = ("🔴" if "turnaround" in reasons else "") \
+            + ("🚀" if "surge" in reasons else "") \
+            + ("🎯" if "consensus" in reasons else "")
+        name = html.escape(r.get("corp_name") or "")
+        act  = _fmt_eok(r.get("op_actual"))
+        parts = []
+        if "consensus" in reasons and r.get("surprise_pct") is not None:
+            parts.append(f"컨센 {_fmt_eok(r.get('op_consensus'))} 대비 +{r['surprise_pct']:.1f}%")
+        if "surge" in reasons:
+            sp = []
+            if (r.get("op_yoy") or 0) >= SURGE_YOY_PCT:
+                sp.append(f"YoY +{r['op_yoy']:.0f}%")
+            if (r.get("op_qoq") or 0) >= SURGE_QOQ_PCT:
+                sp.append(f"QoQ +{r['op_qoq']:.0f}%")
+            if sp:
+                parts.append("영업익 " + "·".join(sp))
+        if "turnaround" in reasons:
+            prev = r.get("op_prev")
+            parts.append(f"흑자전환(직전 {_fmt_eok(prev)})" if prev is not None else "흑자전환")
+        return f"{tag} {name} / 발표OP {act} / {' · '.join(parts)}"
+
+    rows.sort(key=lambda r: (min(_PRIO.get(x, 9) for x in _row_reasons(r)),
+                             -_mag(r, _row_reasons(r))))
     d = datetime.strptime(bd, "%Y-%m-%d")
+    LIMIT = 40
     lines = [
         f"🔴 <b>어닝 서프라이즈 리스트</b> ({d.year}년 {d.month}월 {d.day}일 기준)",
-        f"- 영업익 기준 선정 (컨센 +{THRESHOLD_PCT:.0f}% 이상 상회 · 흑자전환 포함)",
+        f"- 영업익 기준: 🎯컨센 +{THRESHOLD_PCT:.0f}%↑ 상회 · "
+        f"🚀YoY/QoQ +{SURGE_YOY_PCT:.0f}%↑ 폭증 · 🔴흑자전환",
         "",
-        "(종목명 / 발표OP / 예상OP / 예상대비)",
     ]
-    for r in rows:
-        name = html.escape(r.get("corp_name") or "")
-        act = _fmt_eok(r.get("op_actual"))
-        cons = _fmt_eok(r.get("op_consensus"))
-        if _is_turnaround(r):
-            lines.append(f"{name} / {act} / {cons} (흑자전환)")
-        else:
-            lines.append(f"{name} / {act} / {cons} (+{r.get('surprise_pct'):.1f}%)")
+    for r in rows[:LIMIT]:
+        lines.append(_line(r))
+    if len(rows) > LIMIT:
+        lines.append(f"... 외 {len(rows) - LIMIT}개")
     return "\n".join(lines)
 
 

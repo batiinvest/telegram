@@ -39,7 +39,7 @@ from jobs_collect import (
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
     job_daily_summary, job_collect_credit_balance,
     job_collect_investor_market, job_retry_failed,
-    job_snapshot_qtr_consensus, job_earnings_surprise_briefing,
+    job_snapshot_qtr_consensus, job_earnings_surprise_briefing, job_earnings_reconcile,
 )
 from jobs_briefing import (
     job_lunch_briefing, job_naver_report, job_daily_closing, job_kind_ir,
@@ -161,6 +161,7 @@ def run_scheduler():
     schedule.every().day.at("18:35").do(_threaded(job_collect_analyst_opinions))  # 투자의견 (장후)
     schedule.every().day.at("18:40").do(job_collect_estimates)        # 종목추정실적 (미래 매출/영업이익 + 상향감지)
     schedule.every().day.at("08:40").do(_threaded(job_snapshot_qtr_consensus))  # 분기 컨센 스냅샷 (어닝 서프라이즈용, 장전)
+    schedule.every().day.at("19:05").do(_threaded(job_earnings_reconcile))  # 재무 확정치 기반 어닝 서프라이즈/영업익 폭증 재조정 (19:10 브리핑 前)
     schedule.every().day.at("19:10").do(_threaded(job_earnings_surprise_briefing))  # 어닝 서프라이즈 리스트 → 메인채널
     schedule.every().day.at("19:00").do(job_collect_credit_balance)    # KOFIA 신용공여 잔고 — 직전 영업일분이 당일 오후 발표(2026-07-22 실측: 10:30엔 없고 18:18엔 있음)
     schedule.every().day.at("10:30").do(job_collect_credit_balance)    # 보정 실행 — 전날 발표가 19:00 이후로 밀린 경우 회수(멱등 upsert, 신규 기준일만 발송)

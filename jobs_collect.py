@@ -1055,6 +1055,23 @@ def job_snapshot_qtr_consensus():
 
 
 @_job('earnings_surprise', holiday=True)
+def job_earnings_reconcile():
+    """평일 장 마감 후 (19:05) — 재무 확정치 기반 어닝 서프라이즈/영업익 폭증 재조정.
+
+    실시간 잠정공시 훅에만 의존하던 종전 구조는 훅 누락(2026-08 리팩토링으로 소실) 시
+    적재가 0이 됐다. 이 잡은 financials 확정치를 스캔해 컨센 +10%↑·흑자전환·영업익
+    YoY/QoQ +100%↑ 폭증을 earnings_surprise에 신규만 멱등 적재한다(각 종목 1회).
+    19:10 브리핑이 당일 적재분을 메인채널로 발송한다."""
+    if not _COLLECTOR_OK:
+        logging.warning("[어닝재조정] auto_detect_quarter 불가 — 스킵")
+        return
+    import earnings_surprise
+    year, quarter = auto_detect_quarter()
+    det = earnings_surprise.reconcile_quarter(year, quarter, persist=True)
+    logging.info(f"=== [어닝재조정] {year} {quarter} 완료: 탐지 {len(det)}건 ===")
+
+
+@_job('earnings_surprise', holiday=True)
 def job_earnings_surprise_briefing():
     """평일 장 마감 후 (19:10) — 당일 어닝 서프라이즈 리스트 → 메인채널."""
     import earnings_surprise
