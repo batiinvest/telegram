@@ -1066,9 +1066,20 @@ def job_earnings_reconcile():
         logging.warning("[어닝재조정] auto_detect_quarter 불가 — 스킵")
         return
     import earnings_surprise
+    import datetime as _dt
+    # ⚠️ auto_detect_quarter()는 Q4를 절대 반환하지 않는다(1~3월=전년 Q3·12월=Q3).
+    #    그대로 쓰면 사업보고서(Q4/연간) 시즌(2~3월 제출)이 통째로 누락되므로
+    #    1~4월엔 전년 Q4를 대상에 명시적으로 추가한다(중복은 skip-existing으로 무해).
     year, quarter = auto_detect_quarter()
-    det = earnings_surprise.reconcile_quarter(year, quarter, persist=True)
-    logging.info(f"=== [어닝재조정] {year} {quarter} 완료: 탐지 {len(det)}건 ===")
+    targets = [(year, quarter)]
+    if _dt.date.today().month <= 4:
+        targets.append((str(_dt.date.today().year - 1), "Q4"))
+    total = 0
+    for (ty, tq) in targets:
+        det = earnings_surprise.reconcile_quarter(ty, tq, persist=True)
+        total += len(det)
+        logging.info(f"=== [어닝재조정] {ty} {tq}: 탐지 {len(det)}건 ===")
+    logging.info(f"=== [어닝재조정] 완료: 대상 {len(targets)}분기 · 총 탐지 {total}건 ===")
 
 
 @_job('earnings_surprise', holiday=True)
