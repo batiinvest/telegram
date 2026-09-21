@@ -136,7 +136,7 @@ def run_scheduler():
     schedule.every().day.at("17:20").do(job_collect_new_high)          # 신고가 종목 수집 (장마감 확정 수집 17:00 이후 — market_data 기준)
     schedule.every().day.at("16:45").do(job_collect_investor_trend)    # 종목별 외국인·기관 순매수 확정 (sector_summary 전)
     schedule.every().day.at("18:15").do(job_collect_investor_trend_ranked)  # 수급 확정 정산 + 거래대금 상위 종목 확장 (18:30 브리핑 Top3를 시장 전체 기준으로)
-    schedule.every().day.at("17:00").do(job_collect_market_closing)    # 장 마감 확정치 수집 (외국인 집계 완료 후)
+    schedule.every().day.at("15:45").do(job_collect_market_closing)    # 장 마감 확정치 수집 (정규장 종가 직후·시간외 前 — 17:00은 시간외단일가라 종가 오염됨. 외국인 순매수는 별도 잡)
     schedule.every().day.at("17:05").do(job_short_surge)               # 공매도 수집 + 5일 평균 대비 2배 급증 알림
     schedule.every().day.at("17:15").do(job_sector_summary)            # 산업별 일별 요약 집계
     schedule.every().day.at("19:45").do(job_sector_summary)            # 산업집계 재계산 (19:30 수급 확정 후 — 당일 최종 반영)
