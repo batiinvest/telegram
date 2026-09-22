@@ -51,6 +51,12 @@ _KIS_MASTER = {
 }
 _KIS_CODE_RE = re.compile(r"^[0-9A-Z]{6}$")
 
+
+def _is_spac(name: str) -> bool:
+    """스팩 판별 — 상장 종목명에 예외 없이 '스팩'이 들어간다(2026-09 실측 71/71).
+    창업투자 업종의 에이티넘·스틱 등 실제 VC 운용사와 구분하려면 이름으로 봐야 한다."""
+    return '스팩' in (name or '')
+
 def _load_kis_listed() -> dict:
     """KIS 종목 마스터에서 현재 매매가능 상장종목 로드.
     반환 {단축코드: {"name": 종목약명, "market": "KOSPI"|"KOSDAQ"}}.
@@ -157,8 +163,15 @@ def run(dry_run: bool = False):
     delisted_data       = []
     delisted_monitored  = []
 
+    spac_skipped = 0
     for code, di in dart_map.items():
         if code not in db_map:
+            # 스팩(SPAC)은 인수 대상을 찾기 전까지 사업도 재무도 없는 껍데기라
+            # 시세·재무·업종 어느 수집에도 의미가 없다 → 애초에 담지 않는다.
+            # (기존 재무 수집기들이 각자 '스팩' 이름으로 걸러내던 것을 유입 단계로 앞당김)
+            if _is_spac(di["name"]):
+                spac_skipped += 1
+                continue
             new_listings.append({
                 "name": di["name"], "code": code,
                 "corp_code": di["corp_code"], "market": di["market"],
@@ -193,6 +206,7 @@ def run(dry_run: bool = False):
     # 4. 리포트
     log.info(f"\n{'='*50}")
     log.info(f"신규상장:        {len(new_listings)}개")
+    log.info(f"스팩 제외:       {spac_skipped}개")
     log.info(f"사명변경:        {len(name_changes)}개")
     log.info(f"상폐(data):      {len(delisted_data)}개 → 미삭제(거래정지 구분불가 수동확인)")
     log.info(f"상폐(모니터링):  {len(delisted_monitored)}개 → 수동 확인 필요")
