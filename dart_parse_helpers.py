@@ -118,37 +118,85 @@ def _clean_ratio(raw: str) -> str:
     return raw
 
 
-def _fmt_payment_terms(raw: str) -> list[str]:
+# 지급조건 라벨: '(1차 선급금)' '[대금 지급]' — 한글이 든 괄호만.
+# 금액 뒤 '(30%)' 같은 순수 수치 괄호는 라벨이 아니므로 제외된다.
+_PAY_LABEL_RE = re.compile(r'[(\[]\s*([^)\]]*[가-힣][^)\]]*?)\s*[)\]]')
+
+
+def _split_by_pay_label(text: str) -> list[str]:
+    """'(1차 선급금) 내용 (잔금) 내용' / '[선급금 수령] O 내용' → ['1차 선급금: 내용', ...]"""
+    ms = list(_PAY_LABEL_RE.finditer(text))
+    if len(ms) < 2:
+        return []
+    out = []
+    for i, m in enumerate(ms):
+        stop = ms[i + 1].start() if i + 1 < len(ms) else len(text)
+        body = re.sub(r'^[○ㅇ·•\-]\s*', '', text[m.end():stop].strip()).strip()
+        if body:
+            out.append(f'{m.group(1).strip()}: {body}')
+    return out
+
+
+def _split_pay_section(sec: str) -> list[str]:
+    """지급조건 한 섹션을 하위 항목 줄들로 분해."""
+    # (1) 'N)' 하위 항목 → '제목: a / b / c' 한 줄
+    sub = re.split(r'(?<!\d)(\d{1,2})\)\s+', sec)
+    if len(sub) >= 3:
+        title = sub[0].strip().rstrip(':：').strip()
+        items = []
+        for k in range(1, len(sub) - 1, 2):
+            c = re.sub(r'\s+', ' ', sub[k + 1]).strip()
+            m = re.match(r'^(.{1,15}?)\s*[:：]\s*(.+)', c)
+            items.append(f'{m.group(1).strip()} {m.group(2).strip()}' if m else c)
+        joined = ' / '.join(items)
+        return [f'{title}: {joined}' if title else joined]
+
+    # (2) '(라벨)'·'[라벨]' 경계
+    labeled = _split_by_pay_label(sec)
+    if labeled:
+        return labeled
+
+    # (3) ' - ' 목록: '라벨:값' 뒤의 무라벨 항목은 그 지급조건이므로 같은 줄로 병합
+    dash = [re.sub(r'^[-·•○]\s*', '', s).strip()
+            for s in re.split(r'\s+-\s+', sec) if s.strip()]
+    dash = [d for d in dash if d]
+    if len(dash) > 1:
+        merged: list[str] = []
+        for d in dash:
+            if not merged or re.match(r'^[^:：]{1,14}[:：]', d):
+                merged.append(d)
+            else:
+                merged[-1] += f' — {d}'
+        # 선두가 수치·라벨 없는 짧은 머리말('대금지급' 등)이면 제거 — 상위 '지급조건'과 중복
+        if len(merged) > 1 and len(merged[0]) <= 8 and not re.search(r'[:：\d]', merged[0]):
+            merged = merged[1:]
+        return merged
+
+    return [re.sub(r'^[-·•○]\s*', '', sec).strip()]
+
+
+def _fmt_payment_terms(raw: str, skip_text: str = '',
+                       max_lines: int = 10, line_limit: int = 200) -> list[str]:
     """지급조건 텍스트를 줄 단위 목록으로 변환.
 
-    입력 예: '1. 기자재비 1) 선급금: 20%~50% 2) 납품불: 45%~75% 2. 설치비 1) 착공불: 30% ...'
-    출력 예:
-      • 기자재비: 선급금 20~50% / 납품불 45~75% / 최종불 5%
-      • 설치비: 착공불 30% / ...
+    DART 지급조건은 서식이 제각각이라 네 구조를 모두 처리한다:
+      '1. 기자재비 1) 선급금: 20%~50%'              → 번호 섹션 + N) 하위항목
+      '(1차 선급금) ... (잔금) ...'                  → 괄호 라벨
+      '[선급금 수령] O ... [대금 지급] O ...'        → 대괄호 라벨 + 불릿
+      '대금지급 - 선급금:1,347원(30%) - 계약체결 후...' → 대시 목록(값+조건 병합)
+
+    지급 스케줄은 투자판단에 쓰이는 정보라 줄당 line_limit(200자)까지 넉넉히 표시해
+    중간 절단을 최소화한다. skip_text(계약명)와 같은 섹션은 중복이라 제외.
     """
-    # 최상위 항목 분리 (1. 2. 3. …)
-    top_parts = re.split(r'(?<!\d)(\d{1,2})\.\s+', raw.strip())
-    sections = []
-    i = 1
-    while i < len(top_parts) - 1:
-        title   = top_parts[i + 1].strip()
-        sections.append(title)
-        i += 2
+    text = re.sub(r'\s+', ' ', raw or '').strip()
+    if not text:
+        return []
 
-    if not sections:
-        # '-' 구분 목록 처리 (예: '30% 지급 - 30% 지급 - 잔금 ...')
-        # 선두 대시/불릿 제거 — '• - 중도금' 불릿 중복 방지
-        dash_items = [re.sub(r'^[-·•]\s*', '', s.strip())
-                      for s in re.split(r'\s+-\s+', raw.strip()) if s.strip()]
-        dash_items = [s for s in dash_items if s]
-        if len(dash_items) > 1:
-            return [f'  • {_trunc(item, 60)}' for item in dash_items[:6]]
-        # 번호 목록도 dash도 없으면 truncate
-        cleaned = re.sub(r'\s+', ' ', raw)
-        return [f'  {_trunc(cleaned, 80)}']
+    # 최상위 번호 섹션 (1. 2. 3. …)
+    top = re.split(r'(?<!\d)(\d{1,2})\.\s+', text)
+    sections = [top[i + 1].strip() for i in range(1, len(top) - 1, 2)]
 
-    # 항목들이 공통 접두(계약명 등)를 반복하면 제거 — 예 '누리호 FM7 …' / '누리호 FM8 …'
-    # 의 '누리호 '. 계약명에 이미 있어 중복이고 truncate 예산을 잡아먹음.
+    # 섹션들이 공통 접두(계약명 등)를 반복하면 제거 — 예 '누리호 FM7 …' / '누리호 FM8 …'
     if len(sections) >= 2:
         _lo, _hi = min(sections), max(sections)
         _n = 0
@@ -159,34 +207,17 @@ def _fmt_payment_terms(raw: str) -> list[str]:
         if len(_pre.strip()) >= 6:
             sections = [s[len(_pre):].lstrip() for s in sections]
 
-    result = []
-    for sec in sections[:5]:
-        # 하위 항목 분리 (1) 2) 3) …)
-        sub_parts = re.split(r'(?<!\d)(\d{1,2})\)\s+', sec)
-        title_part = sub_parts[0].strip().rstrip(':：').strip()
+    entries: list[str] = []
+    for sec in (sections or [text]):
+        entries.extend(_split_pay_section(sec))
 
-        subs = []
-        j = 1
-        while j < len(sub_parts) - 1:
-            content = re.sub(r'\s+', ' ', sub_parts[j + 1]).strip()
-            # 'key: value' 분리
-            m = re.match(r'^(.{1,15}?):\s*(.+)', content)
-            if m:
-                subs.append(f'{m.group(1).strip()} {m.group(2).strip()}')
-            else:
-                subs.append(_trunc(content, 30))
-            j += 2
-            if len(subs) >= 4:
-                break
+    # 계약명을 그대로 반복하는 섹션 제거(앞 30자 비교)
+    if skip_text:
+        key = re.sub(r'\s+', '', skip_text)[:30]
+        entries = [e for e in entries if re.sub(r'\s+', '', e)[:30] != key]
 
-        if subs:
-            result.append(f'  • {title_part}: {" / ".join(subs)}')
-        elif title_part:
-            # 하위항목 없는 섹션은 통째 표시 — 지급률·지체상금률이 값 중간에서
-            # 잘리지 않도록 한도 넉넉히(구 60자는 긴 접두 시 '지체상금률:0.…' 잘림).
-            result.append(f'  • {_trunc(title_part, 100)}')
-
-    return result
+    return [f'  • {_trunc_clean(e, line_limit)}'
+            for e in entries[:max_lines] if e.strip()]
 
 
 def _strip_disclaimer(text: str) -> str:

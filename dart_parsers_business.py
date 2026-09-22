@@ -11,9 +11,11 @@ def parse_contract(kv: dict) -> list:
     lines = []
 
     # 계약명 — 신서식은 '1. 판매ㆍ공급계약 내용'이 계약 주제(구서식 체결계약명/계약명)
-    if v := _get(kv, '체결계약명', '계약명',
-                 '판매ㆍ공급계약 내용', '판매·공급계약 내용', '공급계약 내용', '수주 내용'):
-        lines.append(f'📋 계약명: {_trunc(v, 60)}')
+    contract_nm = _get(kv, '체결계약명', '계약명',
+                       '판매ㆍ공급계약 내용', '판매·공급계약 내용',
+                       '공급계약 내용', '수주 내용') or ''
+    if contract_nm:
+        lines.append(f'📋 계약명: {_trunc(contract_nm, 60)}')
 
     # 계약상대 + 지역 — 각주(1. 적용환율... 형태) 필터링
     party  = _get(kv, '계약상대', '거래상대방', '발주처', '매수인')
@@ -97,7 +99,7 @@ def parse_contract(kv: dict) -> list:
 
     # 지급조건 — 중첩 번호 목록을 줄 단위로 정리
     if v := _get(kv, '대금지급 조건', '지급조건', '대금지급'):
-        pay_lines = _fmt_payment_terms(v)
+        pay_lines = _fmt_payment_terms(v, skip_text=contract_nm)
         if pay_lines:
             lines.append('💳 지급조건:')
             lines.extend(pay_lines)
