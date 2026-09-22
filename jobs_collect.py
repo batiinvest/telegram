@@ -1125,6 +1125,20 @@ def job_collect_credit_balance():
             logging.error(f"❌ [신용잔고차트] 발송 오류: {e}")
     except Exception as e:
         logging.error(f"❌ [신용잔고] 오류: {e}")
+
+
+@_job()
+def job_collect_wics():
+    """매일 08:20 — 네이버 증권 WICS 업종 분류 수집(companies.wics_*).
+    휴장일에도 돌린다 — 시세가 아니라 분류라 거래일과 무관하고,
+    신규 상장 종목이 빨리 칄질수록 좋다."""
+    try:
+        logging.info("🏷 [업종] collect_wics 실행 시작")
+        import collect_wics
+        n = collect_wics.run()
+        logging.info(f"=== [업종] 완료: {n}개 갱신 ===")
+    except Exception as e:
+        logging.error(f"❌ [업종] 오류: {e}")
         mark_failed(e)
 
 
