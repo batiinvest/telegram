@@ -24,12 +24,21 @@ from dart_parsers_holdings import *    # noqa: F401,F403
 from dart_parsers_status import *      # noqa: F401,F403
 
 
+def _parse_ci_or_rights(kv: dict) -> list:
+    """유무상증자 제목이지만 실제 서식이 한글키 유상증자(종속회사 공시 등)인 경우 대응.
+
+    parse_combined_ci는 영문키(ENG) 전용이라 한글키 서식에서 빈 결과를 내고,
+    그대로 범용 파서로 폴백해 번호 키를 통째 덤프하던 문제(LS일렉트릭 2026-09-22).
+    """
+    return parse_combined_ci(kv) or parse_rights_offering(kv)
+
+
 _PARSER_MAP = [
     # 거래정지·권리락은 최우선 — 제목 '(사유)'에 무상증자·유상증자·상장폐지 등이 붙어도
     # 주권매매거래정지/권리락은 항상 그 이벤트 (사유 파서로 새면 빈결과→폴백 노이즈)
     (['거래정지', '매매거래정지'],           parse_trading_halt),
     (['권리락'],                             parse_ex_rights),
-    (['유무상증자'],                         parse_combined_ci),
+    (['유무상증자'],                         _parse_ci_or_rights),
     # 청약결과·발행결과는 '유상증자'보다 먼저 — 제목에 유상증자가 있어 증자결정 파서로 새던 문제
     (['청약결과', '발행결과'],                 parse_subscription_result),
     # 발행가액결정(유상증자 가액확정 후속)은 유상증자결정용 parse_rights_offering보다 먼저.

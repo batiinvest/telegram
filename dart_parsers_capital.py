@@ -59,9 +59,12 @@ def parse_rights_offering(kv: dict) -> list:
             lines.append(f'🏢 종속회사: {_trunc(sub, 50)}')
         if v := _get(kv, '보통주식(주)'):
             lines.append(f'🔢 신주식수: {v}주')
-        if v := _get(kv, '보통주식(원)', '예정발행가'):
+        # 값이 숫자가 아니면(헤더 라벨이 값으로 딸려오는 종속회사 서식) 생략 —
+        # '예정발행가' 키의 값이 '보통주식(원)' 라벨이라 '발행가액: 보통주식(원)원' 오출력됨.
+        _pv = _get(kv, '보통주식(원)', '예정발행가')
+        if _pv and re.search(r'\d', _pv) and not re.search(r'[가-힣]', _pv):
             _hint = ' (액면가)' if '액면가' in (_get(kv, '7. 발행가 산정방법') or '') else ''
-            lines.append(f'💵 발행가액: {v}원{_hint}')
+            lines.append(f'💵 발행가액: {_pv}원{_hint}')
         if v := _get(kv, '5. 증자방식', '증자방식'):
             lines.append(f'📋 방식: {v}')
         for fk, flabel in (('시설자금(원)', '시설'), ('영업양수자금(원)', '영업양수'),

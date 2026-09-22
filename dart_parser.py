@@ -146,6 +146,15 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
                 # 카테고리 파서 또는 범용 파서로 원문 내용 추가
                 sub = (parser(kv) if parser else None) or (parse_all_fields(kv) if not has_changes else None)
                 if sub:
+                    # 정정사유가 원공시 블록의 '사유' 필드로 중복 노출되는 것 제거
+                    # (예: 정정 내용 '📋 사유: 오기 정정' + 시장조치 '🚨 사유: 오기 정정')
+                    _rsn = {l.split(': ', 1)[1].strip()
+                            for l in lines if l.startswith('📋 사유: ')}
+                    if _rsn:
+                        sub = [l for l in sub
+                               if not (l.startswith(('🚨 사유: ', '📋 사유: '))
+                                       and l.split(': ', 1)[1].strip() in _rsn)]
+                if sub:
                     # 변경내역 ↔ 원공시 내용 블록 구분 — 구분선 앞뒤 빈 줄(가독성)
                     lines.extend(['', '════════════', ''])
                     lines.extend(sub)

@@ -221,6 +221,14 @@ def parse_amendment(kv: dict) -> list:
             return True  # old=컬럼헤더, new=숫자 → 헤더+데이터 혼합 행
         if _is_label(old_v) and re.search(r'^\d{4}-\d{2}-\d{2}$', new_v.strip()):
             return True  # old=서브레이블(시작일 등), new=날짜값 → 중첩 테이블 행
+        # old=필드 라벨성 텍스트, new=빈값 → 중첩표 헤더 행 (의미 있는 변경 아님).
+        # 'new가 빈값'일 때만 적용하므로 실제 값→값 변경은 가려지지 않는다.
+        # 예: '결정내용: 제1회 관계인집회기일 → -' (세븐브로이 2026-09-18).
+        # '종료일: 2026-06-30 → -'(값 삭제)는 old가 날짜라 아래 조건에서 제외됨.
+        if (new_v.strip() in ('-', '', '해당없음', '없음')
+                and re.search(r'[가-힣]', old_v) and len(old_v) <= 20
+                and not re.search(r'\d{4}-\d{2}-\d{2}|\d[\d,]{2,}|\d+(?:\.\d+)?\s*%', old_v)):
+            return True
         return False
 
     # ── 패턴 C: 정정전_* / 정정후_* 접두어 키 비교 (가장 신뢰도 높음) ──────
@@ -510,7 +518,7 @@ def parse_market_measure(kv: dict) -> list:
             for s in re.split(r'(?<=[다요][.)])\s+', body):
                 s = s.strip()
                 if len(s) >= 8:
-                    lines.append(f'  • {_trunc_clean(s, 180)}')
+                    lines.append(f'  • {_trunc_clean(s, 400)}')
                 if len(lines) >= 7:
                     break
 
