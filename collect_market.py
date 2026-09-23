@@ -163,10 +163,14 @@ def calculate_returns(sb, target_codes: list = None, target_date: str = None):
     if target_codes:
         codes = target_codes
     else:
-        # 모니터링 종목만 대상으로 (전체 상장사 아님)
-        mon_res = sb.table("companies").select("code") \
-            .eq("is_monitored", True).execute()
-        codes = [r["code"].split(".")[0] for r in (mon_res.data or [])]
+        # 전체 상장사 대상. 계산은 이미 쌓인 market_data 가격만 쓰므로 API 호출이 늘지 않는다.
+        # 다만 비모니터링 종목은 이력이 얕아(28일 보존·장 마감시에만 수집) 1주/1달 위주로만
+        # 채워지고 3달·1년은 대부분 None이 된다 — 이력이 쌓이는 만큼 자연히 채워진다.
+        # 주의: .execute()는 1000행에서 잘린다 → 2,500여 종목엔 페이지네이션 필수
+        rows = _fetch_all_pages(
+            sb.table("companies").select("code").eq("active", True).order("code")
+        )
+        codes = [r["code"].split(".")[0] for r in (rows or [])]
 
     if not codes:
         log.info("[수익률] 오늘 수집 종목 없음 — 스킵")
