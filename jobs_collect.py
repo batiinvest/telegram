@@ -57,15 +57,17 @@ def job_sync_listed_companies():
 
 @_job()
 def job_cleanup_market_data():
-    """토요일 새벽 — market_data 정리 (모니터링·비모니터링 모두 90일 보존)
+    """토요일 새벽 — market_data 정리 (모니터링·비모니터링 모두 120일 보존)
 
-    비모니터링은 28일이었으나 3달 수익률 계산에 64거래일 이력이 필요해 90일로 맞췄다.
-    용량 추정(2026-09): market_data 38MB → 약 114MB, DB 총계 132MB → 238MB(500MB 중 48%).
+    3달 수익률에는 64거래일 이력이 필요하다. 달력 90일은 주말·공휴일을 빼면
+    62거래일뿐이라 **모자란다**(실측: 90일 보존 직후 quarter 계산 불가로 떨어짐).
+    여유를 둬 120일(약 83거래일)로 잡는다 — 연휴가 긴 해에도 64를 넘긴다.
+    용량 추정(2026-09): market_data 38MB → 약 150MB, DB 총계 132MB → 275MB(500MB 중 55%).
     ⚠️ 대량 DELETE 한 문장으로 처리하면 statement timeout(57014) 발생 →
        오래된 날짜부터 WIN_DAYS 크기 창으로 나눠 삭제한다.
     """
-    KEEP_MON = 90    # 모니터링 종목 보존일
-    KEEP_ALL = 90    # 비모니터링 보존일 (구 28 — 3달 수익률용으로 연장)
+    KEEP_MON = 120   # 모니터링 종목 보존일 (구 90 — 3달 수익률 여유분)
+    KEEP_ALL = 120   # 비모니터링 보존일 (구 28)
     WIN_DAYS = 14    # 삭제 배치 날짜 창 (statement timeout 회피)
     try:
         sb = _bridge._get_client() if _BRIDGE_OK else None

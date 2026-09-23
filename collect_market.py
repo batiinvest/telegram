@@ -245,9 +245,30 @@ def calculate_returns(sb, target_codes: list = None, target_date: str = None):
                 row[f"{col}_return"] = round((cur - past) / past * 100, 2)
         updates.append(row)
 
-    # 기준일 행 존재가 보장되므로 부분 컬럼 upsert = update로 동작
-    updated = batch_update_existing(sb, "market_data", updates)
+    updated = _write_returns(sb, updates)
     log.info(f"[수익률] 완료: {updated}개 종목 업데이트")
+
+
+def _write_returns(sb, updates: list) -> int:
+    """수익률 쓰기 — RPC 일괄 UPDATE 우선, 없으면 행 단위로 폴백.
+
+    부분 컬럼 upsert는 쓸 수 없다: PostgREST가 INSERT 후보를 먼저 만들어
+    market_data.corp_name의 NOT NULL을 충돌 판정보다 먼저 검사해 23502로 실패한다.
+    그래서 기존엔 행 단위 UPDATE를 돌았고 2,577종목에 약 317초가 걸렸다(행당 127ms).
+    sql/bulk_update_returns.sql의 함수가 있으면 한 문장으로 끝난다.
+    """
+    if not updates:
+        return 0
+    try:
+        res = sb.rpc("bulk_update_market_returns", {"payload": updates}).execute()
+        n = res.data if isinstance(res.data, int) else None
+        if n is not None:
+            log.info(f"[수익률] RPC 일괄 갱신 {n}행")
+            return n
+    except Exception as e:
+        # 함수 미설치(PGRST202) 등 — 조용히 기존 경로로
+        log.info(f"[수익률] RPC 사용 불가 → 행 단위 폴백 ({str(e)[:80]})")
+    return batch_update_existing(sb, "market_data", updates)
 
 def run(all_listed: bool = False, max_workers: int = 5):
     """메인 수집 함수"""
