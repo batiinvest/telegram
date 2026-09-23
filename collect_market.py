@@ -144,85 +144,110 @@ def calculate_returns(sb, target_codes: list = None, target_date: str = None):
     """
     DB에 쌓인 market_data 가격으로 기간별 수익률 일괄 계산·업데이트
     - 1주(5거래일), 1달(21거래일), 3달(63거래일), 1년(252거래일)
+
+    [조회 전략] 종목별 전 이력을 읽지 않고 '필요한 거래일의 행'만 읽는다.
+    구현은 종목 10개씩 끊어 그 종목의 모든 과거 행을 받았는데(= 사실상 테이블 전량),
+    보존 기간을 늘리면 읽는 양이 그대로 비례해 커진다. 실제로 필요한 건
+    기준일 + 각 기간의 과거 1일치뿐이라, 거래일 달력을 먼저 구해 그 날짜들만 조회한다.
+    (실측 2026-09: 전량 읽기 373초 → 날짜 지정 방식으로 대폭 단축)
+
+    수집 누락·거래정지로 해당 날짜에 행이 없을 수 있어 기간마다 최대 3거래일까지
+    뒤로 물러나며 찾는다. 그래도 없으면 그 기간은 None.
     """
     import datetime
+    PERIODS = {"week": 5, "month": 21, "quarter": 63, "year": 252}
+    FALLBACK = 3          # 목표 거래일에 행이 없을 때 뒤로 물러나는 최대 일수
+
+    # ── 1) 거래일 달력 ──────────────────────────────────────────────
+    # market_data에서 DISTINCT base_date를 직접 못 뽑으므로(행이 종목수만큼 중복),
+    # 이력이 가장 온전한 대형 모니터링 종목 몇 개의 날짜를 합집합으로 쓴다.
+    cal = set()
+    for ref in ("005930", "000660", "005380"):
+        try:
+            res = sb.table("market_data").select("base_date") \
+                .eq("stock_code", ref).not_.is_("price", "null") \
+                .order("base_date", desc=True).limit(400).execute()
+            cal.update(r["base_date"] for r in (res.data or []))
+        except Exception as e:
+            log.warning(f"[수익률] 거래일 달력 조회 실패({ref}): {e}")
+    cal = sorted(cal, reverse=True)
+    if not cal:
+        log.error("[수익률] 거래일 달력을 만들지 못함 — 중단")
+        return
+
+    # ── 2) 기준일 ──────────────────────────────────────────────────
     if target_date:
         today_str = target_date
     else:
-        # 오늘 날짜 데이터가 없으면 DB 최신 날짜 자동 사용
         today_str = datetime.date.today().isoformat()
-        check = sb.table("market_data").select("base_date") \
-            .eq("base_date", today_str).limit(1).execute()
-        if not check.data:
-            latest = sb.table("market_data").select("base_date") \
-                .order("base_date", desc=True).limit(1).execute()
-            if latest.data:
-                today_str = latest.data[0]["base_date"]
-                log.info(f"[수익률] 오늘 데이터 없음 — 최신 거래일 {today_str} 기준으로 계산")
+        if today_str not in cal:
+            today_str = cal[0]
+            log.info(f"[수익률] 오늘 데이터 없음 — 최신 거래일 {today_str} 기준으로 계산")
+    if today_str not in cal:
+        log.error(f"[수익률] 기준일 {today_str}이 거래일 달력에 없음 — 중단")
+        return
+    base_i = cal.index(today_str)
 
+    # ── 3) 대상 종목 ───────────────────────────────────────────────
     if target_codes:
-        codes = target_codes
+        codes = set(target_codes)
     else:
-        # 전체 상장사 대상. 계산은 이미 쌓인 market_data 가격만 쓰므로 API 호출이 늘지 않는다.
-        # 다만 비모니터링 종목은 이력이 얕아(28일 보존·장 마감시에만 수집) 1주/1달 위주로만
-        # 채워지고 3달·1년은 대부분 None이 된다 — 이력이 쌓이는 만큼 자연히 채워진다.
+        # 전체 상장사. 계산은 이미 쌓인 가격만 쓰므로 KIS 호출은 늘지 않는다.
         # 주의: .execute()는 1000행에서 잘린다 → 2,500여 종목엔 페이지네이션 필수
         rows = _fetch_all_pages(
             sb.table("companies").select("code").eq("active", True).order("code")
         )
-        codes = [r["code"].split(".")[0] for r in (rows or [])]
-
+        codes = {r["code"].split(".")[0] for r in (rows or [])}
     if not codes:
-        log.info("[수익률] 오늘 수집 종목 없음 — 스킵")
+        log.info("[수익률] 대상 종목 없음 — 스킵")
         return
 
-    log.info(f"[수익률] {len(codes)}개 종목 기간별 수익률 계산 시작")
-    updated = 0
-    PERIODS = {"week": 5, "month": 21, "quarter": 63, "year": 252}
+    # ── 4) 필요한 날짜만 추린다 ─────────────────────────────────────
+    # 기간별 후보 날짜(목표일 + 폴백). 달력을 벗어나면 그 기간은 계산 불가.
+    period_dates = {}
+    for col, days in PERIODS.items():
+        cands = [cal[base_i + days + k] for k in range(FALLBACK)
+                 if base_i + days + k < len(cal)]
+        if cands:
+            period_dates[col] = cands
+    need = {today_str}
+    for v in period_dates.values():
+        need.update(v)
 
-    chunk = 10  # 종목 수 줄여서 1000건 limit 회피
-    for i in range(0, len(codes), chunk):
-        batch = codes[i:i+chunk]
-        all_rows = _fetch_all_pages(
-            sb.table("market_data")
-              .select("stock_code,base_date,price")
-              .in_("stock_code", batch)
-              .not_.is_("price", "null")
-              .order("base_date", desc=False)
+    log.info(f"[수익률] {len(codes)}개 종목 / 기준 {today_str} / 조회 거래일 {len(need)}개 "
+             f"(가능 기간: {', '.join(period_dates) or '없음'})")
+
+    # ── 5) 해당 날짜 행만 조회 ──────────────────────────────────────
+    price = {}            # {code: {date: price}}
+    for d in sorted(need, reverse=True):
+        rows = _fetch_all_pages(
+            sb.table("market_data").select("stock_code,price")
+              .eq("base_date", d).not_.is_("price", "null").order("stock_code")
         )
+        for r in (rows or []):
+            c = r["stock_code"]
+            if c in codes:
+                price.setdefault(c, {})[d] = r["price"]
 
-        hist = {}
-        for r in all_rows:
-            code = r["stock_code"]
-            if code not in hist:
-                hist[code] = []
-            hist[code].append((r["base_date"], r["price"]))
+    # ── 6) 계산 ────────────────────────────────────────────────────
+    updates = []
+    for code, by_date in price.items():
+        cur = by_date.get(today_str)
+        if not cur:
+            continue          # 기준일 행이 없으면 건너뛴다(upsert가 스켈레톤 행을 만들지 않도록)
+        # PostgREST 벌크는 행마다 컬럼 구성이 같아야 함 → 미달 기간은 None
+        row = {"stock_code": code, "base_date": today_str,
+               "week_return": None, "month_return": None,
+               "quarter_return": None, "year_return": None}
+        for col, cands in period_dates.items():
+            past = next((by_date[d] for d in cands if by_date.get(d)), None)
+            if past:
+                row[f"{col}_return"] = round((cur - past) / past * 100, 2)
+        updates.append(row)
 
-        updates = []
-        for code, prices in hist.items():
-            if len(prices) < 2:
-                continue
-            last_date, current_price = prices[-1]
-            # 오늘 행이 없는 종목은 스킵 — upsert가 스켈레톤 행을 만들지 않도록
-            if not current_price or last_date != today_str:
-                continue
-            # PostgREST 벌크는 행마다 컬럼 구성이 같아야 함 → 미달 기간은 None
-            row_update = {"stock_code": code, "base_date": today_str,
-                          "week_return": None, "month_return": None,
-                          "quarter_return": None, "year_return": None}
-            for col, days in PERIODS.items():
-                if len(prices) >= days + 1:
-                    past_price = prices[-(days + 1)][1]
-                    if past_price:
-                        row_update[f"{col}_return"] = round(
-                            (current_price - past_price) / past_price * 100, 2)
-            updates.append(row_update)
-
-        # 오늘 행 존재가 위에서 보장되므로 부분 컬럼 upsert = update로 동작
-        updated += batch_update_existing(sb, "market_data", updates)
-
+    # 기준일 행 존재가 보장되므로 부분 컬럼 upsert = update로 동작
+    updated = batch_update_existing(sb, "market_data", updates)
     log.info(f"[수익률] 완료: {updated}개 종목 업데이트")
-
 
 def run(all_listed: bool = False, max_workers: int = 5):
     """메인 수집 함수"""
