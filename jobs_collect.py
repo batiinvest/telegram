@@ -57,14 +57,15 @@ def job_sync_listed_companies():
 
 @_job()
 def job_cleanup_market_data():
-    """토요일 새벽 — market_data 정리
-    - 모니터링 종목: 90일 보존
-    - 전체 상장사(비모니터링): 28일 보존
+    """토요일 새벽 — market_data 정리 (모니터링·비모니터링 모두 90일 보존)
+
+    비모니터링은 28일이었으나 3달 수익률 계산에 64거래일 이력이 필요해 90일로 맞췄다.
+    용량 추정(2026-09): market_data 38MB → 약 114MB, DB 총계 132MB → 238MB(500MB 중 48%).
     ⚠️ 대량 DELETE 한 문장으로 처리하면 statement timeout(57014) 발생 →
        오래된 날짜부터 WIN_DAYS 크기 창으로 나눠 삭제한다.
     """
     KEEP_MON = 90    # 모니터링 종목 보존일
-    KEEP_ALL = 28    # 전체 종목 보존일
+    KEEP_ALL = 90    # 비모니터링 보존일 (구 28 — 3달 수익률용으로 연장)
     WIN_DAYS = 14    # 삭제 배치 날짜 창 (statement timeout 회피)
     try:
         sb = _bridge._get_client() if _BRIDGE_OK else None
@@ -106,15 +107,14 @@ def job_cleanup_market_data():
                 cur = win_end
             return total
 
-        # 1) 비모니터링 종목 — 28일 초과 삭제
-        if mon_codes:
-            n1 = _windowed_delete(cutoff_all, lambda q: q.not_.in_('stock_code', mon_codes))
-        else:
+        # 보존일이 같으면 종목 구분 없이 한 번에 — 같은 창을 두 번 훑을 이유가 없다
+        if KEEP_ALL == KEEP_MON or not mon_codes:
             n1 = _windowed_delete(cutoff_all, lambda q: q)
-
-        # 2) 모니터링 종목 — 90일 초과 삭제
-        n2 = 0
-        if mon_codes:
+            n2 = 0
+        else:
+            # 1) 비모니터링 — 짧은 보존
+            n1 = _windowed_delete(cutoff_all, lambda q: q.not_.in_('stock_code', mon_codes))
+            # 2) 모니터링 — 긴 보존
             n2 = _windowed_delete(cutoff_mon, lambda q: q.in_('stock_code', mon_codes))
 
         logging.info(f"🗑️ [정리] market_data 정리 완료 — 비모니터링 {n1}행 / 모니터링 {n2}행 삭제 (보존 {KEEP_MON}일/{KEEP_ALL}일)")
