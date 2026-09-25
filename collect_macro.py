@@ -141,7 +141,8 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
     KIS 일별 지수 차트 API로 최근 거래일 종가 + 등락률 조회
     (장중/장외/주말/휴장일 모두 마지막 거래일 종가 반환)
     iscd: '0001'=코스피, '1001'=코스닥, '2001'=코스피200
-    returns: (price, chg_pct) or (None, None)
+    returns: (price, chg_pct, data_date) — data_date는 그 값의 실제 영업일(YYYYMMDD).
+             휴장일엔 오늘이 아니라 마지막 거래일이 돌아오므로 호출부가 구분할 수 있다.
     """
     try:
         from managers import kis_auth
@@ -162,7 +163,7 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
                                 params, custtype="P")
         if not body:
             log.warning(f"[KIS 지수] 응답 없음 — 토큰/네트워크 (iscd={iscd})")
-            return None, None
+            return None, None, None
         log.debug(f"[KIS 지수 raw] iscd={iscd} keys={list(body.keys())} rt_cd={body.get('rt_cd')} msg={body.get('msg1','')}")
 
         # output1 = 최신 요약(지수 현재가 + 전일대비율). output2(일별 차트행)에는
@@ -189,12 +190,19 @@ def fetch_kr_index_kis(iscd: str) -> tuple:
 
         if not price:
             log.warning(f"[KIS 지수] 가격 없음 (iscd={iscd})")
-            return None, None
-        log.info(f"  [KIS 지수] iscd={iscd} → {price} ({chg}%)")
-        return round(price, 2), chg
+            return None, None, None
+
+        # 값의 실제 영업일 — output2는 최신 거래일부터 내려온다
+        _o2 = body.get('output2') or []
+        if isinstance(_o2, dict):
+            _o2 = [_o2]
+        data_date = (_o2[0].get('stck_bsop_date') if _o2 else None) or None
+
+        log.info(f"  [KIS 지수] iscd={iscd} → {price} ({chg}%) [{data_date}]")
+        return round(price, 2), chg, data_date
     except Exception as e:
         log.warning(f"[KIS 지수] 조회 실패 iscd={iscd}: {e}")
-        return None, None
+        return None, None, None
 
 
 def collect_all() -> dict:
@@ -207,9 +215,20 @@ def collect_all() -> dict:
 
     # ── 코스피/코스닥/코스피200: KIS API (yfinance보다 정확) ──
     log.info("  [KIS] 국내 지수 수집...")
-    kospi_val,   kospi_chg   = fetch_kr_index_kis('0001')
-    kosdaq_val,  kosdaq_chg  = fetch_kr_index_kis('1001')
-    kospi200_val, kospi200_chg = fetch_kr_index_kis('2001')
+    kospi_val,    kospi_chg,    kr_date = fetch_kr_index_kis('0001')
+    kosdaq_val,   kosdaq_chg,   _       = fetch_kr_index_kis('1001')
+    kospi200_val, kospi200_chg, _       = fetch_kr_index_kis('2001')
+
+    # 휴장일엔 KIS가 '마지막 거래일' 종가를 그대로 준다. 그 값을 오늘 행에 저장하면
+    # 직전 거래일이 복제돼 휴장일에도 "코스피 +0.9%"로 보인다 — 2026-09-24~25(추석)에
+    # 실측했고, 과거 35행(주말 28·공휴일 7)이 같은 방식으로 오염돼 있었다.
+    # 해외 지표·환율은 미국장이 열려 실제로 갱신되므로 그대로 저장한다.
+    _today_kst = (datetime.now(timezone.utc) + timedelta(hours=9)).strftime('%Y%m%d')
+    if kr_date and kr_date != _today_kst:
+        log.info(f"[국내지수] 데이터 날짜 {kr_date} ≠ 오늘 {_today_kst} — 휴장일로 보고 저장 생략")
+        kospi_val = kospi_chg = None
+        kosdaq_val = kosdaq_chg = None
+        kospi200_val = kospi200_chg = None
 
     result['kospi']        = kospi_val
     result['kospi_chg']    = kospi_chg
@@ -219,8 +238,8 @@ def collect_all() -> dict:
     result['kospi200_chg'] = kospi200_chg
 
     # KIS에서 값을 못 가져온 경우 경고 (휴장일 등)
-    if kospi_val is None:
-        log.warning("⚠️  코스피 KIS 수집 실패 — 휴장일이거나 토큰 만료")
+    if kospi_val is None and not kr_date:
+        log.warning("⚠️  코스피 KIS 수집 실패 — 응답 없음(토큰/네트워크)")
 
     latest_dates = {}  # 티커별 실제 데이터 날짜 추적 (해외 지표용)
 
