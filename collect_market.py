@@ -218,32 +218,63 @@ def calculate_returns(sb, target_codes: list = None, target_date: str = None):
              f"(가능 기간: {', '.join(period_dates) or '없음'})")
 
     # ── 5) 해당 날짜 행만 조회 ──────────────────────────────────────
-    price = {}            # {code: {date: price}}
+    # 상장주수도 함께 읽는다 — 액면병합·분할 보정용(아래 6 참조).
+    price = {}            # {code: {date: (price, listing_shares)}}
     for d in sorted(need, reverse=True):
         rows = _fetch_all_pages(
-            sb.table("market_data").select("stock_code,price")
+            sb.table("market_data").select("stock_code,price,listing_shares")
               .eq("base_date", d).not_.is_("price", "null").order("stock_code")
         )
         for r in (rows or []):
             c = r["stock_code"]
             if c in codes:
-                price.setdefault(c, {})[d] = r["price"]
+                price.setdefault(c, {})[d] = (r["price"], r["listing_shares"])
 
     # ── 6) 계산 ────────────────────────────────────────────────────
-    updates = []
+    # 액면병합·분할·무상증자가 있으면 과거 주가를 그대로 비교할 수 없다.
+    # KIS는 수정주가를 주지 않는다 — 전일대비(chg)만 기준가로 보정될 뿐 price는 미조정이라
+    # 병합 전후를 직접 나누면 배수가 그대로 수익률로 튄다.
+    # 실측 2026-09: 사조동아원 10:1 병합으로 1달 수익률이 +1043%, 신라섬유는 부호까지
+    # 뒤집혀 +266%로 찍혔다(실제 -26.6%). 1달 구간 62종목 / 1주 10종목이 영향.
+    # → 상장주수 비(과거/현재)로 과거가를 환산한다. 액면 변경·무상증자는 주수와 가격이
+    #   정확히 반비례하므로 이 환산이 곧 수정주가다. 유상증자처럼 주수와 가격이
+    #   반비례하지 않는 변동에 과보정하지 않도록 배수급 변동(1.5배 이상)만 보정한다.
+    #   증자·감자는 주수가 변해도 가격이 반비례하지 않아 이 환산이 과보정된다
+    #   (실측: 한국유니온제약 출자전환으로 주수 10배 → 보정 후 +792%). 액면 변경이라면
+    #   보정 후 값이 정상 범위로 들어오므로, 보정했는데도 극단적이면 버린다(빈칸이 거짓값보다 낫다).
+    ADJ_MIN = 1.5
+    ADJ_MAX_PCT = 200
+    updates, adjusted, dropped = [], 0, 0
     for code, by_date in price.items():
         cur = by_date.get(today_str)
-        if not cur:
+        if not cur or not cur[0]:
             continue          # 기준일 행이 없으면 건너뛴다(upsert가 스켈레톤 행을 만들지 않도록)
+        cur_px, cur_sh = cur
         # PostgREST 벌크는 행마다 컬럼 구성이 같아야 함 → 미달 기간은 None
         row = {"stock_code": code, "base_date": today_str,
                "week_return": None, "month_return": None,
                "quarter_return": None, "year_return": None}
         for col, cands in period_dates.items():
             past = next((by_date[d] for d in cands if by_date.get(d)), None)
-            if past:
-                row[f"{col}_return"] = round((cur - past) / past * 100, 2)
+            if not past or not past[0]:
+                continue
+            past_px, past_sh = past
+            adj = False
+            if cur_sh and past_sh:
+                ratio = past_sh / cur_sh
+                if ratio >= ADJ_MIN or ratio <= 1 / ADJ_MIN:
+                    past_px *= ratio
+                    adjusted += 1
+                    adj = True
+            pct = round((cur_px - past_px) / past_px * 100, 2)
+            if adj and abs(pct) > ADJ_MAX_PCT:
+                dropped += 1
+                continue
+            row[f"{col}_return"] = pct
         updates.append(row)
+    if adjusted:
+        log.info(f"[수익률] 액면 변경 보정 {adjusted}건 (과보정 의심 {dropped}건 제외)")
+
 
     updated = _write_returns(sb, updates)
     log.info(f"[수익률] 완료: {updated}개 종목 업데이트")
