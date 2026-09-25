@@ -47,9 +47,17 @@ def job_sync_listed_companies():
         return
     try:
         logging.info("🏢 [상장사동기화] 시작")
-        run_sync_companies()
+        res = run_sync_companies() or {}
         logging.info("🏢 [상장사동기화] 완료")
-        _log_notice("system", "[상장사동기화] 완료")
+        # 상폐는 되돌릴 일이 생길 수 있어 종목명을 알림에 남긴다(로그만 보면 놓친다)
+        gone = res.get("deactivated") or []
+        msg = f"[상장사동기화] 완료 — 신규 {res.get('inserted', 0)} · 갱신 {res.get('updated', 0)}"
+        if gone:
+            names = ", ".join(f"{n}({c})" for n, c in gone[:10])
+            msg += f" · 상폐 {len(gone)}종목 비활성화: {names}"
+            if len(gone) > 10:
+                msg += f" 외 {len(gone) - 10}종목"
+        _log_notice("system", msg)
     except Exception as e:
         logging.error(f"❌ [상장사동기화] 오류: {e}")
         mark_failed(e)

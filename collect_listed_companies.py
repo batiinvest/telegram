@@ -35,6 +35,7 @@ except ImportError:
     def _get_sb(): return _cs(os.getenv("SB_URL",""), os.getenv("SB_SERVICE_KEY",""))
 
 from collect_utils import fetch_all_pages as _fetch_all_pages, batch_upsert
+from kis_client import get_raw_price as _get_raw_price   # 상폐 2차 판정용
 import io, zipfile, re
 import requests
 
@@ -92,6 +93,28 @@ def _load_kis_listed() -> dict:
     return out
 
 
+def _is_delisted(code: str) -> bool:
+    """마스터 부재 종목이 정말 상장폐지인지 시세로 2차 확인한다.
+
+    마스터 부재만으로는 단정할 수 없다 — 실측(2026-09-25) 거래량이 끊긴 118종목 중
+    110종목이 매매가능 마스터에 그대로 있었고, 정리매매 4종목도 전부 잔존했다.
+    즉 거래정지는 마스터에서 빠지지 않는다. 반대로 상폐 종목은 inquire-price가
+    rt_cd=0을 주면서 현재가·상장주수를 0으로 채워 보낸다(= 코드 미존재 신호).
+    조회 자체가 실패하면 판단하지 않는다 — 오판보다 미처리가 낫다.
+    """
+    try:
+        raw = _get_raw_price(code)
+        if not raw:
+            return False
+        o = raw.get("output", raw)
+        px = str(o.get("stck_prpr") or "0").strip()
+        sh = str(o.get("lstn_stcn") or "0").strip()
+        return px in ("", "0") and sh in ("", "0")
+    except Exception as e:
+        log.debug(f"[상폐판정] {code} 시세 조회 실패 → 보류: {e}")
+        return False
+
+
 def run(dry_run: bool = False):
     if not all([DART_API_KEY, SB_URL, SB_SERVICE_KEY]):
         # sys.exit 금지 — 스케줄러 잡에서 호출되므로 SystemExit가 except Exception을 뚫음
@@ -142,7 +165,7 @@ def run(dry_run: bool = False):
     #   → chat_id 포함 insert가 PGRST204로 전멸 (07-04~07-11 동기화 무동작의 원인)
     log.info("DB 기존 종목 로드 중...")
     rows = _fetch_all_pages(sb.table("companies").select(
-        "id,name,code,corp_code,market,monitoring_level,is_monitored"
+        "id,name,code,corp_code,market,monitoring_level,is_monitored,active"
     ))
     db_map = {
         (row.get("code") or "").strip(): row
@@ -198,6 +221,8 @@ def run(dry_run: bool = False):
 
     for code, row in db_map.items():
         if row.get("market") == "KONEX": continue
+        # 이미 상폐 처리된 종목은 매주 다시 후보로 잡히지 않게 건너뛴다
+        if row.get("active") is False: continue
         if code not in dart_codes:
             level = row.get("monitoring_level", "data")
             if level == "data":
@@ -210,8 +235,8 @@ def run(dry_run: bool = False):
     log.info(f"신규상장:        {len(new_listings)}개")
     log.info(f"스팩 제외:       {spac_skipped}개")
     log.info(f"사명변경:        {len(name_changes)}개")
-    log.info(f"상폐(data):      {len(delisted_data)}개 → 미삭제(거래정지 구분불가 수동확인)")
-    log.info(f"상폐(모니터링):  {len(delisted_monitored)}개 → 수동 확인 필요")
+    log.info(f"상폐후보(data):  {len(delisted_data)}개 → 시세 2차 판정 예정")
+    log.info(f"상폐후보(모니터링): {len(delisted_monitored)}개 → 시세 2차 판정 예정")
 
     if name_changes:
         log.info("\n[사명변경 목록]")
@@ -219,7 +244,7 @@ def run(dry_run: bool = False):
             log.info(f"  {nc['old_name']} → {nc['new_name']} ({nc['code']}, {nc['level']})")
 
     if delisted_monitored:
-        log.warning("\n[⚠️  상폐 경고 — 수동 처리 필요]")
+        log.warning("\n[⚠️  모니터링 종목이 마스터 부재 — 시세 2차 판정 대상]")
         for d in delisted_monitored:
             log.warning(f"  {d['name']} ({d.get('code')}) level={d.get('monitoring_level')}")
 
@@ -241,14 +266,41 @@ def run(dry_run: bool = False):
         time.sleep(0.03)
     log.info(f"업데이트: {updated}개 (사명변경 {len(name_changes)}개 포함)")
 
-    # ⚠️ KIS 매매가능 마스터는 거래정지 종목을 제외하므로 '상폐 후보'에 거래정지가 섞인다.
-    #    자동삭제하면 거래정지 종목 행이 소실되므로 data 레벨도 삭제하지 않고 경고만 낸다
-    #    (2026-08 KRX Akamai 차단으로 kind.krx 목록 → KIS 마스터 교체하며 도입).
-    deleted = 0
-    if delisted_data:
-        log.warning("[상폐 후보(data) — 자동삭제 안 함, 거래정지 가능성 수동확인]")
-        for d in delisted_data:
-            log.warning(f"  {d['name']} ({d.get('code')})")
+    # 상폐 후보 2차 판정 — 시세가 살아 있으면 거래정지, 비어 있으면 상폐.
+    # 구현 이전엔 '마스터 부재만으로는 거래정지와 구분 불가'로 보고 경고만 냈는데,
+    # 수동 확인이 실제로는 이뤄지지 않아 상폐 8종목이 2026-09까지 active로 남아
+    # 매일 price=NULL 행을 쌓고 표에 빈 줄로 노출됐다. 판정 근거는 _is_delisted 참조.
+    # 삭제가 아니라 active=False이므로 행도 과거 market_data도 남는다 — 오판해도 되돌린다.
+    MAX_AUTO_DEACTIVATE = 30   # 후보가 이보다 많으면 마스터 로드 이상을 의심해 손대지 않는다
+    candidates = delisted_data + delisted_monitored
+    deactivated, still_listed = [], []
+    if len(candidates) > MAX_AUTO_DEACTIVATE:
+        log.warning(f"[상폐] 후보 {len(candidates)}개 — {MAX_AUTO_DEACTIVATE}개 초과라 "
+                    f"자동 비활성화를 건너뛴다(마스터 로드 이상 의심). 경고만 남긴다.")
+        still_listed = candidates
+    else:
+        for d in candidates:
+            code = (d.get("code") or "").split(".")[0]
+            if not code:
+                continue
+            if not _is_delisted(code):
+                still_listed.append(d)
+                continue
+            try:
+                sb.table("companies").update({"active": False, "is_monitored": False})                   .eq("id", d["id"]).execute()
+                deactivated.append(d)
+            except Exception as e:
+                log.warning(f"[상폐] {d['name']}({code}) 비활성화 실패: {e}")
+            time.sleep(0.15)
+
+    if deactivated:
+        log.warning(f"[상폐] 비활성화 {len(deactivated)}개 — active=False (행·과거 시세는 보존)")
+        for d in deactivated:
+            log.warning(f"  {d['name']} ({d.get('code')}) level={d.get('monitoring_level')}")
+    if still_listed:
+        log.info(f"[상폐후보] {len(still_listed)}개는 시세가 살아 있어 거래정지로 보고 유지")
+        for d in still_listed:
+            log.info(f"  {d['name']} ({d.get('code')})")
 
     # 6. 최종 현황
     def cnt(col, val):
@@ -259,8 +311,8 @@ def run(dry_run: bool = False):
 === 동기화 완료 ===
 신규추가:  {inserted}개
 업데이트:  {updated}개
-상폐후보:  {len(delisted_data)}개 (자동삭제 폐지 — 전부 수동확인)
-상폐경고:  {len(delisted_monitored)}개 (수동 처리 필요)
+상폐처리:  {len(deactivated)}개 (active=False — 시세 빈응답 확인)
+거래정지:  {len(still_listed)}개 (시세 살아있어 유지)
 
 총 종목수: {total}개
   full:    {cnt('monitoring_level','full')}개
@@ -269,6 +321,14 @@ def run(dry_run: bool = False):
 코스피:    {cnt('market','KOSPI')}개
 코스닥:    {cnt('market','KOSDAQ')}개
 """)
+
+    # 호출부(jobs_collect)가 운영 알림에 실어 보낼 수 있게 결과를 돌려준다
+    return {
+        "inserted":    inserted,
+        "updated":     updated,
+        "deactivated": [(d["name"], (d.get("code") or "")) for d in deactivated],
+        "still_listed": len(still_listed),
+    }
 
 
 if __name__ == "__main__":
