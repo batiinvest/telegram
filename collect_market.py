@@ -77,7 +77,6 @@ def collect_market_one(code: str, name: str) -> Optional[dict]:
             # ── OHLC + 가격 범위 ──
             "high_price":        safe_int(output.get("stck_hgpr"),            zero_as_none=True),
             "low_price":         safe_int(output.get("stck_lwpr"),            zero_as_none=True),
-            "vwap":              safe_int(output.get("wghn_avrg_stck_prc"),   zero_as_none=True),
             # ── 거래량 / 시총 ──
             "volume":            safe_int(output.get("acml_vol"),             zero_as_none=True),
             "trading_value":     safe_int(output.get("acml_tr_pbmn"),         zero_as_none=True),
@@ -1032,7 +1031,6 @@ def backfill_market(days: int = 90, max_workers: int = 3,
         'market_warn_code', 'is_caution',
         'manage_issue_code', 'is_short_over', 'is_liquidation',
         'hgpr_cls_code', 'hgpr_cls', 'fiscal_month',
-        'vwap',
         'bps', 'dps',
     ]
     for row in all_rows:
