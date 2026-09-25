@@ -252,7 +252,9 @@ def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
     Args:
         key:          DB 활성화 체크 키 (None이면 체크 안 함)
         holiday:      True면 한국 휴장일(공휴일+주말) 스킵
-        weekday_only: True면 주말 스킵 (holiday보다 느슨한 조건)
+        weekday_only: True면 주말만 스킵 — **공휴일은 통과한다**.
+                      한국 거래일에만 의미가 있는 잡이라면 holiday를 써야 한다.
+                      (2026-09-25 추석에 수급·신고가·투자의견 잡이 이 차이로 돌았다)
     """
     def decorator(fn):
         _JOB_GUARDS[fn.__name__] = {

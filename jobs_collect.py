@@ -678,7 +678,9 @@ def job_collect_macro():
         mark_failed(e)
 
 
-@_job(weekday_only=True)
+# 증권사 리포트는 영업일에만 나온다. 휴장일 실행은 같은 30일 윈도를 재수집할 뿐이고,
+# 다음 거래일에 어차피 같은 윈도를 다시 훑으므로 스킵해도 잃는 게 없다.
+@_job(holiday=True)
 def job_collect_analyst_opinions():
     """증권사 투자의견 수집 (하루 2회: 장전 + 장후)"""
     logging.info("📋 [투자의견] 증권사 투자의견 수집 시작")
@@ -691,7 +693,7 @@ def job_collect_analyst_opinions():
         mark_failed(e)
 
 
-@_job(weekday_only=True)
+@_job(holiday=True)
 def job_collect_foreign_institution():
     """기관/외국인 매매가집계 수집 (장중 4회 + 장마감 후)"""
     logging.info("=== 기관/외국인 수급 수집 시작 ===")
@@ -704,7 +706,7 @@ def job_collect_foreign_institution():
         mark_failed(e)
 
 
-@_job(weekday_only=True)
+@_job(holiday=True)
 def job_collect_new_high():
     """장 마감 후 신고가 종목 수집 + 알림 발송"""
     logging.info("=== 신고가 종목 수집 시작 ===")
