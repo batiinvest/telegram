@@ -862,9 +862,9 @@ def _check_market_warnings():
         # 최신 거래일 경보 종목 (전체시장 — PostgREST 1000행 한도 회피)
         alerts = fetch_all_pages(
             sb.table('market_data')
-              .select('stock_code,corp_name,market_warn_code,is_caution')
+              .select('stock_code,corp_name,market_warn_code')
               .eq('base_date', latest)
-              .or_('is_caution.eq.true,market_warn_code.neq.00')
+              .neq('market_warn_code', '00')
         )
         if not alerts:
             return
@@ -876,7 +876,7 @@ def _check_market_warnings():
                 sb.table('market_data')
                   .select('stock_code')
                   .eq('base_date', prev)
-                  .or_('is_caution.eq.true,market_warn_code.neq.00')
+                  .neq('market_warn_code', '00')
             )
             prev_warn = {r['stock_code'] for r in prev_rows}
 
@@ -893,7 +893,6 @@ def _check_market_warnings():
             ('03', '🆘 투자위험 종목 지정',   lambda a: a.get('market_warn_code') == '03'),
             ('02', '🚨 투자경고 종목 지정',   lambda a: a.get('market_warn_code') == '02'),
             ('01', '⚠️ 투자주의 종목 지정',   lambda a: a.get('market_warn_code') == '01'),
-            ('ca', '🔵 투자유의 종목 지정',   lambda a: a.get('is_caution') and (a.get('market_warn_code') or '00') == '00'),
         ]
         # 지정 효력 안내 (거래소 시장경보제도 기준) — 헤더 밑 한 줄로 노출
         NOTES = {

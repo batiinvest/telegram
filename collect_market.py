@@ -88,7 +88,6 @@ def collect_market_one(code: str, name: str) -> Optional[dict]:
             "pbr":               safe_float(output.get("pbr"),                zero_as_none=True),
             "eps":               safe_int(output.get("eps"),                  zero_as_none=True),
             "bps":               safe_int(output.get("bps"),                  zero_as_none=True),
-            "dps":               safe_int(output.get("dps"),                  zero_as_none=True),
             "fiscal_month":      output.get("stac_month") or None,
             # ── 수급 ──
             "foreign_hold_rate": safe_float(output.get("hts_frgn_ehrt"),      zero_as_none=True),
@@ -107,7 +106,6 @@ def collect_market_one(code: str, name: str) -> Optional[dict]:
             "w52_low_date":      _parse_date(output.get("w52_lwpr_date")),
             # ── 종목 상태 ──
             "market_warn_code":  output.get("mrkt_warn_cls_code") or None,
-            "is_caution":        (output.get("invt_caful_yn") == "Y") or None,
             "manage_issue_code": output.get("mang_issu_cls_code") or None,
             "is_short_over":     (output.get("short_over_yn") == "Y") or None,
             "is_liquidation":    (output.get("sltr_yn") == "Y") or None,
@@ -1028,10 +1026,10 @@ def backfill_market(days: int = 90, max_workers: int = 3,
         'foreign_hold_rate', 'foreign_hold_qty', 'foreign_net_buy',
         'program_net_buy', 'short_sell_qty',
         'w52_high', 'w52_low', 'w52_high_date', 'w52_low_date',
-        'market_warn_code', 'is_caution',
+        'market_warn_code',
         'manage_issue_code', 'is_short_over', 'is_liquidation',
         'hgpr_cls_code', 'hgpr_cls', 'fiscal_month',
-        'bps', 'dps',
+        'bps',
     ]
     for row in all_rows:
         sup = supplement.get(row['stock_code'], {})
