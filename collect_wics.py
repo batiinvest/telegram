@@ -118,6 +118,17 @@ WICS_CODES: Dict[str, str] = {
     '독립전력생산및에너지거래': 'G551050',   # 공식 분류엔 있으나 현재 상장 종목 없음
 }
 
+# 세 표는 모두 같은 출처(FnGuide 공식 분류표)를 옮겨 적은 것이라 서로 맞아야 한다.
+# 새 업종을 WICS_CODES에만 넣고 상위 표를 빠뜨리면 그 종목의 섹터·중분류가 조용히 빈다
+# — 실제로 독립전력생산및에너지거래가 한 표에서만 누락된 적이 있다. 시작할 때 대조한다.
+_orphan_sec = sorted({v[:3] for v in WICS_CODES.values()} - set(WICS_SECTORS))
+_orphan_mid = sorted({v[:5] for v in WICS_CODES.values()} - set(WICS_MIDS))
+if _orphan_sec or _orphan_mid:
+    raise RuntimeError(
+        f"WICS 표 불일치 — 섹터 미등록 {_orphan_sec} / 중분류 미등록 {_orphan_mid}. "
+        f"https://www.wiseindex.com/About/WICS 대조 필요"
+    )
+
 # 부분 수집분을 그대로 쓰면 나머지 종목이 옛 값으로 남아 조용히 어긋난다.
 # 아래 기준에 못 미치면 쓰지 않고 중단한다(데이터 손실 없이 다음 회차 재시도).
 MIN_GROUPS = 60      # 실측 78종
