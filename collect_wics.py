@@ -27,9 +27,10 @@ collect_wics.py
 
 import sys
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import requests
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -137,6 +138,15 @@ MIN_CODES  = 2000    # 실측 2,869종(기타 제외)
 PATCH_CHUNK = 150    # code=in.(...) URL 길이 안전선 (171개=1,277자 실측)
 
 
+def _notify(msg: str) -> None:
+    """운영 알림. 알림 경로가 없으면 로그만 남기고 넘어간다(수집을 막지 않는다)."""
+    try:
+        from job_infra import _log_notice
+        _log_notice("system", msg)
+    except Exception as e:
+        log.debug(f"[WICS] 알림 생략: {e}")
+
+
 def _session() -> requests.Session:
     s = requests.Session()
     s.headers.update(HEADERS)
@@ -194,7 +204,8 @@ def _our_codes(sb) -> Dict[str, str]:
     return out
 
 
-def apply_map(sb, mapping: Dict[str, str], dry: bool = False) -> int:
+def apply_map(sb, mapping: Dict[str, str], dry: bool = False,
+              fnguide: Optional[Dict[str, tuple]] = None) -> int:
     """업종별로 묶어 PATCH. companies.code에 UNIQUE가 없어 upsert는 쓸 수 없다."""
     ours = _our_codes(sb)
 
@@ -214,15 +225,52 @@ def apply_map(sb, mapping: Dict[str, str], dry: bool = False) -> int:
     if dry:
         return hit
 
+    # 업종별로 FnGuide가 말하는 상위 분류. 계층이라 한 업종은 한 중분류에만 속하므로
+    # 다수결이면 충분하다(지수 편입 시점 차이로 드물게 섞일 수 있어 최빈값을 쓴다).
+    fn_by_ind: Dict[str, Dict[tuple, int]] = {}
+    for c, pair in (fnguide or {}).items():
+        ind = mapping.get(c)
+        if ind:
+            fn_by_ind.setdefault(ind, {})
+            fn_by_ind[ind][pair] = fn_by_ind[ind].get(pair, 0) + 1
+
+    # 표 대입값과 원천이 어긋나면 알린다 — 표가 틀려도 DB만 봐선 알 수 없기 때문이다
+    # (G4535를 잘못 적어 2차전지주 80종목이 반도체로 보이던 일이 있었다).
+    # 분류표 페이지와 지수명은 띄어쓰기가 미세하게 다르다(레저 등 vs 레저등).
+    # 표기 차이로 매일 경고가 뜨면 경고가 무뎌지므로 공백을 지우고 비교한다.
+    _norm = lambda x: (x or "").replace(" ", "")
+    mismatch = []
+    for ind, cnt in fn_by_ind.items():
+        fn_sec, fn_mid = max(cnt.items(), key=lambda kv: kv[1])[0]
+        c = WICS_CODES.get(ind)
+        tb = (WICS_SECTORS.get((c or "")[:3]), WICS_MIDS.get((c or "")[:5]))
+        if (_norm(tb[0]), _norm(tb[1])) != (_norm(fn_sec), _norm(fn_mid)):
+            mismatch.append(f"{ind}: 표={tb[0]}>{tb[1]} / FnGuide={fn_sec}>{fn_mid}")
+    if mismatch:
+        log.error("[WICS] ⚠️ 분류표가 원천과 어긋남 — wiseindex.com/About/WICS 대조 필요\n  "
+                  + "\n  ".join(mismatch))
+        _notify(f"[WICS] 분류표 불일치 {len(mismatch)}건 — {mismatch[0]}")
+
     updated = 0
+    src_fn = src_tb = 0
     for ind, codes in by_ind.items():
         code = WICS_CODES.get(ind)
+        # 상위 2단계는 분류를 만든 곳(FnGuide)의 값을 쓴다. 지수에 없는 업종만 표로 채운다
+        # — 지수는 편입 기준이 있어 스팩·소형주 일부가 빠진다.
+        pair = fn_by_ind.get(ind)
+        if pair:
+            sec_nm, mid_nm = max(pair.items(), key=lambda kv: kv[1])[0]
+            src_fn += 1
+        else:
+            sec_nm = WICS_SECTORS.get((code or "")[:3])
+            mid_nm = WICS_MIDS.get((code or "")[:5])
+            src_tb += 1
         # 3단계를 모두 저장한다 — 화면이 코드를 잘라 이름을 짐작하지 않도록
         payload = {
             "wics_industry": ind,
             "wics_code":     code,
-            "wics_sector":   WICS_SECTORS.get((code or "")[:3]),
-            "wics_mid":      WICS_MIDS.get((code or "")[:5]),
+            "wics_sector":   sec_nm,
+            "wics_mid":      mid_nm,
         }
         for i in range(0, len(codes), PATCH_CHUNK):
             chunk = codes[i:i + PATCH_CHUNK]
@@ -231,7 +279,68 @@ def apply_map(sb, mapping: Dict[str, str], dry: bool = False) -> int:
                 updated += len(chunk)
             except Exception as e:
                 log.error(f"[WICS] 갱신 실패 ({ind} {i}~): {e}")
+    log.info(f"[WICS] 상위 분류 출처 — FnGuide {src_fn}업종 / 표 대입 {src_tb}업종")
     return updated
+
+
+# ── FnGuide(WISE Index) 원천 조회 ───────────────────────────────────────────
+# 섹터·중분류는 분류를 만든 곳에서 직접 받는다. 네이버는 소분류(업종)만 주므로
+# 그것만 네이버에서 받고, 상위 2단계는 여기서 확정한다.
+# 지수는 중분류 단위까지만 있어 소분류 지수는 없다 — 그래서 네이버가 계속 필요하다.
+FNG_URL = "https://www.wiseindex.com/Index/GetIndexComponets"
+FNG_HEADERS = {
+    "User-Agent": HEADERS["User-Agent"],
+    "Referer": "https://www.wiseindex.com/Index/Index",
+}
+
+
+def _fng_call(sess: requests.Session, sec_cd: str, dt: str) -> list:
+    """구성종목 조회. ceil_yn을 빼면 JSON이 아닌 응답이 오므로 반드시 넣는다."""
+    r = sess.get(FNG_URL, params={"ceil_yn": 0, "dt": dt, "sec_cd": sec_cd},
+                 headers=FNG_HEADERS, timeout=15)
+    r.raise_for_status()
+    return (r.json() or {}).get("list") or []
+
+
+def _fng_find_dt(sess: requests.Session) -> Optional[str]:
+    """데이터가 있는 최근 영업일을 찾는다.
+
+    ⚠️ dt가 휴장일이거나 미래면 이 API는 **오류 대신 빈 목록**을 준다(실측).
+    날짜를 틀린 채 돌면 '전부 미매칭'으로 조용히 넘어가므로 반드시 확인하고 쓴다.
+    """
+    today = datetime.now(timezone(timedelta(hours=9))).date()
+    for back in range(0, 12):
+        dt = (today - timedelta(days=back)).strftime("%Y%m%d")
+        try:
+            if _fng_call(sess, "G4530", dt):
+                return dt
+        except Exception as e:
+            log.debug(f"[FnGuide] {dt} 조회 실패: {e}")
+    return None
+
+
+def fetch_fnguide_map(sess: requests.Session) -> Dict[str, tuple]:
+    """{종목코드: (섹터명, 중분류명)} — 중분류 지수 28개를 순회해 모은다."""
+    dt = _fng_find_dt(sess)
+    if not dt:
+        log.warning("[FnGuide] 유효 영업일을 찾지 못함 — 이번 회차는 표 대입으로만 채운다")
+        return {}
+    out: Dict[str, tuple] = {}
+    failed = []
+    for cd in WICS_MIDS:
+        try:
+            for x in _fng_call(sess, cd, dt):
+                code = (x.get("CMP_CD") or "").strip()
+                if code:
+                    out[code] = (x.get("SEC_NM_KOR") or "", x.get("IDX_NM_KOR", "").replace("WICS ", ""))
+        except Exception as e:
+            failed.append(cd)
+            log.debug(f"[FnGuide] {cd} 실패: {e}")
+        time.sleep(0.12)
+    if failed:
+        log.warning(f"[FnGuide] 일부 실패 {failed}")
+    log.info(f"[FnGuide] 기준일 {dt} / 종목 {len(out)}개 / 중분류 {len(WICS_MIDS) - len(failed)}개")
+    return out
 
 
 def run(dry: bool = False) -> int:
@@ -243,7 +352,11 @@ def run(dry: bool = False) -> int:
         log.error(f"[WICS] 수집 불완전(업종 {groups}<{MIN_GROUPS} 또는 종목 {len(mapping)}<{MIN_CODES}) — 반영 중단")
         return 0
 
-    n = apply_map(sb=get_supabase_client(), mapping=mapping, dry=dry)
+    # 섹터·중분류는 분류를 만든 곳에서 직접 받는다. 실패하면 표 대입으로 계속 간다
+    # — 상위 분류를 못 받았다고 소분류까지 버릴 이유는 없다.
+    fnguide = fetch_fnguide_map(_session())
+
+    n = apply_map(sb=get_supabase_client(), mapping=mapping, dry=dry, fnguide=fnguide)
     log.info(f"[WICS] {'조회만(dry)' if dry else '반영 완료'}: {n}개")
     return n
 
