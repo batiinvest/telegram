@@ -1038,15 +1038,28 @@ def job_flow_empty():
        쌓고, 18:15 수집 뒤 KRX가 고친 값도 반영한다(수집값의 88%가 며칠 뒤 달라짐, 09-27 실측).
     ② 빈집 판정 — 수급 지도(flow-map.js 빈집 모드)와 같은 정의, 순위 집단만 WICS 업종.
     기업분석 표의 '수급빈집' 칩이 이 컬럼만 읽는다(화면 계산 시 로딩 2배).
-    약 10분 걸려 스레드로 돈다(run_all). 18:40 추정실적(KIS 약 8분)이 끝난 뒤 19:25 재처리
+    ③ 태린이아빠 전략 조건(collect_leading) — 주도 업종 보드·RS·후보 조건(lead_flags).
+    약 12~14분 걸려 스레드로 돈다(run_all). 18:40 추정실적(KIS 약 8분)이 끝난 뒤 19:25 재처리
     전까지 KIS를 쓰는 대량 잡이 없는 구간이다."""
+    failed = None
     try:
         import collect_flow_empty
         n = collect_flow_empty.run()
         logging.info(f"=== [빈집] 완료: {n}행 기록 ===")
     except Exception as e:
         logging.error(f"❌ [빈집] 오류: {e}")
-        mark_failed(e)
+        failed = e
+    # ③ 태린이아빠 전략 조건 — 주도 업종(WICS 중분류 모멘텀 ∩ 매수) · RS · 후보 조건.
+    #    빈집 판정이 실패해도 따로 돈다(업종 보드는 빈집과 무관하게 쓸모가 있다). 약 4분(RS 주봉 조회)
+    try:
+        import collect_leading
+        r = collect_leading.run()
+        logging.info(f"=== [주도업종] 완료: {(r or {}).get('info', {})} ===")
+    except Exception as e:
+        logging.error(f"❌ [주도업종] 오류: {e}")
+        failed = failed or e
+    if failed:
+        mark_failed(failed)
 
 
 @_job(holiday=True)
