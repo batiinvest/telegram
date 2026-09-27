@@ -36,6 +36,7 @@ from jobs_collect import (
     job_collect_new_high, job_collect_us_etf, job_collect_market,
     job_collect_market_closing, job_short_surge, job_collect_investor_trend,
     job_collect_investor_trend_ranked,
+    job_flow_empty,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
     job_daily_summary, job_collect_credit_balance, job_collect_wics,
     job_collect_investor_market, job_retry_failed,
@@ -144,6 +145,7 @@ def run_scheduler():
     schedule.every().day.at("19:25").do(job_retry_failed)              # 실패 잡 자동 재처리 (job_runs 기반, 멱등 잡만)
     schedule.every().day.at("17:30").do(job_leading_stocks)            # 주도주 탐색기 스코어 계산
     schedule.every().day.at("18:20").do(job_collect_investor_market)   # KIS 시장별 투자자매매동향 (장마감 확정 후, 시황 카드)
+    schedule.every().day.at("18:25").do(job_flow_empty)             # 수급 빈집 판정 (18:15 수급 확정 후 — 기업분석 표 칩)
     schedule.every().day.at("18:30").do(job_market_summary)            # 투자포인트 요약 생성 (18:15 수급 확정 후)
     schedule.every().day.at("18:00").do(_threaded(job_naver_report))
     schedule.every().day.at("18:10").do(_threaded(job_kind_ir))       # KIND IR자료 오후 수집

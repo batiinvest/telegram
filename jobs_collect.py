@@ -1031,6 +1031,23 @@ def job_collect_investor_trend_ranked():
 
 
 @_job(holiday=True)
+def job_flow_empty():
+    """평일 18:25 — 수급 '빈집' 판정 계산 (market_data.flow_quad / flow_pctl).
+
+    18:15 job_collect_investor_trend_ranked가 당일 수급을 확정한 뒤에 돈다.
+    기업분석 표의 '수급빈집' 칩이 이 컬럼 하나만 읽는다 — 표는 당일 행만 조회하므로
+    화면에서 계산하면 63거래일 이력(2.8만 행)을 더 받아야 해 로딩이 2배로 늘어난다.
+    판정 정의는 수급 지도(flow-map.js 빈집 모드)와 동일하며 311종목 전량 일치를 확인했다."""
+    try:
+        import collect_flow_empty
+        n = collect_flow_empty.run()
+        logging.info(f"=== [빈집] 완료: {n}행 기록 ===")
+    except Exception as e:
+        logging.error(f"❌ [빈집] 오류: {e}")
+        mark_failed(e)
+
+
+@_job(holiday=True)
 def job_sector_summary():
     """평일 장 마감 후 (17:15) — 산업별 일별 요약 집계 (sector_daily_summary)"""
     try:
@@ -1345,6 +1362,7 @@ _RETRYABLE_JOBS = {
     'job_collect_investor_trend':   job_collect_investor_trend,
     'job_collect_investor_trend_ranked': job_collect_investor_trend_ranked,
     'job_collect_investor_market':  job_collect_investor_market,
+    'job_flow_empty':               job_flow_empty,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
