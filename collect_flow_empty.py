@@ -605,8 +605,24 @@ def _stat(days: dict, dates: list, cut_date: str):
         return None, 'stale'
     vals = [v for _, v in ser]
     cur = vals[-1]
-    return {'cur': cur, 'avg': statistics.fmean(vals),
-            'pct': sum(1 for v in vals if v < cur) / len(vals) * 100}, None
+    # 수급 칸(원본 엑셀의 '상위10%·상위25%·평균·하위25%·하위10%') — Excel PERCENTILE.INC와 같은
+    # 선형보간(inclusive). 현재값이 넘어선 칸 수·방향은 화면이 계산한다(config.js flowGauge)
+    q10 = statistics.quantiles(vals, n=10, method='inclusive')
+    q4 = statistics.quantiles(vals, n=4, method='inclusive')
+    avg = statistics.fmean(vals)
+    return {'cur': cur, 'avg': avg,
+            'pct': sum(1 for v in vals if v < cur) / len(vals) * 100,
+            'gauge': {'lv': [round(x, 4) for x in (q10[8], q4[2], avg, q4[0], q10[0])],
+                      'cur': round(cur, 4), 'prev': round(vals[-2], 4)}}, None
+
+
+def _has_gauge_schema(sb) -> bool:
+    """sql/flow_gauge.sql 실행 여부 — 없으면 칸만 빼고 기록한다."""
+    try:
+        sb.table('market_data').select('flow_gauge').limit(1).execute()
+        return True
+    except Exception:
+        return False
 
 
 def _rank_within(stats: dict, groups: dict) -> dict:
@@ -671,7 +687,8 @@ def classify(sb, companies: list | None = None):
     verdicts = _rank_within(stats, groups)
 
     n_win = sum(1 for d in dates if d >= cut_date)
-    info = {'dates': len(dates), 'window': f'{cut_date}~{dates[-1]} ({n_win}거래일)',
+    info = {'gauges': {c: s_['gauge'] for c, s_ in stats.items()},
+            'dates': len(dates), 'window': f'{cut_date}~{dates[-1]} ({n_win}거래일)',
             'with_flow': len(by_code), 'judged': len(verdicts),
             'skipped': dict(skipped), 'levels': level_n, 'groups': groups}
     log.info(f"[빈집] 수급 보유 {len(by_code)}종목 → 판정 {len(verdicts)} "
@@ -770,11 +787,17 @@ def run(dry: bool = False, sync: bool = True) -> int:
                  f"빈집 {len(fill)} → 공급 업종 빈집 {fill_ok}")
         log.info('[컨셉] 공급 업종: ' + ' · '.join(cinfo['top']))
 
+    gauge_ok = _has_gauge_schema(sb)
+    if not gauge_ok:
+        log.warning('[빈집] sql/flow_gauge.sql 미실행 — 수급 칸 없이 기록합니다')
     rows = []
     for code, (quad, pctl) in verdicts.items():
         sup, rank = per_stock.get(code, (None, None))
-        rows.append({'stock_code': code, 'base_date': target, 'flow_quad': quad, 'flow_pctl': pctl,
-                     'flow_supplied': sup if per_stock else None, 'flow_supply_rank': rank})
+        row = {'stock_code': code, 'base_date': target, 'flow_quad': quad, 'flow_pctl': pctl,
+               'flow_supplied': sup if per_stock else None, 'flow_supply_rank': rank}
+        if gauge_ok:
+            row['flow_gauge'] = info['gauges'].get(code)
+        rows.append(row)
     if dry:
         log.info(f"[빈집] dry-run — {target} 행에 {len(rows)}건·컨셉 {len(concept_rows)}업종 기록 예정 (쓰기 생략)")
         return len(rows)
