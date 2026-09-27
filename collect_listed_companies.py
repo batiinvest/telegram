@@ -60,6 +60,19 @@ def _is_spac(name: str) -> bool:
     n = name or ''
     return '스팩' in n or '기업인수목적' in n
 
+def _is_reit(name: str) -> bool:
+    """리츠(부동산투자회사) 판별 — 종목명 기준.
+
+    부동산을 담는 그릇이라 사업·재무를 보는 화면에서 의미가 없다(스팩과 같은 이유).
+    ⚠️ '리츠'를 포함하는지로 보면 **메리츠금융지주·블리츠웨이엔터테인먼트·
+    메리츠제1호스팩**까지 걸린다(2026-09 실측). 이름이 '리츠'로 끝나는지를 본다 —
+    상장 리츠는 SK리츠·롯데리츠처럼 예외 없이 '리츠'로 끝났다(실측 22/22).
+    이름에 '리츠'가 없는 리츠(맵스리얼티·이리츠코크렙)는 이 규칙으로 못 잡아 수동 처리했다.
+    """
+    n = (name or '').replace(' ', '')
+    return n.endswith('리츠') or n.upper().endswith('REIT') or '부동산투자회사' in n
+
+
 def _load_kis_listed() -> dict:
     """KIS 종목 마스터에서 현재 매매가능 상장종목 로드.
     반환 {단축코드: {"name": 종목약명, "market": "KOSPI"|"KOSDAQ"}}.
@@ -194,7 +207,7 @@ def run(dry_run: bool = False):
             # 스팩(SPAC)은 인수 대상을 찾기 전까지 사업도 재무도 없는 껍데기라
             # 시세·재무·업종 어느 수집에도 의미가 없다 → 애초에 담지 않는다.
             # (기존 재무 수집기들이 각자 '스팩' 이름으로 걸러내던 것을 유입 단계로 앞당김)
-            if _is_spac(di["name"]):
+            if _is_spac(di["name"]) or _is_reit(di["name"]):
                 spac_skipped += 1
                 continue
             new_listings.append({
@@ -233,7 +246,7 @@ def run(dry_run: bool = False):
     # 4. 리포트
     log.info(f"\n{'='*50}")
     log.info(f"신규상장:        {len(new_listings)}개")
-    log.info(f"스팩 제외:       {spac_skipped}개")
+    log.info(f"스팩·리츠 제외:  {spac_skipped}개")
     log.info(f"사명변경:        {len(name_changes)}개")
     log.info(f"상폐후보(data):  {len(delisted_data)}개 → 시세 2차 판정 예정")
     log.info(f"상폐후보(모니터링): {len(delisted_monitored)}개 → 시세 2차 판정 예정")
