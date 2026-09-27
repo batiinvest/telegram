@@ -145,7 +145,6 @@ def run_scheduler():
     schedule.every().day.at("19:25").do(job_retry_failed)              # 실패 잡 자동 재처리 (job_runs 기반, 멱등 잡만)
     schedule.every().day.at("17:30").do(job_leading_stocks)            # 주도주 탐색기 스코어 계산
     schedule.every().day.at("18:20").do(job_collect_investor_market)   # KIS 시장별 투자자매매동향 (장마감 확정 후, 시황 카드)
-    schedule.every().day.at("18:25").do(job_flow_empty)             # 수급 빈집 판정 (18:15 수급 확정 후 — 기업분석 표 칩)
     schedule.every().day.at("18:30").do(job_market_summary)            # 투자포인트 요약 생성 (18:15 수급 확정 후)
     schedule.every().day.at("18:00").do(_threaded(job_naver_report))
     schedule.every().day.at("18:10").do(_threaded(job_kind_ir))       # KIND IR자료 오후 수집
@@ -162,6 +161,7 @@ def run_scheduler():
     schedule.every().day.at("19:10").do(_threaded(job_industry_summary))  # 산업별 마감 브리핑 → 산업 채팅방 (18:55 종목요약 AI페이싱 완료 후)
     schedule.every().day.at("18:35").do(_threaded(job_collect_analyst_opinions))  # 투자의견 (장후)
     schedule.every().day.at("18:40").do(job_collect_estimates)        # 종목추정실적 (미래 매출/영업이익 + 상향감지)
+    schedule.every().day.at("18:50").do(_threaded(job_flow_empty))  # 전종목 수급 정산(30일)+빈집 판정 — 약 10분, KIS 한가한 18:48~19:25
     schedule.every().day.at("08:40").do(_threaded(job_snapshot_qtr_consensus))  # 분기 컨센 스냅샷 (어닝 서프라이즈용, 장전)
     schedule.every().day.at("19:05").do(_threaded(job_earnings_reconcile))  # 재무 확정치 기반 어닝 서프라이즈/영업익 폭증 재조정 (19:10 브리핑 前)
     schedule.every().day.at("19:10").do(_threaded(job_earnings_surprise_briefing))  # 어닝 서프라이즈 리스트 → 메인채널

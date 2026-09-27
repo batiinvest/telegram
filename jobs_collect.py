@@ -1032,12 +1032,14 @@ def job_collect_investor_trend_ranked():
 
 @_job(holiday=True)
 def job_flow_empty():
-    """평일 18:25 — 수급 '빈집' 판정 계산 (market_data.flow_quad / flow_pctl).
+    """평일 18:50 — 전종목 수급 정산 + 빈집 판정 (market_data.flow_quad / flow_pctl).
 
-    18:15 job_collect_investor_trend_ranked가 당일 수급을 확정한 뒤에 돈다.
-    기업분석 표의 '수급빈집' 칩이 이 컬럼 하나만 읽는다 — 표는 당일 행만 조회하므로
-    화면에서 계산하면 63거래일 이력(2.8만 행)을 더 받아야 해 로딩이 2배로 늘어난다.
-    판정 정의는 수급 지도(flow-map.js 빈집 모드)와 동일하며 311종목 전량 일치를 확인했다."""
+    ① 전 상장사 외국인·기관 순매수 30거래일을 KIS와 맞춘다. 비모니터링 종목의 일별 수급을
+       쌓고, 18:15 수집 뒤 KRX가 고친 값도 반영한다(수집값의 88%가 며칠 뒤 달라짐, 09-27 실측).
+    ② 빈집 판정 — 수급 지도(flow-map.js 빈집 모드)와 같은 정의, 순위 집단만 WICS 업종.
+    기업분석 표의 '수급빈집' 칩이 이 컬럼만 읽는다(화면 계산 시 로딩 2배).
+    약 10분 걸려 스레드로 돈다(run_all). 18:40 추정실적(KIS 약 8분)이 끝난 뒤 19:25 재처리
+    전까지 KIS를 쓰는 대량 잡이 없는 구간이다."""
     try:
         import collect_flow_empty
         n = collect_flow_empty.run()
