@@ -616,6 +616,21 @@ def _stat(days: dict, dates: list, cut_date: str):
                       'cur': round(cur, 4), 'prev': round(vals[-2], 4)}}, None
 
 
+def _stage(g: dict | None) -> str | None:
+    """수급 칸 단계 — 화면 config.js flowGauge와 같은 규칙(바꾸면 둘 다)."""
+    if not g:
+        return None
+    fill = sum(1 for v in g['lv'] if g['cur'] >= v)
+    up = g['cur'] > g['prev']
+    if fill >= 4 and not up:
+        return 'turn'
+    if fill == 5:
+        return 'top'
+    if fill <= 2 and up:
+        return 'start'
+    return 'fill' if up else 'drain'
+
+
 def _has_gauge_schema(sb) -> bool:
     """sql/flow_gauge.sql 실행 여부 — 없으면 칸만 빼고 기록한다."""
     try:
@@ -643,25 +658,37 @@ def _rank_within(stats: dict, groups: dict) -> dict:
     return out
 
 
-def _peer_groups(stats: dict, meta: dict) -> tuple:
-    """종목마다 비교 집단 결정 — 업종이 MIN_PEERS 미만이면 중분류 → 섹터 → 전체."""
-    groups, level_n = {}, defaultdict(int)
-    pending = set(stats)
+def static_groups(companies: list) -> dict:
+    """종목 → 비교 집단. 업종이 MIN_PEERS 미만이면 중분류 → 섹터 → 전체.
+
+    그날 판정된 종목 수가 아니라 **전 상장사 수**로 센다 — 거래정지 몇 개로 집단이 바뀌면
+    업종 지수(sector_lead)가 끊기고 순위가 흔들린다. 빈집·컨셉·주도 업종이 모두 이 집단을 쓴다.
+    """
+    pending = {c['code']: c for c in companies}
+    groups = {}
     for label, col in PEER_LEVELS:
         size = defaultdict(int)
-        for c in pending:
-            v = (meta.get(c) or {}).get(col)
-            if v:
-                size[v] += 1
-        for c in list(pending):
-            v = (meta.get(c) or {}).get(col)
+        for c in pending.values():
+            if c.get(col):
+                size[c[col]] += 1
+        for code, c in list(pending.items()):
+            v = c.get(col)
             if v and size[v] >= MIN_PEERS:
-                groups[c] = f'{label}:{v}'
-                level_n[label] += 1
-                pending.discard(c)
-    for c in pending:
-        groups[c] = '전체'
-        level_n['전체'] += 1
+                groups[code] = f'{label}:{v}'
+                del pending[code]
+    for code in pending:
+        groups[code] = '전체'
+    return groups
+
+
+def _peer_groups(stats: dict, companies: list) -> tuple:
+    """판정된 종목의 비교 집단 + 단계별 종목 수."""
+    allg = static_groups(companies)
+    groups, level_n = {}, defaultdict(int)
+    for c in stats:
+        g = allg.get(c, '전체')
+        groups[c] = g
+        level_n[g.split(':', 1)[0]] += 1
     return groups, dict(level_n)
 
 
@@ -683,14 +710,15 @@ def classify(sb, companies: list | None = None):
             stats[code] = s
         else:
             skipped[why] += 1
-    groups, level_n = _peer_groups(stats, meta)
+    groups, level_n = _peer_groups(stats, companies)
     verdicts = _rank_within(stats, groups)
 
     n_win = sum(1 for d in dates if d >= cut_date)
     info = {'gauges': {c: s_['gauge'] for c, s_ in stats.items()},
             'dates': len(dates), 'window': f'{cut_date}~{dates[-1]} ({n_win}거래일)',
             'with_flow': len(by_code), 'judged': len(verdicts),
-            'skipped': dict(skipped), 'levels': level_n, 'groups': groups}
+            'skipped': dict(skipped), 'levels': level_n, 'groups': groups,
+            'by_code': by_code, 'flow_dates': dates}
     log.info(f"[빈집] 수급 보유 {len(by_code)}종목 → 판정 {len(verdicts)} "
              f"(제외: 표본부족 {skipped['short']} · 최신일 수급없음 {skipped['stale']}) · "
              f"창 {info['window']} · 비교집단 " + ' · '.join(f'{k} {v}' for k, v in level_n.items()))
@@ -717,6 +745,37 @@ def _write_verdicts(sb, verdicts: dict, target_date: str) -> int:
         done = sum(ex.map(put, groups.items()))
     log.info(f"[빈집] {target_date} {done}행 기록 ({len(groups)}회 UPDATE)")
     return done
+
+
+def _attach_lead(sb, concept_rows: list, info: dict, verdicts: dict, target: str, dry: bool):
+    """업종 지수를 target일까지 잇고, 모멘텀·꾸준한 매수·주도 여부를 flow_concepts 행에 붙인다."""
+    import sector_lead
+    if not sector_lead.has_schema(sb):
+        log.warning('[주도업종] sql/sector_lead.sql 미실행 — 건너뜁니다')
+        return
+    try:
+        groups = info['groups']
+        if not dry:
+            sector_lead.update_index(sb, groups, target)
+        mom = sector_lead.momentum(sector_lead._load_index(sb, target))
+        flow = sector_lead.steady_flow(groups, info['by_code'], info['flow_dates'])
+        lead = sector_lead.rank_sectors(mom, flow, [r['grp'] for r in concept_rows])
+        n_fill, n_start = defaultdict(int), defaultdict(int)
+        for code, (quad, _p) in verdicts.items():
+            g = groups.get(code)
+            if quad == 'fill':
+                n_fill[g] += 1
+            if _stage(info['gauges'].get(code)) == 'start':
+                n_start[g] += 1
+        for r in concept_rows:
+            r.update(lead.get(r['grp'], {}))
+            r['n_fill'], r['n_start'] = n_fill.get(r['grp'], 0), n_start.get(r['grp'], 0)
+        leads = [r['grp'].split(':', 1)[-1] for r in sorted(concept_rows, key=lambda x: x.get('mom_rank') or 999)
+                 if r.get('lead')]
+        log.info(f"[주도업종] 모멘텀 {len(mom)}업종 · 꾸준한 매수 {len(flow)}업종 → 주도 {len(leads)}: "
+                 + (' · '.join(leads) or '교집합 없음'))
+    except Exception as e:   # 주도 업종이 실패해도 빈집 판정은 기록한다
+        log.error(f'[주도업종] 계산 실패 — 건너뜀: {e}')
 
 
 def run(dry: bool = False, sync: bool = True) -> int:
@@ -786,6 +845,10 @@ def run(dry: bool = False, sync: bool = True) -> int:
                  f"공급 업종 {cinfo['supplied']}/{cinfo['groups']} ({cinfo['stocks_supplied']}종목) · "
                  f"빈집 {len(fill)} → 공급 업종 빈집 {fill_ok}")
         log.info('[컨셉] 공급 업종: ' + ' · '.join(cinfo['top']))
+
+    # ── 주도 업종(태린이아빠 2026-09): 6개월 모멘텀 ∩ 기관·외국인 꾸준한 순매수 ──
+    if concept_rows:
+        _attach_lead(sb, concept_rows, info, verdicts, target, dry)
 
     gauge_ok = _has_gauge_schema(sb)
     if not gauge_ok:
