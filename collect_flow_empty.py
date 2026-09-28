@@ -58,6 +58,15 @@ OSC_N = 5        # _FM_OSC_N — 오실레이터 롤링 창(태린이아빠 원 
 SPAN = 63        # _FM_WINS의 3M med — 비교 이력 창
 EMPTY_TH = 30    # _FM_EMPTY_TH — ★(뚜렷한 빈집) 백분위 기준
 MIN_SER = 8      # 백분위를 말할 최소 표본 (_fmRenderEmpty)
+# 수급 오실레이터 = 5일 수급 비율의 MACD − 시그널 (flow-map.js _FM_MACD와 같게)
+#   원본(태린이아빠) 값이 우리 5일 합계보다 약 10배 작고 평균이 0에 붙는 대칭형이었다 — 삼성전자
+#   원본 칸 표 +0.030/+0.020/0.000/−0.020/−0.030 vs MACD−시그널 +0.031/+0.023/+0.001/−0.023/−0.034
+#   (5일 합계 +0.161/…/−0.294, 5일 평균 +0.032/…/−0.059). 워크북에 '오실'·'MACD' 시트가 있고,
+#   원저자가 "비중을 만들고 변환을 했을 때"라고 말하며, 알테오젠 표가 0.00%에서 서서히 벌어진다.
+#   국내 파일을 학습시켜 만들었다는 미국판도 '5일 누적 → EMA12−EMA26 → 시그널 EMA10 → 차'.
+#   시그널 9·10은 데이터로 구분되지 않아 미국판의 10을 쓴다.
+MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 10
+OSC_WARMUP = 10  # EMA가 막 시작한 앞쪽 점(0 근처로 쏠림)은 비교에서 뺀다
 
 # ── 이 모듈 고유 ─────────────────────────────────────────────────────────────
 MIN_PEERS = 10        # 순위를 매길 최소 집단 크기 — 이보다 작으면 한 단계 위 분류로
@@ -122,8 +131,25 @@ def _net(day: dict | None) -> float | None:
     return (f or 0) + (i or 0)
 
 
+def _macd_hist(ser: list) -> list:
+    """[(date, x)] → [(date, MACD − 시그널)]. EMA는 첫 값에서 시작한다(엑셀·수급 지도와 같게)."""
+    kf, ks, kg = 2 / (MACD_FAST + 1), 2 / (MACD_SLOW + 1), 2 / (MACD_SIG + 1)
+    ef = es = sg = None
+    out = []
+    for d, x in ser:
+        ef = x if ef is None else ef + kf * (x - ef)
+        es = x if es is None else es + ks * (x - es)
+        macd = ef - es
+        sg = macd if sg is None else sg + kg * (macd - sg)
+        out.append((d, macd - sg))
+    return out
+
+
 def _osc_series(days: dict, dates: list) -> list:
-    """osc(d) = Σ(d-4..d) 순매수대금 ÷ 당일 시가총액 × 100(%)  — _fmOscSeries와 동일.
+    """5일 수급 비율 x(d) = Σ(d-4..d) 순매수대금 ÷ 당일 시가총액 × 100(%) — 오실레이터의 입력.
+
+    수급 오실레이터는 이 x의 MACD − 시그널이다(_macd_hist). x 자체의 평균은 '평소 돈을 받는
+    편인가'(수급 지도 가로축)로 쓴다 — 오실레이터는 평균이 0에 붙어 순위가 무의미하다.
 
     분모를 '당일' 시총으로 잡아 기간 중 주가가 크게 변한 종목의 왜곡을 없앤다.
     창이 덜 찬 날(결측 포함)은 버려 5일 합산의 의미를 지킨다.
@@ -596,8 +622,13 @@ def _common_start(by_code: dict, dates: list) -> str:
 
 
 def _stat(days: dict, dates: list, cut_date: str):
-    """종목 하나의 (cur, avg, pct) — 수급 지도 _fmRenderEmpty 1차와 동일. 판정 불가면 None."""
-    ser = [o for o in _osc_series(days, dates) if o[0] >= cut_date]
+    """종목 하나의 (cur, avg, pct) — 수급 지도 _fmRenderEmpty 1차와 동일. 판정 불가면 None.
+
+    cur·pct·칸 = 수급 오실레이터(MACD − 시그널)의 자기 이력 위치,
+    avg = 5일 수급 비율의 평균(가로축 '공급강도' 순위용).
+    """
+    base = _osc_series(days, dates)
+    ser = [o for o in _macd_hist(base)[OSC_WARMUP:] if o[0] >= cut_date]
     if len(ser) < MIN_SER:
         return None, 'short'
     # 마지막 거래일 값이 없으면 어제 판정을 오늘 행에 적게 된다 — 적지 않는다
@@ -609,10 +640,12 @@ def _stat(days: dict, dates: list, cut_date: str):
     # 선형보간(inclusive). 현재값이 넘어선 칸 수·방향은 화면이 계산한다(config.js flowGauge)
     q10 = statistics.quantiles(vals, n=10, method='inclusive')
     q4 = statistics.quantiles(vals, n=4, method='inclusive')
-    avg = statistics.fmean(vals)
+    avg_osc = statistics.fmean(vals)
+    xs = [v for d, v in base if d >= cut_date]
+    avg = statistics.fmean(xs) if xs else 0.0
     return {'cur': cur, 'avg': avg,
             'pct': sum(1 for v in vals if v < cur) / len(vals) * 100,
-            'gauge': {'lv': [round(x, 4) for x in (q10[8], q4[2], avg, q4[0], q10[0])],
+            'gauge': {'lv': [round(x, 4) for x in (q10[8], q4[2], avg_osc, q4[0], q10[0])],
                       'cur': round(cur, 4), 'prev': round(vals[-2], 4)}}, None
 
 
