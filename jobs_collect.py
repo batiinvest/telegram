@@ -1039,6 +1039,7 @@ def job_flow_empty():
     ② 빈집 판정 — 수급 지도(flow-map.js 빈집 모드)와 같은 정의, 순위 집단만 WICS 업종.
     기업분석 표의 '수급빈집' 칩이 이 컬럼만 읽는다(화면 계산 시 로딩 2배).
     ③ 태린이아빠 전략 조건(collect_leading) — 주도 업종 보드·RS·후보 조건(lead_flags).
+    ④ 업종 수급 오실레이터(collect_sector_flow) — WICS 중분류 × 시장, KIS 호출 없음(DB 합산).
     약 12~14분 걸려 스레드로 돈다(run_all). 18:40 추정실적(KIS 약 8분)이 끝난 뒤 19:25 재처리
     전까지 KIS를 쓰는 대량 잡이 없는 구간이다."""
     failed = None
@@ -1057,6 +1058,14 @@ def job_flow_empty():
         logging.info(f"=== [주도업종] 완료: {(r or {}).get('info', {})} ===")
     except Exception as e:
         logging.error(f"❌ [주도업종] 오류: {e}")
+        failed = failed or e
+    # ④ 업종 수급 오실레이터 — WICS 중분류 × 시장. 위 수급 정산(30거래일 사후 수정 반영) 뒤라야 한다
+    try:
+        import collect_sector_flow
+        n = collect_sector_flow.run()
+        logging.info(f"=== [업종수급] 완료: 오실레이터 {n}행 ===")
+    except Exception as e:
+        logging.error(f"❌ [업종수급] 오류: {e}")
         failed = failed or e
     if failed:
         mark_failed(failed)
