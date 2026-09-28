@@ -116,6 +116,8 @@ def sector_momentum(series: dict) -> dict:
             'above_ma11': ma[11] is not None and last > ma[11],
             'above_ma20': ma[20] is not None and last > ma[20],
             'above_ma50': ma[50] is not None and last > ma[50],
+            # 시황 카드 6개월 추이 — 첫날=1 정규화
+            'spark': [round(v / closes[0], 4) for v in closes],
         }
     ranked = sorted((c for c in out if out[c]['score'] is not None), key=lambda c: -out[c]['score'])
     for i, c in enumerate(ranked, 1):
@@ -273,6 +275,31 @@ def buy_ranks(sb, mid_of: dict) -> dict:
     return {r['grp']: (r['rank'], r['score']) for r in rows}
 
 
+def _count_stages(sb, board: dict, mid_of: dict, target: str):
+    """중분류별 빈집(flow_pctl < 50)·'이제 시작'(수급 단계) 종목 수 — 판정일 빈집 판정을 읽는다.
+
+    빈집 판정(collect_flow_empty)이 같은 잡에서 먼저 돈다. 빈집 기준은 기업분석 표 '빈집' 열과 같다
+    (주도 업종 ∧ 백분위 50 미만 — 여기선 업종 안 종목 수라 백분위만 본다).
+    """
+    from collect_flow_empty import _stage
+    rows = fetch_all_pages(
+        sb.table('market_data').select('stock_code,flow_pctl,flow_gauge')
+          .eq('base_date', target).not_.is_('flow_quad', 'null').order('stock_code'))
+    n_empty, n_start = defaultdict(int), defaultdict(int)
+    for r in rows:
+        mid = mid_of.get(r['stock_code'])
+        if not mid:
+            continue
+        if r['flow_pctl'] is not None and r['flow_pctl'] < 50:
+            n_empty[mid] += 1
+        if _stage(r.get('flow_gauge')) == 'start':
+            n_start[mid] += 1
+    for c, b in board.items():
+        b['n_empty'], b['n_start'] = n_empty[c], n_start[c]
+    if not rows:
+        log.warning(f'[주도업종] {target} 빈집 판정이 없어 업종별 빈집·이제 시작 수를 0으로 둡니다')
+
+
 def run(dry: bool = False, rs: bool = True) -> dict:
     sb = get_supabase_client()
     log.info('=== [주도업종] 태린이아빠 전략 조건 계산 시작 ===')
@@ -310,6 +337,7 @@ def run(dry: bool = False, rs: bool = True) -> dict:
         lead = bool(m['mom_rank'] and m['mom_rank'] <= LEAD_MOM_TOP and br and br <= LEAD_BUY_TOP)
         board[code] = dict(m, **f, buy_rank=br, buy_score=bs, leading=lead)
     leads = [c for c in board if board[c]['leading']]
+    _count_stages(sb, board, mid_of, target)
     log.info(f"[주도업종] 매수·순매수 {flow_days[0] if flow_days else '-'}~{flow_days[-1] if flow_days else '-'}"
              f"({len(flow_days)}일) · 주도 업종 {len(leads)}/{len(board)}: "
              + ' · '.join(f"{board[c]['name']}(모멘텀 {board[c]['mom_rank']}위·매수 {board[c]['buy_rank']}위)"
@@ -361,6 +389,7 @@ def run(dry: bool = False, rs: bool = True) -> dict:
         'flow_cum': b.get('flow_cum'),
         'flow_cum_ratio': round(b['flow_cum_ratio'], 3) if b.get('flow_cum_ratio') is not None else None,
         'newhigh_5d': b.get('newhigh_5d'), 'n_stocks': b.get('n_stocks'), 'leading': b['leading'],
+        'n_empty': b.get('n_empty'), 'n_start': b.get('n_start'), 'spark': b.get('spark'),
     } for c, b in board.items()]).execute()
     log.info(f'[주도업종] {target} 종목 {written}행 · 보드 {len(board)}업종 기록')
     return {'info': info}

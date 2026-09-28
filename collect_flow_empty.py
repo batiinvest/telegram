@@ -699,7 +699,7 @@ def static_groups(companies: list) -> dict:
     """종목 → 비교 집단. 업종이 MIN_PEERS 미만이면 중분류 → 섹터 → 전체.
 
     그날 판정된 종목 수가 아니라 **전 상장사 수**로 센다 — 거래정지 몇 개로 집단이 바뀌면
-    업종 지수(sector_lead)가 끊기고 순위가 흔들린다. 빈집·컨셉·주도 업종이 모두 이 집단을 쓴다.
+    순위가 날마다 흔들린다. 빈집·컨셉·주도 업종이 모두 이 집단을 쓴다.
     """
     pending = {c['code']: c for c in companies}
     groups = {}
@@ -805,37 +805,6 @@ def _clear_dropped(sb, target: str, keep: set, gauge_ok: bool) -> int:
     return len(drop)
 
 
-def _attach_lead(sb, concept_rows: list, info: dict, verdicts: dict, target: str, dry: bool):
-    """업종 지수를 target일까지 잇고, 모멘텀·꾸준한 매수·주도 여부를 flow_concepts 행에 붙인다."""
-    import sector_lead
-    if not sector_lead.has_schema(sb):
-        log.warning('[주도업종] sql/sector_lead.sql 미실행 — 건너뜁니다')
-        return
-    try:
-        groups = info['groups']
-        if not dry:
-            sector_lead.update_index(sb, groups, target)
-        mom = sector_lead.momentum(sector_lead._load_index(sb, target))
-        flow = sector_lead.steady_flow(groups, info['by_code'], info['flow_dates'])
-        lead = sector_lead.rank_sectors(mom, flow, [r['grp'] for r in concept_rows])
-        n_fill, n_start = defaultdict(int), defaultdict(int)
-        for code, (quad, _p) in verdicts.items():
-            g = groups.get(code)
-            if quad == 'fill':
-                n_fill[g] += 1
-            if _stage(info['gauges'].get(code)) == 'start':
-                n_start[g] += 1
-        for r in concept_rows:
-            r.update(lead.get(r['grp'], {}))
-            r['n_fill'], r['n_start'] = n_fill.get(r['grp'], 0), n_start.get(r['grp'], 0)
-        leads = [r['grp'].split(':', 1)[-1] for r in sorted(concept_rows, key=lambda x: x.get('mom_rank') or 999)
-                 if r.get('lead')]
-        log.info(f"[주도업종] 모멘텀 {len(mom)}업종 · 꾸준한 매수 {len(flow)}업종 → 주도 {len(leads)}: "
-                 + (' · '.join(leads) or '교집합 없음'))
-    except Exception as e:   # 주도 업종이 실패해도 빈집 판정은 기록한다
-        log.error(f'[주도업종] 계산 실패 — 건너뜀: {e}')
-
-
 def run(dry: bool = False, sync: bool = True) -> int:
     """매일 18:50 — 전종목 수급 정산 후 당일 market_data 행에 빈집 판정을 적는다."""
     sb = get_supabase_client()
@@ -903,10 +872,6 @@ def run(dry: bool = False, sync: bool = True) -> int:
                  f"공급 업종 {cinfo['supplied']}/{cinfo['groups']} ({cinfo['stocks_supplied']}종목) · "
                  f"빈집 {len(fill)} → 공급 업종 빈집 {fill_ok}")
         log.info('[컨셉] 공급 업종: ' + ' · '.join(cinfo['top']))
-
-    # ── 주도 업종(태린이아빠 2026-09): 6개월 모멘텀 ∩ 기관·외국인 꾸준한 순매수 ──
-    if concept_rows:
-        _attach_lead(sb, concept_rows, info, verdicts, target, dry)
 
     gauge_ok = _has_gauge_schema(sb)
     if not gauge_ok:
