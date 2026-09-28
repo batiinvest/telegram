@@ -1152,6 +1152,20 @@ def job_collect_investor_market():
 
 
 @_job(holiday=True)
+def job_collect_fear_greed():
+    """평일 장 마감 후 (18:22) — 한국 피어앤그리드 원재료(지수·VKOSPI·국채선물지수·옵션 풋/콜 거래량)
+    수집 (시황 피어앤그리드 카드). 옵션 거래량은 당일 값만 주는 API라 거래일 저녁에 꼭 돌아야 한다."""
+    try:
+        logging.info("😨 [피어앤그리드] collect_fear_greed 실행 시작")
+        import collect_fear_greed
+        n = collect_fear_greed.run()
+        logging.info(f"=== [피어앤그리드] 완료: 지수 {n}일 upsert ===")
+    except Exception as e:
+        logging.error(f"❌ [피어앤그리드] 오류: {e}")
+        mark_failed(e)
+
+
+@_job(holiday=True)
 def job_collect_credit_balance():
     """평일 저녁 (19:00, +10:30 보정) — KOFIA 신용공여 잔고(신용거래융자 등) 수집.
     직전 영업일분이 당일 오후 발표되므로(2026-07-22 실측) 저녁 실행이 본 수집,
@@ -1377,6 +1391,7 @@ _RETRYABLE_JOBS = {
     'job_collect_investor_trend':   job_collect_investor_trend,
     'job_collect_investor_trend_ranked': job_collect_investor_trend_ranked,
     'job_collect_investor_market':  job_collect_investor_market,
+    'job_collect_fear_greed':       job_collect_fear_greed,
     'job_flow_empty':               job_flow_empty,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
