@@ -585,7 +585,7 @@ def _load_flow(sb, codes: list, cutoff: str):
     def page(chunk):
         return fetch_all_pages(
             _thread_client().table('market_data')
-              .select('stock_code,base_date,price,market_cap,'
+              .select('stock_code,base_date,price,market_cap,volume,'
                       'foreign_net_buy,institution_net_buy')
               .in_('stock_code', chunk).gte('base_date', cutoff)
               .not_.is_('foreign_net_buy', 'null')
@@ -599,7 +599,7 @@ def _load_flow(sb, codes: list, cutoff: str):
                 dates.add(r['base_date'])
                 by_code[r['stock_code']][r['base_date']] = {
                     'f': r['foreign_net_buy'], 'i': r['institution_net_buy'],
-                    'p': r['price'], 'cap': r['market_cap'],
+                    'p': r['price'], 'cap': r['market_cap'], 'v': r['volume'],
                 }
     return by_code, sorted(dates)
 
@@ -634,6 +634,10 @@ def _stat(days: dict, dates: list, cut_date: str):
     # 마지막 거래일 값이 없으면 어제 판정을 오늘 행에 적게 된다 — 적지 않는다
     if ser[-1][0] != dates[-1]:
         return None, 'stale'
+    # 거래정지일 — 다음 날 30일 재정산이 그날 수급을 0/0으로 채워 넣어(KIS가 0행을 준다)
+    # 'stale'을 빠져나온다. 거래가 없던 날의 오실레이터 위치는 판정이 아니다
+    if days[dates[-1]].get('v') == 0:
+        return None, 'halted'
     vals = [v for _, v in ser]
     cur = vals[-1]
     # 수급 칸(원본 엑셀의 '상위10%·상위25%·평균·하위25%·하위10%') — Excel PERCENTILE.INC와 같은
@@ -753,7 +757,7 @@ def classify(sb, companies: list | None = None):
             'skipped': dict(skipped), 'levels': level_n, 'groups': groups,
             'by_code': by_code, 'flow_dates': dates}
     log.info(f"[빈집] 수급 보유 {len(by_code)}종목 → 판정 {len(verdicts)} "
-             f"(제외: 표본부족 {skipped['short']} · 최신일 수급없음 {skipped['stale']}) · "
+             f"(제외: 표본부족 {skipped['short']} · 최신일 수급없음 {skipped['stale']} · 거래정지 {skipped['halted']}) · "
              f"창 {info['window']} · 비교집단 " + ' · '.join(f'{k} {v}' for k, v in level_n.items()))
     return verdicts, dates[-1], info
 
