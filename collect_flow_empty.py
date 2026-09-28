@@ -784,6 +784,27 @@ def _write_verdicts(sb, verdicts: dict, target_date: str) -> int:
     return done
 
 
+def _clear_dropped(sb, target: str, keep: set, gauge_ok: bool) -> int:
+    """같은 날을 다시 판정할 때 이번엔 빠진 종목(표본부족·거래정지 등)의 옛 판정을 지운다.
+
+    PATCH는 이번 판정 종목만 덮어써서, 먼저 돈 판정이 남기면 옛 계산 결과가 표에 그대로 보인다
+    (09-28 재판정에서 4행 실측).
+    """
+    have = fetch_all_pages(
+        sb.table('market_data').select('stock_code')
+          .eq('base_date', target).not_.is_('flow_quad', 'null').order('stock_code'))
+    drop = sorted({r['stock_code'] for r in have} - keep)
+    empty = {'flow_quad': None, 'flow_pctl': None, 'flow_supplied': None, 'flow_supply_rank': None}
+    if gauge_ok:
+        empty['flow_gauge'] = None
+    for i in range(0, len(drop), 200):
+        sb.table('market_data').update(empty) \
+          .eq('base_date', target).in_('stock_code', drop[i:i + 200]).execute()
+    if drop:
+        log.info(f"[빈집] {target} 이번 판정에서 빠진 {len(drop)}종목의 옛 판정 지움: {', '.join(drop[:10])}")
+    return len(drop)
+
+
 def _attach_lead(sb, concept_rows: list, info: dict, verdicts: dict, target: str, dry: bool):
     """업종 지수를 target일까지 잇고, 모멘텀·꾸준한 매수·주도 여부를 flow_concepts 행에 붙인다."""
     import sector_lead
@@ -903,6 +924,7 @@ def run(dry: bool = False, sync: bool = True) -> int:
         return len(rows)
 
     done = _patch_rows(sb, rows, '빈집')
+    _clear_dropped(sb, target, set(verdicts), gauge_ok)
     if concept_rows:
         sb.table('flow_concepts').delete().eq('base_date', target).execute()
         sb.table('flow_concepts').insert([dict(r, base_date=target) for r in concept_rows]).execute()
