@@ -24,7 +24,8 @@
 
 출력
   - leading_sectors: 판정일별 중분류 28개 보드
-  - market_data.lead_flags(판정일 행): {lead, mid, rs, tv, nb, cons, nh}
+  - market_data.lead_flags(판정일 행): {lead, mid, rs, tv, tvu, nb, cons, nh, cl}
+    tvu = 거래대금 상위150 ∧ 당일 상승, cl = 소분류 신고가 군집(09-19 회원 영상 — 후보 A의 OR 조건)
     후보 판정(빈집·후보A·후보B)은 화면이 flow_pctl과 합쳐 계산한다(config.js).
 """
 
@@ -52,6 +53,8 @@ FLOW_DAYS = 20       # 수급 꾸준함을 보는 거래일
 FLOW_POS_MIN = 12    # 그중 기관+외국인 순매수가 플러스인 날이 이 이상(60%)이고 누적도 플러스
 NH_DAYS = 5          # 신고가 군집을 세는 거래일
 RANK_TOP = 150       # 거래대금·순매수 상위 기준(원본 "150등 이내")
+CLUSTER_MIN = 3      # 신고가 군집 = 같은 WICS 소분류에서 최근 NH_DAYS일 52주 신고가 종목이 이 이상
+                     # (원본에 수치 없음 — "같은 색깔 종목들이 무리 지어 신고가", 09-19 회원 영상)
 CONS_DAYS = 30       # 컨센 상향으로 보는 최근 기간(달력일)
 RS_WORKERS = 8
 
@@ -137,7 +140,7 @@ def _load_window(companies: list, since: str) -> list:
         return fetch_all_pages(
             _thread_client().table('market_data')
               .select('stock_code,base_date,price,market_cap,trading_value,volume,'
-                      'foreign_net_buy,institution_net_buy,hgpr_cls,'
+                      'foreign_net_buy,institution_net_buy,hgpr_cls,price_change_rate,'
                       'pef_buy_amt,trust_buy_amt,pension_buy_amt')
               .in_('stock_code', chunk).gte('base_date', since)
               .order('base_date').order('stock_code'))
@@ -194,6 +197,22 @@ def sector_interest(rows: list, mid_of: dict, target: str) -> dict:
                      buy3_avg5=sum(w) / len(w) if len(w) == 5 else None)
         out[mid] = o
     return out
+
+
+def nh_clusters(rows: list, ind_of: dict, target: str) -> dict:
+    """WICS 소분류별 최근 NH_DAYS거래일 52주 신고가 종목 수 → {소분류: 수} (CLUSTER_MIN 이상만).
+
+    원본 09-19 회원 영상: '어떤 섹터가 군집 현상이 있는데 그 군집 현상에 있는 것 중에서 빈집'이
+    후보 A의 확률 높이기(OR) 조건 중 하나. 중분류(newhigh_5d)는 너무 넓어 소분류로 센다.
+    """
+    days = sorted({r['base_date'] for r in rows if r['base_date'] <= target})[-NH_DAYS:]
+    hit = defaultdict(set)
+    for r in rows:
+        if r['base_date'] in days and r.get('hgpr_cls') == '신고가':
+            ind = ind_of.get(r['stock_code'])
+            if ind:
+                hit[ind].add(r['stock_code'])
+    return {ind: len(c) for ind, c in hit.items() if len(c) >= CLUSTER_MIN}
 
 
 def sector_flows(rows: list, mid_of: dict, target: str):
@@ -371,6 +390,7 @@ def run(dry: bool = False, rs: bool = True) -> dict:
     companies = fetch_all_pages(sb.table('companies').select('code,name,wics_code,wics_mid')
                                 .eq('active', True).order('code'))
     mid_of = {c['code']: (c['wics_code'] or '')[:5] for c in companies if c.get('wics_code')}
+    ind_of = {c['code']: c['wics_code'] for c in companies if c.get('wics_code')}   # 소분류 7자리
     mid_name = {}
     for c in companies:
         if c.get('wics_code') and c.get('wics_mid'):
@@ -411,6 +431,10 @@ def run(dry: bool = False, rs: bool = True) -> dict:
               for r in today if r['foreign_net_buy'] is not None or r['institution_net_buy'] is not None}
     nb_top = {c for c, v in sorted(nb_val.items(), key=lambda kv: -kv[1])[:RANK_TOP] if v > 0}
     nh_today = {r['stock_code'] for r in today if r.get('hgpr_cls') == '신고가'}
+    # 원본 09-19 회원 영상: "아침마다 거래대금이 상위이면서 주가가 플러스인 것들 리스트를 본다"
+    tv_up = {r['stock_code'] for r in today
+             if r['stock_code'] in tv_top and (r.get('price_change_rate') or 0) > 0}
+    clusters = nh_clusters(rows, ind_of, target)
     cons = cons_up_codes(sb)
     price_now = {r['stock_code']: r['price'] for r in today if r['price']}
     rs_map = rs_ratings([c['code'] for c in companies], price_now) if rs else {}
@@ -423,13 +447,17 @@ def run(dry: bool = False, rs: bool = True) -> dict:
         mid = mid_of.get(code)
         flags[code] = {'lead': bool(mid and board.get(mid, {}).get('leading')), 'mid': mid,
                        'rs': rs_map.get(code), 'tv': code in tv_top, 'nb': code in nb_top,
+                       'tvu': code in tv_up, 'cl': ind_of.get(code) in clusters,
                        'cons': code in cons, 'nh': code in nh_today}
     info = {'target': target, 'leads': [board[c]['name'] for c in leads], 'flags': len(flags),
             'lead_stocks': sum(1 for f in flags.values() if f['lead']),
             'rs70': sum(1 for f in flags.values() if (f['rs'] or 0) >= 70),
-            'tv': len(tv_top), 'nb': len(nb_top), 'cons': len(cons & set(flags)), 'nh': len(nh_today)}
+            'tv': len(tv_top), 'tvu': len(tv_up), 'nb': len(nb_top), 'cons': len(cons & set(flags)),
+            'nh': len(nh_today), 'clusters': len(clusters),
+            'cl': sum(1 for f in flags.values() if f['cl'])}
     log.info(f"[주도업종] 종목 조건 {info['flags']}종목 — 주도 업종 소속 {info['lead_stocks']} · RS70+ {info['rs70']}"
-             f" · 거래대금150 {info['tv']} · 순매수150 {info['nb']} · 컨센상향 {info['cons']} · 신고가 {info['nh']}")
+             f" · 거래대금150 {info['tv']}(상승 {info['tvu']}) · 순매수150 {info['nb']} · 컨센상향 {info['cons']}"
+             f" · 신고가 {info['nh']} · 군집 소분류 {info['clusters']}개({info['cl']}종목)")
     if dry:
         return {'board': board, 'flags': flags, 'info': info}
 
