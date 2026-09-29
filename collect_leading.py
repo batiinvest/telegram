@@ -26,7 +26,7 @@
   - leading_sectors: 판정일별 중분류 28개 보드
   - market_data.lead_flags(판정일 행): {lead, mid, rs, tv, tvu, nb, cons, nh, cl}
     tvu = 거래대금 상위150 ∧ 당일 상승, cl = 소분류 신고가 군집(09-19 회원 영상 — 후보 A의 OR 조건)
-    후보 판정(빈집·후보A·후보B)은 화면이 flow_pctl과 합쳐 계산한다(config.js).
+    후보 판정(빈집·후보A·후보B)은 화면이 수급 칸(flow_gauge)과 합쳐 계산한다(config.js flowIsEmpty·taerinEval).
 """
 
 import logging
@@ -353,11 +353,21 @@ def buy_ranks(sb, mid_of: dict) -> dict:
     return {r['grp']: (r['rank'], r['score']) for r in rows}
 
 
-def _count_stages(sb, board: dict, mid_of: dict, target: str):
-    """중분류별 빈집(flow_pctl < 50)·'이제 시작'(수급 단계) 종목 수 — 판정일 빈집 판정을 읽는다.
+EMPTY_MAX_FILL = 2   # 빈집 = 수급 칸 2개 이하 (config.js FLOW_EMPTY_MAX_FILL과 같게)
 
-    빈집 판정(collect_flow_empty)이 같은 잡에서 먼저 돈다. 빈집 기준은 기업분석 표 '빈집' 열과 같다
-    (주도 업종 ∧ 백분위 50 미만 — 여기선 업종 안 종목 수라 백분위만 본다).
+
+def _is_empty(gauge: dict | None, pctl) -> bool:
+    if gauge and gauge.get('lv') and gauge.get('cur') is not None:
+        return sum(1 for v in gauge['lv'] if v is not None and gauge['cur'] >= v) <= EMPTY_MAX_FILL
+    return pctl is not None and pctl < 50
+
+
+def _count_stages(sb, board: dict, mid_of: dict, target: str):
+    """중분류별 빈집·'이제 시작'(수급 단계) 종목 수 — 판정일 수급 칸을 읽는다.
+
+    빈집 = 수급 칸 2개 이하(현재 오실레이터가 최근 63거래일 평균 아래) — 화면 config.js flowIsEmpty와
+    같다(09-29 원본과 같게 칸으로 통일, 바꾸면 둘 다). 칸이 없는 행만 자기 이력 백분위 50 미만으로 대신한다.
+    빈집 판정(collect_flow_empty)이 같은 잡에서 먼저 돈다.
     """
     from collect_flow_empty import _stage
     rows = fetch_all_pages(
@@ -368,7 +378,7 @@ def _count_stages(sb, board: dict, mid_of: dict, target: str):
         mid = mid_of.get(r['stock_code'])
         if not mid:
             continue
-        if r['flow_pctl'] is not None and r['flow_pctl'] < 50:
+        if _is_empty(r.get('flow_gauge'), r['flow_pctl']):
             n_empty[mid] += 1
         if _stage(r.get('flow_gauge')) == 'start':
             n_start[mid] += 1
