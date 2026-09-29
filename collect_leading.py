@@ -116,6 +116,7 @@ def sector_momentum(series: dict) -> dict:
             'above_ma11': ma[11] is not None and last > ma[11],
             'above_ma20': ma[20] is not None and last > ma[20],
             'above_ma50': ma[50] is not None and last > ma[50],
+            'ret_1d': (closes[-1] / closes[-2] - 1) * 100,
             # 시황 카드 6개월 추이 — 첫날=1 정규화
             'spark': [round(v / closes[0], 4) for v in closes],
         }
@@ -136,7 +137,8 @@ def _load_window(companies: list, since: str) -> list:
         return fetch_all_pages(
             _thread_client().table('market_data')
               .select('stock_code,base_date,price,market_cap,trading_value,volume,'
-                      'foreign_net_buy,institution_net_buy,hgpr_cls')
+                      'foreign_net_buy,institution_net_buy,hgpr_cls,'
+                      'pef_buy_amt,trust_buy_amt,pension_buy_amt')
               .in_('stock_code', chunk).gte('base_date', since)
               .order('base_date').order('stock_code'))
     rows = []
@@ -144,6 +146,54 @@ def _load_window(companies: list, since: str) -> list:
         for part in ex.map(page, [codes[i:i + 200] for i in range(0, len(codes), 200)]):
             rows += part
     return rows
+
+
+BUY3 = ('pef_buy_amt', 'trust_buy_amt', 'pension_buy_amt')   # 사모·투신·연기금 매수대금(백만원)
+
+
+def sector_interest(rows: list, mid_of: dict, target: str) -> dict:
+    """업종 관심도 — 원본 「외국인기관수급오실레이터 (업종)」 업종비중 시트.
+
+    거래대금: 판정일 합, 최근 5·20거래일 평균(판정일 포함 — DataGuide 5일평균거래대금과 같게).
+      원본은 '최근일 − 5일평균', '최근일 − 20일평균'(억원)을 본다.
+    연기금·사모·투신 매수대금('1일 유동성 투여'): KIS가 전일까지만 줘 판정일보다 하루 늦은 날이
+      최신이다(원본도 전일 열을 쓴다). 최근일 합과 최근 5거래일 평균.
+      ⚠ 원본 '최근일 − 5일 평균'은 3투자자×5일=15칸 평균을 빼 평균이 1/3로 작아진다 — 일별 3투자자
+      합의 5일 평균으로 고쳐 계산한다.
+    """
+    days = sorted({r['base_date'] for r in rows if r['base_date'] <= target})
+    tv = defaultdict(lambda: defaultdict(float))
+    buy = defaultdict(lambda: defaultdict(float))
+    buy_rows = defaultdict(int)
+    for r in rows:
+        mid = mid_of.get(r['stock_code'])
+        if not mid or r['base_date'] > target:
+            continue
+        if r['trading_value']:
+            tv[mid][r['base_date']] += r['trading_value']
+        vals = [r.get(k) for k in BUY3]
+        if any(v is not None for v in vals):
+            buy[mid][r['base_date']] += sum(v or 0 for v in vals) * 1e6
+            buy_rows[r['base_date']] += 1
+    # 매수대금이 '대부분 종목'에 있는 날만 — 일부만 채워진 날(수집 도중·당일)은 합이 작게 나온다
+    top = max(buy_rows.values(), default=0)
+    buy_days = [d for d in days if buy_rows.get(d, 0) >= top * 0.9] if top else []
+    tv_days = days[-20:]
+    out = {}
+    for mid in set(tv) | set(buy):
+        t = tv[mid]
+        o = {'tv_now': t.get(target)}
+        for n in (5, 20):
+            w = [t[d] for d in tv_days[-n:] if d in t]
+            o[f'tv_avg{n}'] = sum(w) / len(w) if len(w) == n else None
+        if buy_days:
+            b = buy[mid]
+            bd = buy_days[-1]
+            w = [b.get(d, 0.0) for d in buy_days[-5:]]
+            o.update(buy_date=bd, buy3_now=b.get(bd, 0.0),
+                     buy3_avg5=sum(w) / len(w) if len(w) == 5 else None)
+        out[mid] = o
+    return out
 
 
 def sector_flows(rows: list, mid_of: dict, target: str):
@@ -256,6 +306,15 @@ def cons_up_codes(sb) -> set:
 #  실행
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _has_board_ext(sb) -> bool:
+    """sql/sector_board.sql 실행 여부 — 없으면 오늘 등락·관심도 컬럼만 빼고 기록한다."""
+    try:
+        sb.table('leading_sectors').select('tv_now').limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
 def _has_schema(sb) -> bool:
     try:
         sb.table('market_data').select('lead_flags').limit(1).execute()
@@ -328,6 +387,7 @@ def run(dry: bool = False, rs: bool = True) -> dict:
     since = (date.fromisoformat(target) - timedelta(days=45)).isoformat()
     rows = _load_window(companies, since)
     flows, flow_days = sector_flows(rows, mid_of, target)
+    interest = sector_interest(rows, mid_of, target)
     buys = buy_ranks(sb, mid_of)
 
     board = {}
@@ -335,7 +395,7 @@ def run(dry: bool = False, rs: bool = True) -> dict:
         f = flows.get(code, {})
         br, bs = buys.get(code, (None, None))
         lead = bool(m['mom_rank'] and m['mom_rank'] <= LEAD_MOM_TOP and br and br <= LEAD_BUY_TOP)
-        board[code] = dict(m, **f, buy_rank=br, buy_score=bs, leading=lead)
+        board[code] = dict(m, **f, **interest.get(code, {}), buy_rank=br, buy_score=bs, leading=lead)
     leads = [c for c in board if board[c]['leading']]
     _count_stages(sb, board, mid_of, target)
     log.info(f"[주도업종] 매수·순매수 {flow_days[0] if flow_days else '-'}~{flow_days[-1] if flow_days else '-'}"
@@ -377,6 +437,8 @@ def run(dry: bool = False, rs: bool = True) -> dict:
     from collect_flow_empty import _patch_rows
     written = _patch_rows(sb, [{'stock_code': c, 'base_date': target, 'lead_flags': f} for c, f in flags.items()],
                           '주도업종')
+    ext = _has_board_ext(sb)
+    iv = lambda v: None if v is None else int(round(v))
     sb.table('leading_sectors').delete().eq('base_date', target).execute()
     sb.table('leading_sectors').insert([{
         'base_date': target, 'mid_code': c, 'name': b['name'],
@@ -390,6 +452,10 @@ def run(dry: bool = False, rs: bool = True) -> dict:
         'flow_cum_ratio': round(b['flow_cum_ratio'], 3) if b.get('flow_cum_ratio') is not None else None,
         'newhigh_5d': b.get('newhigh_5d'), 'n_stocks': b.get('n_stocks'), 'leading': b['leading'],
         'n_empty': b.get('n_empty'), 'n_start': b.get('n_start'), 'spark': b.get('spark'),
+        **({'ret_1d': round(b['ret_1d'], 2) if b.get('ret_1d') is not None else None,
+            'tv_now': iv(b.get('tv_now')), 'tv_avg5': iv(b.get('tv_avg5')), 'tv_avg20': iv(b.get('tv_avg20')),
+            'buy3_now': iv(b.get('buy3_now')), 'buy3_avg5': iv(b.get('buy3_avg5')),
+            'buy_date': b.get('buy_date')} if ext else {}),
     } for c, b in board.items()]).execute()
     log.info(f'[주도업종] {target} 종목 {written}행 · 보드 {len(board)}업종 기록')
     return {'info': info}

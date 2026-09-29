@@ -1067,6 +1067,14 @@ def job_flow_empty():
     except Exception as e:
         logging.error(f"❌ [업종수급] 오류: {e}")
         failed = failed or e
+    # ⑤ 업종 쏠림지수·브레드스 국면 — WICS 중분류 지수(wiseindex) + 코스피200 동일가중(KIS 1~2회)
+    try:
+        import collect_sector_market
+        n = collect_sector_market.run()
+        logging.info(f"=== [업종쏠림] 완료: {n}일 ===")
+    except Exception as e:
+        logging.error(f"❌ [업종쏠림] 오류: {e}")
+        failed = failed or e
     if failed:
         mark_failed(failed)
 
