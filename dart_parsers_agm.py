@@ -84,6 +84,15 @@ def parse_mgmt_event(kv: dict) -> list:
     if v := _get(kv, '4. 사실발생', '이사회결의일', '사실확인일', '결정일'):
         lines.append(f'📅 결정일: {v}')
 
+    # 공시유보 — 계약금액 등 비공개 항목. 유보기한이 있으면 공개 예정 시점이라 함께 표시
+    # (기술이전·라이선스 공시에서 금액이 기한 뒤 공개되는 경우가 많음).
+    if (rsv := _get(kv, '1. 유보사항', '유보사항')) and rsv not in ('해당사항 없음', '해당없음'):
+        _why = _get(kv, '2. 유보사유', '유보사유')
+        _until = _get(kv, '3. 유보기한', '유보기한')
+        lines.append(f'🔒 공시유보: {_trunc_clean(rsv, 80)}'
+                     + (f' — {_trunc_clean(_why, 80)}' if _why else '')
+                     + (f' (유보기한 {_until})' if _until else ''))
+
     # 관련공시
     if v := _get(kv, '관련공시', '※ 관련 공시'):
         lines.append(f'🔗 관련: {_trunc(v, 110)}')

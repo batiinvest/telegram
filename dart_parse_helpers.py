@@ -255,6 +255,36 @@ def _strip_disclaimer(text: str) -> str:
     return ''
 
 
+_LETTER_SEQS = ('abcdefgh', '가나다라마바사아')
+
+
+def _split_lettered(text: str):
+    """'항목명 a. 내용 b. 내용 …' / '가. … 나. …' → (항목명, [하위줄…]), 해당 없으면 None.
+
+    순번이 첫 글자부터 2개 이상 연속(a→b, 가→나)일 때만 인정 — 'U.S.A.'·'e.g.'·
+    '참가.'·'(a)' 같은 문장 속 표기 오인 방지. 마지막 항목 꼬리의 '※ 주석'·'→/-> 비고'는
+    별도 줄로 분리(계약금액 비공개 안내 등이 마지막 순번에 붙어 뭉치던 것).
+    """
+    flat = re.sub(r'\s+', ' ', text).strip()
+    for seq in _LETTER_SEQS:
+        picked = []
+        for m in re.finditer(rf'(?<![\w.(])([{seq}])[.)]\s+', flat):
+            if len(picked) < len(seq) and m.group(1) == seq[len(picked)]:
+                picked.append(m)
+        if len(picked) < 2:
+            continue
+        lead = flat[:picked[0].start()].strip().rstrip(':：-').strip()
+        subs = []
+        for j, m in enumerate(picked):
+            end = picked[j + 1].start() if j + 1 < len(picked) else len(flat)
+            body = flat[m.end():end].strip().rstrip('-').strip()
+            subs.append(f'{m.group(0).strip()} {body}')
+        tail = re.split(r'\s+(?=※|→|->)', subs[-1])
+        subs[-1:] = [t.strip() for t in tail if t.strip()]
+        return lead, subs
+    return None
+
+
 def _parse_numbered_body(text: str, max_items: int = 8, val_limit: int = 300) -> list[str]:
     """'1) 항목명: 내용' / '1. 항목명 - 내용' 형태 번호 목록을 줄별 bullet로 변환.
 
@@ -303,6 +333,20 @@ def _parse_numbered_body(text: str, max_items: int = 8, val_limit: int = 300) ->
                 if len(items) >= max_items:
                     break
                 continue
+        # 순번 하위목록(a. b. c. / 가. 나. 다.) — '계약 금액 a. 계약금: … b. 공동연구 대가: …'가
+        # 아래 key/value 분리에서 첫 콜론('…a. 계약의 대가(계약금):')으로 잘못 갈려 a~d가
+        # 한 줄로 뭉치던 문제. 항목명 헤더 + 순번별 하위줄(멀티라인 1항목, max_items 정합).
+        if lettered := _split_lettered(content):
+            lead, subs = lettered
+            if lead:
+                head = f'  • {lead}:' if len(lead) <= 40 else f'  • {_trunc_clean(lead, val_limit)}'
+            else:
+                head, subs = f'  • {_trunc_clean(subs[0], 200)}', subs[1:]
+            items.append('\n'.join([head] + [f'      {_trunc_clean(s, 200)}' for s in subs[:8]]))
+            i += 2
+            if len(items) >= max_items:
+                break
+            continue
         # 'key: value' 또는 'key - value' 분리 (콜론이 먼저 오면 콜론 우선 매칭)
         m = re.match(r'^(.{1,40}?)\s*[:－-]\s*(.+)', content, re.DOTALL)
         if m:
