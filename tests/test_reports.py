@@ -42,6 +42,7 @@ def _install_stubs():
     mgr.global_session = _Session()
     mgr.HistoryManager = _History
     mgr.telegram_bot   = _Bot()
+    mgr.note_send_failure = lambda chat_id, reason: None
 
     sa = types.ModuleType("stock_api")
     sa.get_company_chat_id = lambda corp, code="": None
@@ -208,6 +209,146 @@ def test_resolve_report_targets():
         assert N._resolve_report_targets('기업분석', '무명종목') == set()
     finally:
         N.INDUSTRY_CHAT_IDS, N.COMPANY_CHAT_IDS, N.COMPANY_TO_INDUSTRY = saved
+
+
+# ── naver_report: 크롤 — '리포트 0건'과 '페이지 깨짐' 구분 ─────────
+class _Res:
+    def __init__(self, text, status=200, url="https://finance.naver.com/research/x"):
+        self.text, self.status_code, self.url = text, status, url
+
+
+class _FakeSession:
+    """페이지 번호 순서대로 응답을 돌려주고, 받은 kwargs를 기록한다."""
+    def __init__(self, *responses):
+        self.responses, self.calls = list(responses), []
+
+    def get(self, url, **kw):
+        self.calls.append((url, kw))
+        return self.responses.pop(0)
+
+
+def _list_html(rows_html, last_page=None):
+    pg = (f'<table class="Nnavi"><tr><td class="pgRR">'
+          f'<a href="/research/x?page={last_page}">맨뒤</a></td></tr></table>') if last_page else ""
+    return (f'<html><head><title>네이버페이 증권</title></head><body>'
+            f'<table class="type_1"><tr><th>종목명</th><th>제목</th></tr>{rows_html}</table>'
+            f'{pg}</body></html>')
+
+
+_CORP_ROW = ('<tr><td><a href="/item">삼성전자</a></td><td>실적</td><td>하나증권</td>'
+             '<td><a href="https://stock.pstatic.net/r/1.pdf">PDF</a></td><td>26.09.30</td></tr>')
+
+
+def _crawl_with(session, page_type="기업분석"):
+    saved = N._session
+    N._session = session
+    try:
+        return N.crawl_report_pages(page_type, "2026-09-30", N.HistoryManager("x"))
+    finally:
+        N._session = saved
+
+
+def _expect_crawl_error(session, needle):
+    try:
+        _crawl_with(session)
+    except N.ReportCrawlError as e:
+        assert needle in str(e), str(e)
+        return
+    raise AssertionError("ReportCrawlError 미발생")
+
+
+def test_crawl_parses_rows_with_browser_headers():
+    s = _FakeSession(_Res(_list_html(_CORP_ROW)))
+    reports = _crawl_with(s)
+    assert [r[1] for r in reports] == ['삼성전자_260930_하나증권.pdf']
+    headers = s.calls[0][1]["headers"]
+    assert headers["User-Agent"].startswith("Mozilla/5.0")
+    assert headers["Content-Type"] is None          # 세션 기본 application/json 제거
+    assert s.calls[0][1]["timeout"] == N._LIST_TIMEOUT_SEC
+
+
+def test_crawl_empty_day_is_not_error():
+    # 표는 있는데 리포트 행이 없음 = 그날 0건 → 정상 빈 리스트
+    assert _crawl_with(_FakeSession(_Res(_list_html("")))) == []
+
+
+def test_crawl_missing_table_raises():
+    blocked = _Res("<html><head><title>접근 제한</title></head><body>차단</body></html>",
+                   url=N.NAVER_REPORT_URLS["기업분석"] + "?page=1")
+    _expect_crawl_error(_FakeSession(blocked), "목록 표 없음(차단·개편 의심) 제목 '접근 제한'")
+
+
+def test_crawl_redirect_reports_new_url():
+    moved = _Res("<html><body><div id='app'></div></body></html>",
+                 url="https://stock.naver.com/research/company")
+    _expect_crawl_error(_FakeSession(moved), "이동→https://stock.naver.com/research/company")
+
+
+def test_crawl_http_error_raises():
+    _expect_crawl_error(_FakeSession(_Res("", status=403)), "HTTP 403")
+
+
+def test_crawl_column_change_raises():
+    # PDF 링크는 있는데 열 수가 모자라 한 행도 못 읽음
+    row = '<tr><td><a href="/item">삼성전자</a></td><td><a href="/r/1.pdf">PDF</a></td></tr>'
+    _expect_crawl_error(_FakeSession(_Res(_list_html(row))), "열 구성")
+
+
+def test_crawl_later_page_failure_keeps_collected():
+    s = _FakeSession(_Res(_list_html(_CORP_ROW, last_page=2)), _Res("", status=500))
+    saved_delay = N._PAGE_DELAY_SEC
+    N._PAGE_DELAY_SEC = 0
+    try:
+        reports = _crawl_with(s)
+    finally:
+        N._PAGE_DELAY_SEC = saved_delay
+    assert len(reports) == 1
+
+
+# ── naver_report: 잡 — 실패를 삼키지 않는다 ──────────────────────
+def _run_job_with(*, crawl, send_doc=lambda *a, **k: True):
+    bridge_mod = types.ModuleType("supabase_bridge")
+    class _Bridge:
+        def get_config(self, key, default=None): return default
+    bridge_mod.bridge = _Bridge()
+    saved_mod = sys.modules.get("supabase_bridge")
+    sys.modules["supabase_bridge"] = bridge_mod
+    saved = (N.crawl_report_pages, N._send_telegram_doc, N._fetch_pdf_file)
+    N.crawl_report_pages, N._send_telegram_doc = crawl, send_doc
+    N._fetch_pdf_file = lambda url: None
+    try:
+        N.run_naver_report_job()
+    finally:
+        N.crawl_report_pages, N._send_telegram_doc, N._fetch_pdf_file = saved
+        if saved_mod is None:
+            sys.modules.pop("supabase_bridge", None)
+        else:
+            sys.modules["supabase_bridge"] = saved_mod
+
+
+def _expect_job_error(needle, **kw):
+    try:
+        _run_job_with(**kw)
+    except RuntimeError as e:
+        assert needle in str(e), str(e)
+        return
+    raise AssertionError("RuntimeError 미발생")
+
+
+def test_job_raises_on_crawl_error():
+    def crawl(page_type, *a, **k):
+        raise N.ReportCrawlError(f"{page_type}: 목록 표 없음")
+    _expect_job_error("목록 표 없음", crawl=crawl)
+
+
+def test_job_raises_on_doc_send_failure():
+    crawl = lambda page_type, *a, **k: [("https://x/1.pdf", "a_260930_b.pdf", "a")]
+    _expect_job_error("PDF 발송 실패 1/1건", crawl=crawl,
+                      send_doc=lambda *a, **k: False)
+
+
+def test_job_ok_when_no_reports():
+    _run_job_with(crawl=lambda *a, **k: [])        # 예외 없음
 
 
 # ── kind_ir: 영문판정 / 발송파일명 ─────────────────────────────

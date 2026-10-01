@@ -48,11 +48,16 @@ def fetch_reports_for_date(date_str: str, page_type: str,
 
     naver_report.crawl_report_pages(stock_api 재수출) 공용 크롤러에 위임.
     백필 특성 유지: timeout=10(빠른 실패), stop_on_empty_page=True(빈 페이지 조기 종료).
+    목록 페이지를 못 읽으면(차단·개편) 그 사유를 남기고 빈 리스트 — 다음 날짜로 진행.
     """
-    return sa.crawl_report_pages(
-        page_type, date_str, history,
-        skip_history=skip_history, timeout=10, stop_on_empty_page=True,
-    )
+    try:
+        return sa.crawl_report_pages(
+            page_type, date_str, history,
+            skip_history=skip_history, timeout=10, stop_on_empty_page=True,
+        )
+    except sa.ReportCrawlError as e:
+        log.error(f"   ❌ 목록 수집 실패 — {e}")
+        return []
 
 
 def backfill(from_dt: date, to_dt: date,

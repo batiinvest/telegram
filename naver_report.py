@@ -14,7 +14,8 @@ from typing import Optional
 from bs4 import BeautifulSoup
 
 from logger_config import get_logger
-from managers import global_session as _session, HistoryManager, telegram_bot as _telegram_bot
+from managers import (global_session as _session, HistoryManager,
+                      telegram_bot as _telegram_bot, note_send_failure)
 from config import (
     TELEGRAM_BOT_TOKEN,
     COMPANY_CHAT_IDS, INDUSTRY_CHAT_IDS, COMPANY_TO_INDUSTRY,
@@ -70,6 +71,26 @@ _SUMMARY_SEND_DELAY_SEC = 0.5    # 요약 청크 전송 간 간격(초)
 _PAGE_DELAY_SEC         = 0.2    # 페이지네이션 크롤 간 간격(초)
 _PDF_DOWNLOAD_TIMEOUT   = 30     # PDF 다운로드 타임아웃(초)
 _PDF_CHUNK_BYTES        = 8192   # PDF 스트리밍 청크 크기
+_LIST_TIMEOUT_SEC       = 15     # 목록 페이지 타임아웃(초) — 구: None(무제한)이라 응답이 멈추면 잡 스레드도 멈췄다
+
+# 네이버 요청 헤더. 구: global_session 기본값 그대로 — UA는 python-requests, GET에
+# Content-Type: application/json까지 붙었다. 네이버가 이런 요청을 차단·빈 페이지로 받으면
+# 목록 표가 없어 '신규 리포트 없음'으로 조용히 끝난다(2026-09-10부터 멈춘 발송을 10-01에야 알았다).
+# 다른 네이버 수집기(collect_wics·collect_qtr_consensus·stock_api 지수)와 같게 브라우저 UA를 보낸다.
+# Content-Type: None — 세션 기본 헤더에서 이 요청만 그 키를 뺀다(requests 병합 규칙).
+_NAVER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+    "Referer": "https://finance.naver.com/research/",
+    "Content-Type": None,
+}
+
+
+class ReportCrawlError(RuntimeError):
+    """목록 페이지가 예상한 모양이 아님 — 차단·오류 페이지·개편.
+
+    '오늘 리포트 0건'과 구분하려고 따로 둔다. 구: 둘 다 빈 리스트라
+    크롤이 깨져도 잡이 성공으로 기록되고 실패 알림도 가지 않았다."""
 
 # -----------------------------------------------------------
 # 🛠️ [Internal] 리포트 파싱 및 유틸리티
@@ -160,7 +181,8 @@ def _fetch_pdf_file(pdf_url: str) -> Optional[BytesIO]:
     """PDF 파일을 메모리로 다운로드 (global_session 사용)"""
     try:
         # 파일 다운로드는 stream=True 권장
-        with _session.get(pdf_url, stream=True, timeout=_PDF_DOWNLOAD_TIMEOUT) as r:
+        with _session.get(pdf_url, stream=True, timeout=_PDF_DOWNLOAD_TIMEOUT,
+                          headers=_NAVER_HEADERS) as r:
             r.raise_for_status()
             buf = BytesIO()
             for chunk in r.iter_content(chunk_size=_PDF_CHUNK_BYTES):
@@ -171,14 +193,18 @@ def _fetch_pdf_file(pdf_url: str) -> Optional[BytesIO]:
         log.error(f"PDF Download Fail: {e}")
         return None
 
-def _send_telegram_doc(chat_id: str, document, file_name: str, caption: str = None, retry_count: int = 0):
-    """텔레그램 문서(PDF) 전송 — 429 속도제한 시 대기 후 재전송."""
-    if not TELEGRAM_BOT_TOKEN: return
+def _send_telegram_doc(chat_id: str, document, file_name: str, caption: str = None, retry_count: int = 0) -> bool:
+    """텔레그램 문서(PDF) 전송 — 429 속도제한 시 대기 후 재전송. 성공 시 True.
+
+    실패는 note_send_failure로 남겨 19:50 운영 요약의 '📵 발송실패'에 나온다
+    (구: 로그 한 줄뿐이라 채널 권한이 빠져도 아무도 몰랐다)."""
+    if not TELEGRAM_BOT_TOKEN: return False
 
     # 최대 _MAX_DOC_RETRY회까지만 재시도 (무한 루프 방지)
     if retry_count > _MAX_DOC_RETRY:
         log.error(f"❌ [Telegram] {_MAX_DOC_RETRY}회 재시도 실패, 전송 포기 ({file_name})")
-        return
+        note_send_failure(chat_id, "sendDocument 429 재시도 초과")
+        return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
 
@@ -204,21 +230,25 @@ def _send_telegram_doc(chat_id: str, document, file_name: str, caption: str = No
             time.sleep(wait_time + 1)
 
             # 재귀 호출로 다시 시도
-            _send_telegram_doc(chat_id, document, file_name, caption, retry_count + 1)
-            return
+            return _send_telegram_doc(chat_id, document, file_name, caption, retry_count + 1)
 
-        if res.status_code != 200:
-            log.error(f"⚠️ [Telegram] 전송 실패 ({res.status_code}): {res.text}")
+        ok = res.status_code == 200
+        if not ok:
+            log.error(f"⚠️ [Telegram] 전송 실패 ({chat_id}, {res.status_code}): {res.text}")
+            note_send_failure(chat_id, f"sendDocument {res.status_code} {res.text[:80]}")
 
         # 성공 시에도 연속 전송 방지를 위해 약간 대기
         time.sleep(_DOC_SEND_INTERVAL_SEC)
+        return ok
 
     except Exception as e:
         log.error(f"❌ [Telegram] Doc Error ({chat_id}): {e}")
         # 네트워크 에러 시에도 1번은 재시도
         if retry_count < 1:
             time.sleep(_NET_ERROR_RETRY_WAIT)
-            _send_telegram_doc(chat_id, document, file_name, caption, retry_count + 1)
+            return _send_telegram_doc(chat_id, document, file_name, caption, retry_count + 1)
+        note_send_failure(chat_id, f"sendDocument 연결 에러: {e}")
+        return False
 
 
 _REPORT_NUMS = ("①", "②", "③")
@@ -295,16 +325,38 @@ def _build_report_caption(file_name: str, tag: str, hashtags: str, fields: dict 
     return "\n".join(lines)[:_CAPTION_LIMIT]
 
 
+def _fetch_list_page(url: str, timeout):
+    """목록 페이지 1장 → (soup, table). 예상한 모양이 아니면 ReportCrawlError.
+
+    리포트가 0건인 날도 네이버는 같은 목록 표(table.type_1)를 그린다.
+    표가 없다는 건 차단·오류 페이지·다른 주소로의 이동(개편)이라는 뜻이다."""
+    res = _session.get(url, headers=_NAVER_HEADERS, timeout=timeout)
+    # 다른 주소로 넘어갔으면(개편) 그 주소가 가장 큰 단서 — 알림이 200자에서 잘리니 짧게
+    moved = f", 이동→{res.url}" if res.url and res.url.split("?")[0] != url.split("?")[0] else ""
+    if res.status_code != 200:
+        raise ReportCrawlError(f"HTTP {res.status_code}{moved}")
+    soup = BeautifulSoup(res.text, "html.parser")
+    table = soup.find("table", {"class": "type_1"})
+    if not table:
+        title = soup.title.get_text(strip=True)[:40] if soup.title else ""
+        raise ReportCrawlError(
+            f"목록 표 없음(차단·개편 의심) 제목 '{title}' 본문 {len(res.text)}자{moved}")
+    return soup, table
+
+
 def crawl_report_pages(page_type: str, date_str: str, history: HistoryManager,
-                       *, skip_history: bool = False, timeout=None,
+                       *, skip_history: bool = False, timeout=_LIST_TIMEOUT_SEC,
                        stop_on_empty_page: bool = False) -> list:
     """네이버 리포트 목록을 페이지네이션하며 (pdf_url, file_name, tag) 튜플 리스트로 수집.
 
     run_naver_report_job(오늘)·backfill_reports(과거 날짜) 공용 크롤러.
       date_str            : 조회 기준일 (writeFromDate=writeToDate=date_str)
       skip_history=False  : history 중복분 제외 (True면 재전송 허용)
-      timeout             : requests 타임아웃 (None=세션 기본/무제한)
+      timeout             : requests 타임아웃(초)
       stop_on_empty_page  : 파싱 가능한 행이 없는 페이지에서 조기 종료(백필용)
+
+    첫 페이지부터 못 읽으면 ReportCrawlError — 빈 리스트(=그날 리포트 0건)와 구분한다.
+    둘째 페이지 이후 실패는 로그만 남기고 그때까지 모은 것을 돌려준다.
     """
     base_url = NAVER_REPORT_URLS[page_type]
     reports, page = [], 1
@@ -312,15 +364,8 @@ def crawl_report_pages(page_type: str, date_str: str, history: HistoryManager,
         try:
             params = {"searchType": "writeDate", "writeFromDate": date_str,
                       "writeToDate": date_str, "page": page}
-            res  = _session.get(f"{base_url}?{urlencode(params)}", timeout=timeout)
-            soup = BeautifulSoup(res.text, "html.parser")
-
-            table = soup.find("table", {"class": "type_1"})
-            if not table:
-                break
+            soup, table = _fetch_list_page(f"{base_url}?{urlencode(params)}", timeout)
             rows = table.find_all("tr")
-            if not rows:
-                break
 
             page_has_data = False
             for row in rows:
@@ -333,6 +378,14 @@ def crawl_report_pages(page_type: str, date_str: str, history: HistoryManager,
                     continue
                 reports.append(data)
 
+            # PDF 링크는 있는데 한 행도 못 읽었다 = 열 구성이 바뀌었다 (REPORT_CONFIG 인덱스 점검)
+            if not page_has_data:
+                pdf_links = sum(1 for a in table.find_all("a", href=True)
+                                if a["href"].lower().endswith(".pdf"))
+                if pdf_links:
+                    raise ReportCrawlError(
+                        f"PDF 링크 {pdf_links}개가 있는데 해석된 행 0개 — 열 구성 변경 의심")
+
             total_pages = _get_total_pages(soup)
             if (stop_on_empty_page and not page_has_data) or page >= total_pages:
                 break
@@ -340,6 +393,8 @@ def crawl_report_pages(page_type: str, date_str: str, history: HistoryManager,
             page += 1
             time.sleep(_PAGE_DELAY_SEC)
         except Exception as e:
+            if page == 1:
+                raise ReportCrawlError(f"{page_type} {date_str}: {e}") from e
             log.error(f"[리포트 크롤] {page_type} {date_str} p.{page}: {e}")
             break
     return reports
@@ -363,7 +418,10 @@ def _resolve_report_targets(page_type: str, tag) -> set:
 
 
 def run_naver_report_job():
-    """네이버 리포트 수집/전송 (페이지네이션 + 중복 방지 + 메시지 분할)."""
+    """네이버 리포트 수집/전송 (페이지네이션 + 중복 방지 + 메시지 분할).
+
+    크롤 실패나 리포트 채널 발송 실패가 있으면 나머지를 다 처리한 뒤 RuntimeError —
+    job_naver_report가 실패로 기록하고 관리자 방에 알린다."""
     # DB에서 리포트 채널 ID 동적 로드 (app_config.report_chat_id)
     # AI 요약 기능은 app_config.report_ai_summary 로 토글 (기본 OFF, 승인 후 'on')
     try:
@@ -379,10 +437,19 @@ def run_naver_report_job():
 
     # 히스토리 매니저 로드
     history = HistoryManager("sent_reports.txt", max_len=_REPORT_HISTORY_MAX)
+    failures = []
+
+    if not _report_cid:
+        failures.append("report_chat_id 비어 있음 — 아카이브 채널 발송 생략")
 
     for page_type in ["산업분석", "기업분석"]:
-        # 오늘자 리포트 수집 (공통 크롤러 — 중복 제외, 세션 기본 타임아웃)
-        reports = crawl_report_pages(page_type, today_str, history)
+        # 오늘자 리포트 수집 (공통 크롤러 — 중복 제외)
+        try:
+            reports = crawl_report_pages(page_type, today_str, history)
+        except ReportCrawlError as e:
+            log.error(f"❌ [리포트 크롤] {e}")
+            failures.append(str(e))
+            continue
 
         if not reports:
             log.info(f"   -> {page_type}: 전송할 신규 리포트 없음")
@@ -404,10 +471,12 @@ def run_naver_report_job():
                     msg_lines.append(f"{i+j+1}. {clean_name}")
 
                 final_msg = "\n".join(msg_lines) + f"\n\n{_make_hashtag(page_type)}"
-                _telegram_bot.send_message(_report_cid, final_msg)
+                if not _telegram_bot.send_message(_report_cid, final_msg):
+                    failures.append(f"{page_type} 목록 메시지 발송 실패 → {_report_cid}")
                 time.sleep(_SUMMARY_SEND_DELAY_SEC)
 
         # 개별 파일 전송
+        doc_fail = 0
         for pdf_url, file_name, tag in reports:
             # PDF 다운로드
             pdf_buf = _fetch_pdf_file(pdf_url)
@@ -427,8 +496,8 @@ def run_naver_report_job():
             caption = _build_report_caption(file_name, tag, hashtags, ai_fields)
 
             # 1. 리포트 채널 전송 (batiarchive)
-            if _report_cid:
-                _send_telegram_doc(_report_cid, target_doc, file_name, caption)
+            if _report_cid and not _send_telegram_doc(_report_cid, target_doc, file_name, caption):
+                doc_fail += 1
 
 
             # 2. 타겟 채널(산업방·기업방) 찾아 전송
@@ -441,4 +510,9 @@ def run_naver_report_job():
             history.add(file_name)
             log.info(f"   -> 리포트 전송 완료: {file_name}")
 
+        if doc_fail:
+            failures.append(f"{page_type} PDF 발송 실패 {doc_fail}/{len(reports)}건 → {_report_cid}")
+
     log.info("📑 리포트 작업 종료")
+    if failures:
+        raise RuntimeError(" | ".join(failures))
