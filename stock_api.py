@@ -2085,9 +2085,9 @@ def get_industry_financial_ranking(industry_name: str) -> str:
 # =================================================================================
 from naver_report import (   # noqa: E402
     run_naver_report_job,
-    NAVER_REPORT_CHAT_ID, NAVER_REPORT_URLS, REPORT_INDUSTRY_MAP, REPORT_CONFIG,
+    NAVER_REPORT_CHAT_ID, REPORT_INDUSTRY_MAP,
     _sanitize_filename, _safe_caption, _make_hashtag, _extract_firm,
-    _report_hashtags, _get_total_pages, _parse_report_row,
+    _report_hashtags,
     _fetch_pdf_file, _send_telegram_doc, _build_report_caption,
     crawl_report_pages, ReportCrawlError,
 )

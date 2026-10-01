@@ -7,11 +7,8 @@ stock_api 가 하위호환을 위해 주요 심볼을 재수출한다 (backfill_
 import re
 import time
 from io import BytesIO
-from urllib.parse import urljoin, urlencode
 from datetime import datetime
 from typing import Optional
-
-from bs4 import BeautifulSoup
 
 from logger_config import get_logger
 from managers import (global_session as _session, HistoryManager,
@@ -29,17 +26,18 @@ log = get_logger(__name__)
 
 # 리포트 관련 상수 설정
 NAVER_REPORT_CHAT_ID = "@batiarchive"  # 네이버 리포트 전용 채널 (기본값 — DB report_chat_id로 덮어씀)
-NAVER_REPORT_URLS = {
-    "기업분석": "https://finance.naver.com/research/company_list.naver",
-    "시장정보": "https://finance.naver.com/research/market_info_list.naver",
-    "산업분석": "https://finance.naver.com/research/industry_list.naver",
-}
+# 네이버 증권 리서치 API. 2026-09 개편으로 finance.naver.com/research/*_list.naver(HTML 표)가
+# stock.naver.com/research/*(Next.js)로 넘어갔고, 화면은 이 JSON API로 그린다.
+#   목록: {API}/{type}?index=0..&size=..&startDate=&endDate=  → {items, hasNext, totalCount}
+#   상세: {API}/{type}/{nid}                                   → attachUrl(PDF) — 목록엔 PDF 주소가 없다
+NAVER_RESEARCH_API = "https://stock.naver.com/api/stockSecurity/researches/v2"
+REPORT_API_TYPES = {"기업분석": "company", "산업분석": "industry"}
 
 # 네이버 리포트 분류 -> config.py 산업군 키 매핑
 REPORT_INDUSTRY_MAP = {
     "반도체": "반도체",
     "IT": "테크", "게임": "테크", "휴대폰": "테크", "디스플레이": "테크",
-    "전기전자": "테크", "통신": "테크", "인터넷 포탈": "테크", "소프트웨어": "테크",
+    "전기전자": "테크", "통신": "테크", "인터넷포탈": "테크", "소프트웨어": "테크",
     "자동차": "2차전지", "2차전지": "2차전지",
     "바이오": "바이오", "제약": "바이오",
     "화장품": "뷰티",
@@ -49,12 +47,6 @@ REPORT_INDUSTRY_MAP = {
     "음식료": "소비재", "섬유의류": "소비재", "여행": "소비재",
     "로봇": "로봇",
     "미디어": "엔터", "광고": "엔터",
-}
-
-REPORT_CONFIG = {
-    "기업분석": {"title_idx": 0, "firm_idx": 2, "date_idx": 4, "link_idx": 3},
-    "시장정보": {"title_idx": 0, "firm_idx": 1, "date_idx": 3, "link_idx": 2},
-    "산업분석": {"industry_idx": 0, "title_idx": 1, "firm_idx": 2, "date_idx": 4, "link_idx": 3},
 }
 
 ROBOT_KEYWORDS = ["로봇", "액츄에이터", "로보틱스", "휴머로이드", "AMR", "AGV", "감속기", "서보모터", "휴머노이드"]
@@ -69,25 +61,27 @@ _NET_ERROR_RETRY_WAIT   = 5      # 네트워크 오류 시 재시도 대기(초)
 _DOC_SEND_INTERVAL_SEC  = 1.0    # 연속 문서 전송 간 간격(초)
 _SUMMARY_SEND_DELAY_SEC = 0.5    # 요약 청크 전송 간 간격(초)
 _PAGE_DELAY_SEC         = 0.2    # 페이지네이션 크롤 간 간격(초)
+_DETAIL_DELAY_SEC       = 0.1    # 상세(PDF 주소) 조회 간 간격(초)
 _PDF_DOWNLOAD_TIMEOUT   = 30     # PDF 다운로드 타임아웃(초)
 _PDF_CHUNK_BYTES        = 8192   # PDF 스트리밍 청크 크기
-_LIST_TIMEOUT_SEC       = 15     # 목록 페이지 타임아웃(초) — 구: None(무제한)이라 응답이 멈추면 잡 스레드도 멈췄다
+_LIST_TIMEOUT_SEC       = 15     # 목록·상세 API 타임아웃(초) — 구: None(무제한)이라 응답이 멈추면 잡 스레드도 멈췄다
+_LIST_PAGE_SIZE         = 50     # 목록 API 1회 건수 (API 상한 50, 넘기면 400 too_big)
+_MAX_LIST_PAGES         = 20     # 하루치 목록 페이지 상한 — hasNext가 고장 나도 무한 루프 방지
 
 # 네이버 요청 헤더. 구: global_session 기본값 그대로 — UA는 python-requests, GET에
-# Content-Type: application/json까지 붙었다. 네이버가 이런 요청을 차단·빈 페이지로 받으면
-# 목록 표가 없어 '신규 리포트 없음'으로 조용히 끝난다(2026-09-10부터 멈춘 발송을 10-01에야 알았다).
-# 다른 네이버 수집기(collect_wics·collect_qtr_consensus·stock_api 지수)와 같게 브라우저 UA를 보낸다.
+# Content-Type: application/json까지 붙었다. 다른 네이버 수집기(collect_wics·collect_qtr_consensus·
+# stock_api 지수)와 같게 브라우저 UA를 보낸다.
 # Content-Type: None — 세션 기본 헤더에서 이 요청만 그 키를 뺀다(requests 병합 규칙).
 _NAVER_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
-    "Referer": "https://finance.naver.com/research/",
+    "Referer": "https://stock.naver.com/research/",
     "Content-Type": None,
 }
 
 
 class ReportCrawlError(RuntimeError):
-    """목록 페이지가 예상한 모양이 아님 — 차단·오류 페이지·개편.
+    """리서치 API 응답이 예상한 모양이 아님 — 차단·오류·개편.
 
     '오늘 리포트 0건'과 구분하려고 따로 둔다. 구: 둘 다 빈 리스트라
     크롤이 깨져도 잡이 성공으로 기록되고 실패 알림도 가지 않았다."""
@@ -134,48 +128,32 @@ def _report_hashtags(page_type: str, tag: str, file_name: str) -> str:
         if ht and ht not in tags: tags.append(ht)
     return ' '.join(tags)
 
-def _get_total_pages(soup) -> int:
-    """네이버 페이지네이션에서 마지막 페이지 번호 추출"""
-    try:
-        last_page_tag = soup.select_one("td.pgRR a")
-        if last_page_tag:
-            return int(last_page_tag["href"].split("page=")[-1])
-    except Exception:
-        pass
-    return 1
+def _report_file_name(item: dict, page_type: str):
+    """목록 API 항목 → (file_name, tag). 이름 붙일 필드가 없으면 None.
 
-def _parse_report_row(row, base_url: str, page_type: str):
-    config = REPORT_CONFIG.get(page_type)
-    if not config: return None
-
-    cols = row.find_all("td")
-    if not cols or len(cols) < max(config.values()) + 1: return None
-
-    title_tag = cols[config["title_idx"]].find("a")
-    if not title_tag: return None
-    
-    title = title_tag.text.strip()
-    firm_name = cols[config["firm_idx"]].text.strip()
-    raw_date = cols[config["date_idx"]].text.strip()
-    link_tag = cols[config["link_idx"]].find("a", href=True)
-    report_date = raw_date.replace(".", "") if raw_date else "000000"
+    파일명은 구 목록 표 시절과 같은 꼴 — sent_reports.txt 중복 판정·캡션·해시태그가 그대로 이어진다.
+      기업분석: {종목명}_{YYMMDD}_{증권사}.pdf          tag=종목명 (기업방·산업방 라우팅 키)
+      산업분석: [{분류}] {제목}_{YYMMDD}_{증권사}.pdf   tag=분류 ('기타'+로봇 키워드 → '로봇')
+    """
+    firm_name = str(item.get("brokerName") or "").strip()
+    # writeDate '2026-09-30' → '260930' (구 표의 '26.09.30'에서 점을 뺀 값과 같다)
+    report_date = str(item.get("writeDate") or "").replace("-", "")[2:] or "000000"
 
     tag = None
     if page_type == "산업분석":
-        industry = cols[config["industry_idx"]].text.strip()
+        title = str(item.get("title") or "").strip()
+        industry = str(item.get("industryKoreanName") or "").strip()
         if industry in ("기타",) and _is_robot_topic(title):
             industry = "로봇"
         if industry:
             title = f"[{industry}] {title}"
             tag = industry
-    elif page_type == "기업분석":
-        tag = title # 기업명
+    else:
+        title = tag = str(item.get("itemName") or "").strip()   # 기업명
 
-    if link_tag:
-        pdf_url = urljoin(base_url, link_tag["href"])
-        file_name = _sanitize_filename(f"{title}_{report_date}_{firm_name}.pdf")
-        return pdf_url, file_name, tag
-    return None
+    if not title or not item.get("nid"):
+        return None
+    return _sanitize_filename(f"{title}_{report_date}_{firm_name}.pdf"), tag
 
 def _fetch_pdf_file(pdf_url: str) -> Optional[BytesIO]:
     """PDF 파일을 메모리로 다운로드 (global_session 사용)"""
@@ -325,78 +303,94 @@ def _build_report_caption(file_name: str, tag: str, hashtags: str, fields: dict 
     return "\n".join(lines)[:_CAPTION_LIMIT]
 
 
-def _fetch_list_page(url: str, timeout):
-    """목록 페이지 1장 → (soup, table). 예상한 모양이 아니면 ReportCrawlError.
+def _get_research_json(path: str, params: Optional[dict], timeout) -> dict:
+    """리서치 API GET → dict. HTTP 오류·JSON 아님·다른 주소로 이동이면 ReportCrawlError.
 
-    리포트가 0건인 날도 네이버는 같은 목록 표(table.type_1)를 그린다.
-    표가 없다는 건 차단·오류 페이지·다른 주소로의 이동(개편)이라는 뜻이다."""
-    res = _session.get(url, headers=_NAVER_HEADERS, timeout=timeout)
-    # 다른 주소로 넘어갔으면(개편) 그 주소가 가장 큰 단서 — 알림이 200자에서 잘리니 짧게
-    moved = f", 이동→{res.url}" if res.url and res.url.split("?")[0] != url.split("?")[0] else ""
+    알림이 200자에서 잘리니 사유는 짧게 — 이동한 주소가 개편의 가장 큰 단서다."""
+    url = f"{NAVER_RESEARCH_API}/{path}"
+    res = _session.get(url, params=params, headers=_NAVER_HEADERS, timeout=timeout)
+    final = (res.url or "").split("?")[0]
+    moved = f", 이동→{final}" if final and final != url else ""
     if res.status_code != 200:
-        raise ReportCrawlError(f"HTTP {res.status_code}{moved}")
-    soup = BeautifulSoup(res.text, "html.parser")
-    table = soup.find("table", {"class": "type_1"})
-    if not table:
-        title = soup.title.get_text(strip=True)[:40] if soup.title else ""
-        raise ReportCrawlError(
-            f"목록 표 없음(차단·개편 의심) 제목 '{title}' 본문 {len(res.text)}자{moved}")
-    return soup, table
+        raise ReportCrawlError(f"HTTP {res.status_code} {path} {res.text[:60]}{moved}")
+    try:
+        data = res.json()
+    except ValueError:
+        raise ReportCrawlError(f"JSON 아님(개편 의심) {path} 본문 {len(res.text)}자{moved}") from None
+    if not isinstance(data, dict):
+        raise ReportCrawlError(f"응답 형식 변경 의심 {path}: {type(data).__name__}")
+    return data
 
 
 def crawl_report_pages(page_type: str, date_str: str, history: HistoryManager,
-                       *, skip_history: bool = False, timeout=_LIST_TIMEOUT_SEC,
-                       stop_on_empty_page: bool = False) -> list:
-    """네이버 리포트 목록을 페이지네이션하며 (pdf_url, file_name, tag) 튜플 리스트로 수집.
+                       *, skip_history: bool = False, timeout=_LIST_TIMEOUT_SEC) -> list:
+    """네이버 리서치 목록을 페이지네이션하며 (pdf_url, file_name, tag) 튜플 리스트로 수집.
 
     run_naver_report_job(오늘)·backfill_reports(과거 날짜) 공용 크롤러.
-      date_str            : 조회 기준일 (writeFromDate=writeToDate=date_str)
+      date_str            : 조회 기준일 (startDate=endDate=date_str)
       skip_history=False  : history 중복분 제외 (True면 재전송 허용)
       timeout             : requests 타임아웃(초)
-      stop_on_empty_page  : 파싱 가능한 행이 없는 페이지에서 조기 종료(백필용)
 
-    첫 페이지부터 못 읽으면 ReportCrawlError — 빈 리스트(=그날 리포트 0건)와 구분한다.
-    둘째 페이지 이후 실패는 로그만 남기고 그때까지 모은 것을 돌려준다.
+    목록엔 PDF 주소가 없어 중복을 거른 뒤 남은 것만 상세 API로 attachUrl을 받는다.
+    첫 페이지부터 못 읽거나 상세를 하나도 못 받으면 ReportCrawlError — 빈 리스트
+    (=그날 리포트 0건)와 구분한다. 둘째 페이지 이후·일부 상세 실패는 로그만 남기고
+    모은 것을 돌려준다(못 받은 건 history에 안 남으니 다음 실행에 다시 시도).
     """
-    base_url = NAVER_REPORT_URLS[page_type]
-    reports, page = [], 1
-    while True:
+    api_type = REPORT_API_TYPES[page_type]
+    pending, index = [], 0                 # (nid, file_name, tag) — 상세 조회 대기
+    while index < _MAX_LIST_PAGES:
         try:
-            params = {"searchType": "writeDate", "writeFromDate": date_str,
-                      "writeToDate": date_str, "page": page}
-            soup, table = _fetch_list_page(f"{base_url}?{urlencode(params)}", timeout)
-            rows = table.find_all("tr")
+            data = _get_research_json(api_type, {
+                "index": index, "size": _LIST_PAGE_SIZE,
+                "startDate": date_str, "endDate": date_str,
+            }, timeout)
+            items = data.get("items")
+            if not isinstance(items, list):
+                raise ReportCrawlError(f"목록에 items 없음(개편 의심) 키 {sorted(data)[:6]}")
 
-            page_has_data = False
-            for row in rows:
-                data = _parse_report_row(row, base_url, page_type)
-                if not data:
+            named = 0
+            for item in items:
+                parsed = _report_file_name(item, page_type) if isinstance(item, dict) else None
+                if not parsed:
                     continue
-                page_has_data = True
-                _, file_name, _ = data
+                named += 1
+                file_name, tag = parsed
                 if not skip_history and history.contains(file_name):
                     continue
-                reports.append(data)
+                pending.append((str(item["nid"]), file_name, tag))
 
-            # PDF 링크는 있는데 한 행도 못 읽었다 = 열 구성이 바뀌었다 (REPORT_CONFIG 인덱스 점검)
-            if not page_has_data:
-                pdf_links = sum(1 for a in table.find_all("a", href=True)
-                                if a["href"].lower().endswith(".pdf"))
-                if pdf_links:
-                    raise ReportCrawlError(
-                        f"PDF 링크 {pdf_links}개가 있는데 해석된 행 0개 — 열 구성 변경 의심")
+            # 항목은 있는데 한 건도 이름을 못 붙였다 = 필드명이 바뀌었다 (_report_file_name 점검)
+            if items and not named:
+                raise ReportCrawlError(
+                    f"항목 {len(items)}개가 있는데 해석된 항목 0개 — 필드 변경 의심 {sorted(items[0])[:8]}")
 
-            total_pages = _get_total_pages(soup)
-            if (stop_on_empty_page and not page_has_data) or page >= total_pages:
+            if not data.get("hasNext") or not items:
                 break
-
-            page += 1
+            index += 1
             time.sleep(_PAGE_DELAY_SEC)
         except Exception as e:
-            if page == 1:
+            if index == 0:
                 raise ReportCrawlError(f"{page_type} {date_str}: {e}") from e
-            log.error(f"[리포트 크롤] {page_type} {date_str} p.{page}: {e}")
+            log.error(f"[리포트 크롤] {page_type} {date_str} p.{index + 1}: {e}")
             break
+
+    reports, detail_fail = [], 0
+    for nid, file_name, tag in pending:
+        try:
+            pdf_url = _get_research_json(f"{api_type}/{nid}", None, timeout).get("attachUrl")
+        except Exception as e:
+            detail_fail += 1
+            log.error(f"[리포트 크롤] {page_type} {date_str} 상세 {nid}: {e}")
+            continue
+        if pdf_url:
+            reports.append((pdf_url, file_name, tag))
+        else:
+            log.info(f"[리포트 크롤] 첨부 없음 — 건너뜀: {file_name}")
+        time.sleep(_DETAIL_DELAY_SEC)
+
+    if pending and detail_fail == len(pending):
+        raise ReportCrawlError(
+            f"{page_type} {date_str}: 상세(PDF 주소) 조회 {detail_fail}건 모두 실패")
     return reports
 
 
