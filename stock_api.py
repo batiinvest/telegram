@@ -165,13 +165,12 @@ def _load_db_financials(codes) -> Dict[str, Dict]:
     stock.naver.com(SPA)으로 리다이렉트하면서 표가 사라져 항상 None → 종목 재무·산업 재무
     랭킹의 실적 부분이 예외 없이 비어 나갔다(10월 확인).
 
-    - 행은 대부분 '분기 순액'(Q4도 순액)이라 연간 = 4분기까지의 연초 누계.
-      누계를 끝까지 알 수 있는 해만 연간으로 친다(부분 합이 연간처럼 보이지 않게).
-    - 단, 일부 행은 연초부터의 누적값(is_cumulative=true)으로만 저장돼 있다
-      (10월 실측 510종목·684행, 같은 분기에 순액 행 없음) → 직전 분기 누적을 빼서
-      순액으로 바꾼다. 직전 분기가 없어 바꿀 수 없으면 그 분기는 버린다.
-    - 4분기가 누적이면 그 값이 곧 연간 합계(사업보고서)다 → 1~3분기가 없어도 연간으로 쓴다.
-      첫 보고서가 반기·3분기 누적인 최근 상장사도 '누적 + 이후 분기 순액'으로 연간이 나온다.
+    - 손익은 1~3분기 = 분기 단독, 연간 = 1~4분기 합(4개 다 있을 때만 — 부분 합을 연간처럼
+      보이지 않게).
+    - is_cumulative=true의 뜻은 분기마다 다르다(10-03 DART 원본 대조):
+      · 1~3분기: 손익은 DART '당분기'(thstrm_amount) = 분기 단독 그대로다. 플래그는 직전 분기가
+        없어 '현금흐름'을 순분기로 못 바꿨다는 표시일 뿐 → 매출·영업익은 그대로 쓴다.
+      · 4분기: 사업보고서 연간 누적 → 그 값이 곧 연간. 1~3분기가 다 있으면 빼서 4분기 단독.
     - 연결(CFS) 우선, 없으면 별도(OFS). 한 해 안에서는 같은 기준만 쓴다(합산·차감 정합).
     - 추정치(E)는 없다 — 실적만. 연간 최근 4개년 + 분기 최근 6개 분기.
     """
@@ -209,30 +208,29 @@ def _load_db_financials(codes) -> Dict[str, Dict]:
         grp.setdefault((r['stock_code'], y), {}).setdefault(r.get('fs_div') or '', {})[q] = (
             r['revenue'], r['operating_profit'], bool(r.get('is_cumulative')))
 
-    per_code = {}   # 코드 → {(연도, 분기): (매출, 영업익)} 분기 순액
+    per_code = {}   # 코드 → {(연도, 분기): (매출, 영업익)} 분기 단독
     annual = {}     # 코드 → {연도: (매출, 영업익)}
-    for (code, y), by_fs in sorted(grp.items()):
+    for (code, y), by_fs in grp.items():
         fs = 'CFS' if 'CFS' in by_fs else ('OFS' if 'OFS' in by_fs else next(iter(by_fs)))
         qrows = by_fs[fs]
-        ytd = (0, 0)               # 직전 분기까지의 연초 누적 (None = 알 수 없음)
-        for q in (1, 2, 3, 4):
-            row = qrows.get(q)
-            if row is None:
-                ytd = None
-                continue
-            rev, op, cum = row
-            if cum:                # 누적 → 순액 = 이번 누적 − 직전 누적
-                net = (rev - ytd[0], op - ytd[1]) if ytd is not None else None
-                ytd = (rev, op)
-            else:
-                net = (rev, op)
-                ytd = (ytd[0] + rev, ytd[1] + op) if ytd is not None else None
-            if net is not None:
-                per_code.setdefault(code, {})[(y, q)] = net
-        # 4분기까지의 연초 누계를 알면 그게 연간 — 4분기 순액 합, 4분기 누적(사업보고서),
-        # 상장 첫해처럼 '3분기 누적 + 4분기 순액' 등 모두 같은 규칙으로 처리된다.
-        if ytd is not None and 4 in qrows:
-            annual.setdefault(code, {})[y] = ytd
+        m = per_code.setdefault(code, {})
+        for q in (1, 2, 3):                   # 누적 플래그와 무관하게 분기 단독
+            if q in qrows:
+                m[(y, q)] = qrows[q][:2]
+        q4 = qrows.get(4)
+        if q4 is None:
+            continue
+        first3 = all((y, q) in m for q in (1, 2, 3))
+        if q4[2]:                             # 4분기 누적 = 사업보고서 연간
+            annual.setdefault(code, {})[y] = q4[:2]
+            if first3:
+                m[(y, 4)] = (q4[0] - sum(m[(y, q)][0] for q in (1, 2, 3)),
+                             q4[1] - sum(m[(y, q)][1] for q in (1, 2, 3)))
+        else:
+            m[(y, 4)] = q4[:2]
+            if first3:
+                annual.setdefault(code, {})[y] = (sum(m[(y, q)][0] for q in (1, 2, 3, 4)),
+                                                  sum(m[(y, q)][1] for q in (1, 2, 3, 4)))
 
     def eok(v):
         return int(round(v / 1e8))
