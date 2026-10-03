@@ -742,16 +742,16 @@ def calculate_growth_rates(cache: dict, row: dict) -> dict:
         ('net_income',       'net_income_yoy',  'net_income_qoq'),
     ]
 
-    # 4분기 누적 행은 손익이 연간값 — 분기 증감률을 낼 수 없다 (fin_rules 참고).
-    # 종전엔 연간값을 전년 4분기 단독·직전 분기와 비교해 YoY +200%대가 저장되고,
-    # 다음 해 1분기 QoQ는 연간 대비라 −60%↓ '거짓 급감'이 쌓였다(10-03 실측 142행).
-    if is_annual_q4(row):
-        return {col: None for _, yoy_col, qoq_col in fields for col in (yoy_col, qoq_col)}
+    # 4분기 누적 행은 손익이 연간값이다 (fin_rules 참고). 연간값과 분기값을 섞어 비교하면
+    # 틀린다 — 종전엔 다음 해 1분기 QoQ가 연간 대비라 −60%↓ '거짓 급감'이 쌓였다(10-03 실측).
+    #   YoY: 같은 종류끼리만(연간↔연간 — 매년 4분기 누적인 리츠 등 / 분기↔분기)
+    #   QoQ: 자신이나 직전 분기가 연간값이면 낼 수 없다
+    row_annual = is_annual_q4(row)
 
     # YoY: 전년 동기 순수 분기값과 비교 (캐시에 이미 순수값 저장)
     prev_y, prev_q_yoy = get_prev_year_quarter(year, quarter)
     yoy_data = cache.get(stock_code, {}).get((prev_y, prev_q_yoy, fs_div), {})
-    if is_annual_q4(yoy_data, prev_q_yoy):
+    if is_annual_q4(yoy_data, prev_q_yoy) != row_annual:
         yoy_data = {}
     for src, yoy_col, _ in fields:
         growth[yoy_col] = calc_growth(row.get(src), yoy_data.get(src))
@@ -759,7 +759,7 @@ def calculate_growth_rates(cache: dict, row: dict) -> dict:
     # QoQ: 이전 분기 순수값과 비교
     prev_y_q, prev_q = get_prev_quarter(year, quarter)
     prev_pure = {}
-    if prev_y_q and prev_q:
+    if prev_y_q and prev_q and not row_annual:
         prev_pure = cache.get(stock_code, {}).get((prev_y_q, prev_q, fs_div), {})
         if is_annual_q4(prev_pure, prev_q):
             prev_pure = {}
