@@ -43,7 +43,7 @@ from jobs_collect import (
     job_snapshot_qtr_consensus, job_earnings_surprise_briefing, job_earnings_reconcile,
 )
 from jobs_briefing import (
-    job_lunch_briefing, job_naver_report, job_daily_closing, job_kind_ir,
+    job_lunch_briefing, job_naver_report, job_daily_closing, job_kind_ir,  # noqa: F401 — kind_ir 발송 중단, 복원용
     job_industry_summary,
     job_pro_channel_check, job_daily_ops_summary, job_disclosure_digest,
     job_saturday_main_ranking, job_saturday_flow_summary, job_saturday_industry_report,
@@ -119,7 +119,10 @@ def run_scheduler():
     schedule.clear()  # 재시작 시 중복 job 방지 — 없으면 이미 지난 시각 job이 즉시 실행됨
 
     schedule.every().day.at("09:00").do(_threaded(job_pro_channel_check))  # 프로 채널 구독 만료 체크
-    schedule.every().day.at("09:05").do(_threaded(job_kind_ir))            # KIND IR자료 오전 수집
+    # KIND IR자료(09:05·18:10) 발송 중단 (2026-10-03) — kind.krx.co.kr이 08-13부터 이 서버 IP를
+    # 403 차단(다른 KRX 사이트는 정상, 한국 IP는 정상). 한국 IP 경유 수단이 생기면 두 줄 복원:
+    #   schedule.every().day.at("09:05").do(_threaded(job_kind_ir))
+    #   schedule.every().day.at("18:10").do(_threaded(job_kind_ir))
     schedule.every().day.at("08:50").do(_threaded(job_naver_report))
     schedule.every().day.at("08:55").do(_threaded(job_collect_analyst_opinions))  # 투자의견 (장전)
     schedule.every().day.at("06:30").do(_threaded(job_collect_macro))             # 글로벌 매크로 수집 + 메인 채널 브리핑 (서머타임 05:00/겨울 06:00 마감 → 06:30 안전)
@@ -148,7 +151,6 @@ def run_scheduler():
     schedule.every().day.at("18:22").do(job_collect_fear_greed)        # 한국 피어앤그리드 원재료 (옵션 풋/콜은 당일 값만 → 거래일 저녁 필수)
     schedule.every().day.at("18:30").do(job_market_summary)            # 투자포인트 요약 생성 (18:15 수급 확정 후)
     schedule.every().day.at("18:00").do(_threaded(job_naver_report))
-    schedule.every().day.at("18:10").do(_threaded(job_kind_ir))       # KIND IR자료 오후 수집
     schedule.every().day.at("18:30").do(_threaded(job_daily_closing)) # 마감 브리핑 — 18:30 재무수집·시장요약과 병렬
     # 봇 시작 시 초기 재무 데이터 수집 (최초 1회만)
     # job_initial_financials 제거 — 필요시 수동 실행
