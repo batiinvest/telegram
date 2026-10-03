@@ -28,6 +28,7 @@ from typing import Optional
 from format_utils import get_prev_quarter  # 공통 유틸로 이관
 from logger_config import get_logger
 from collect_utils import batch_upsert, safe_execute
+from fin_rules import is_annual_q4
 
 log = get_logger(__name__)
 
@@ -138,9 +139,11 @@ def save_grade_history(sb, year: str, quarter: str) -> dict:
           .select('stock_code,corp_name,bsns_year,quarter,'
                   'revenue,operating_profit,operating_margin,'
                   'revenue_yoy,op_profit_yoy,other_operating_income,'
-                  'revenue_qoq,op_profit_qoq')
+                  'revenue_qoq,op_profit_qoq,is_cumulative')
           .eq('bsns_year', year).eq('quarter', quarter).eq('fs_div', 'CFS')
     )
+    # 4분기 누적 행은 손익이 연간값이라 분기 등급을 매길 수 없다(fin_rules 참고)
+    all_rows = [r for r in (all_rows or []) if not is_annual_q4(r, quarter)]
 
     if not all_rows:
         log.info(f"📊 [등급이력] {year} {quarter} 재무 데이터 없음 — 스킵")
@@ -151,28 +154,31 @@ def save_grade_history(sb, year: str, quarter: str) -> dict:
     prev_cache = {}
     if prev_q and prev_y:
         res = safe_execute(sb.table('financials')
-               .select('stock_code,revenue,operating_profit,operating_margin,revenue_yoy')
+               .select('stock_code,revenue,operating_profit,operating_margin,revenue_yoy,is_cumulative')
                .eq('bsns_year', prev_y).eq('quarter', prev_q).eq('fs_div', 'CFS'), label='grade-prev')
         for r in (res.data or []):
-            prev_cache[r['stock_code']] = r
+            if not is_annual_q4(r, prev_q):       # 비교 기준이 연간값이면 제외
+                prev_cache[r['stock_code']] = r
 
     # ── 전전 분기 캐시 ──
     prev2_cache = {}
     prev2_y, prev2_q = get_prev_quarter(prev_y or year, prev_q or quarter) if prev_q else (None, None)
     if prev2_q and prev2_y:
         res = safe_execute(sb.table('financials')
-               .select('stock_code,revenue,operating_profit')
+               .select('stock_code,revenue,operating_profit,is_cumulative')
                .eq('bsns_year', prev2_y).eq('quarter', prev2_q).eq('fs_div', 'CFS'), label='grade-prev2')
         for r in (res.data or []):
-            prev2_cache[r['stock_code']] = r
+            if not is_annual_q4(r, prev2_q):
+                prev2_cache[r['stock_code']] = r
 
     # ── 전년동기 캐시 ──
     prev_year_cache = {}
     res = safe_execute(sb.table('financials')
-           .select('stock_code,revenue,operating_profit,operating_margin')
+           .select('stock_code,revenue,operating_profit,operating_margin,is_cumulative')
            .eq('bsns_year', str(int(year) - 1)).eq('quarter', quarter).eq('fs_div', 'CFS'), label='grade-prevyear')
     for r in (res.data or []):
-        prev_year_cache[r['stock_code']] = r
+        if not is_annual_q4(r, quarter):
+            prev_year_cache[r['stock_code']] = r
 
     # ── 이전 분기 등급 이력 (grade_change 계산용) ──
     prev_grade_cache = {}  # stock_code → 이전 분기 grade

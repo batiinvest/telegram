@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Optional
 from collect_utils import batch_upsert
 from format_utils import get_prev_quarter
+from fin_rules import is_annual_q4
 
 try:
     from db_client import get_supabase_client as _get_sb
@@ -682,6 +683,13 @@ def get_prev_year_quarter(year: str, quarter: str) -> tuple:
     return str(int(year) - 1), quarter
 
 
+def _cache_entry(row: dict) -> dict:
+    """성장률 캐시 항목 — 순수 분기값 + 누적 여부(4분기 누적은 연간값이라 비교 제외용)."""
+    entry = {col: row.get(col) for col in FLOW_COLS}
+    entry["is_cumulative"] = bool(row.get("is_cumulative"))
+    return entry
+
+
 def build_fin_cache(sb) -> dict:
     """
     기존 financials 데이터를 메모리에 로드.
@@ -690,7 +698,7 @@ def build_fin_cache(sb) -> dict:
     """
     cache = {}
     page = 0
-    select_cols = "stock_code,bsns_year,quarter,fs_div," + ",".join(FLOW_COLS)
+    select_cols = "stock_code,bsns_year,quarter,fs_div,is_cumulative," + ",".join(FLOW_COLS)
     while True:
         res = sb.table("financials") \
             .select(select_cols) \
@@ -703,7 +711,7 @@ def build_fin_cache(sb) -> dict:
             key  = (r["bsns_year"], r["quarter"], r.get("fs_div", "CFS"))
             if code not in cache:
                 cache[code] = {}
-            cache[code][key] = {col: r.get(col) for col in FLOW_COLS}
+            cache[code][key] = _cache_entry(r)
         if len(res.data) < 1000:
             break
         page += 1
@@ -734,9 +742,17 @@ def calculate_growth_rates(cache: dict, row: dict) -> dict:
         ('net_income',       'net_income_yoy',  'net_income_qoq'),
     ]
 
+    # 4분기 누적 행은 손익이 연간값 — 분기 증감률을 낼 수 없다 (fin_rules 참고).
+    # 종전엔 연간값을 전년 4분기 단독·직전 분기와 비교해 YoY +200%대가 저장되고,
+    # 다음 해 1분기 QoQ는 연간 대비라 −60%↓ '거짓 급감'이 쌓였다(10-03 실측 142행).
+    if is_annual_q4(row):
+        return {col: None for _, yoy_col, qoq_col in fields for col in (yoy_col, qoq_col)}
+
     # YoY: 전년 동기 순수 분기값과 비교 (캐시에 이미 순수값 저장)
     prev_y, prev_q_yoy = get_prev_year_quarter(year, quarter)
     yoy_data = cache.get(stock_code, {}).get((prev_y, prev_q_yoy, fs_div), {})
+    if is_annual_q4(yoy_data, prev_q_yoy):
+        yoy_data = {}
     for src, yoy_col, _ in fields:
         growth[yoy_col] = calc_growth(row.get(src), yoy_data.get(src))
 
@@ -745,6 +761,8 @@ def calculate_growth_rates(cache: dict, row: dict) -> dict:
     prev_pure = {}
     if prev_y_q and prev_q:
         prev_pure = cache.get(stock_code, {}).get((prev_y_q, prev_q, fs_div), {})
+        if is_annual_q4(prev_pure, prev_q):
+            prev_pure = {}
 
     for src, _, qoq_col in fields:
         growth[qoq_col] = calc_growth(row.get(src), prev_pure.get(src))
@@ -951,7 +969,7 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
 
             for fy, fq in quarters_to_fetch:
                 res = sb.table('financials') \
-                    .select('stock_code,bsns_year,quarter,fs_div,revenue,operating_profit,net_income') \
+                    .select('stock_code,bsns_year,quarter,fs_div,is_cumulative,revenue,operating_profit,net_income') \
                     .in_('stock_code', stock_codes) \
                     .eq('bsns_year', fy).eq('quarter', fq).execute()
                 for r in (res.data or []):
@@ -1225,7 +1243,7 @@ def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,
                 normalized_code_cache = t["stock_code"].split(".")[0]
                 if normalized_code_cache not in fin_cache:
                     fin_cache[normalized_code_cache] = {}
-                cache_val = {col: row.get(col) for col in FLOW_COLS}
+                cache_val = _cache_entry(row)
                 fin_cache[normalized_code_cache][(year, quarter, fs_div)] = cache_val
                 log.debug(
                     f"[캐시저장] {t['corp_name']} {year} {quarter} "
@@ -1292,9 +1310,7 @@ def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,
                     row = convert_to_pure_quarter(row, prev_row)
                     if t["stock_code"] not in fin_cache:
                         fin_cache[t["stock_code"]] = {}
-                    fin_cache[t["stock_code"]][(year, quarter, fs_div)] = {
-                        col: row.get(col) for col in FLOW_COLS
-                    }
+                    fin_cache[t["stock_code"]][(year, quarter, fs_div)] = _cache_entry(row)
                     try:
                         growth = calculate_growth_rates(fin_cache, row)
                         row.update(growth)

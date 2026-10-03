@@ -21,6 +21,7 @@ from datetime import date, datetime
 
 from logger_config import get_logger
 from db_client import get_supabase_client
+from fin_rules import is_annual_q4
 
 log = get_logger(__name__)
 
@@ -202,10 +203,12 @@ def _op_cache(sb, year, quarter) -> dict:
     from db_utils import fetch_all_pages
     rows = fetch_all_pages(
         sb.table("financials")
-          .select("stock_code,operating_profit,fs_div")
+          .select("stock_code,operating_profit,fs_div,is_cumulative")
           .eq("bsns_year", str(year)).eq("quarter", quarter))
     out = {}
     for r in rows or []:
+        if is_annual_q4(r, quarter):      # 연간값은 분기 비교 기준이 될 수 없다(fin_rules)
+            continue
         c = r["stock_code"].split(".")[0]
         if _pick_cfs(out.get(c), r):
             out[c] = r
@@ -257,10 +260,12 @@ def reconcile_quarter(year, quarter, persist: bool = True,
     rows = fetch_all_pages(
         sb.table("financials")
           .select("stock_code,corp_name,operating_profit,revenue,"
-                  "op_profit_yoy,op_profit_qoq,fs_div")
+                  "op_profit_yoy,op_profit_qoq,fs_div,is_cumulative")
           .eq("bsns_year", str(year)).eq("quarter", str(quarter)))
     cur = {}
     for r in rows or []:
+        if is_annual_q4(r, quarter):      # 4분기 누적=연간 영업익 — 분기 컨센과 비교 불가
+            continue
         c = r["stock_code"].split(".")[0]
         if codes_filter is not None and c not in codes_filter:
             continue

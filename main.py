@@ -188,7 +188,7 @@ class DartRoutingBot:
                 return ''
             rows = (sb.table('financials')
                     .select('bsns_year,quarter,revenue,operating_profit,net_income')
-                    .eq('stock_code', code).eq('is_cumulative', False)
+                    .eq('stock_code', code).or_('is_cumulative.eq.false,quarter.neq.Q4')  # 연간값인 4분기 누적만 제외(1~3분기 누적 표시는 손익 정상, fin_rules)
                     .order('bsns_year', desc=True).order('quarter', desc=True)
                     .limit(n).execute().data or [])
             if not rows and not (cur and cur.get('label')):
@@ -264,7 +264,7 @@ class DartRoutingBot:
             rows = (sb.table('financials')
                     .select('bsns_year,quarter,fs_div,revenue,operating_profit,'
                             'net_income,debt_ratio,current_ratio,roe')
-                    .eq('stock_code', code).eq('is_cumulative', False)
+                    .eq('stock_code', code).or_('is_cumulative.eq.false,quarter.neq.Q4')  # 연간값인 4분기 누적만 제외(1~3분기 누적 표시는 손익 정상, fin_rules)
                     .execute().data or [])
             if not rows:
                 return ''
