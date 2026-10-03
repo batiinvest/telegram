@@ -1084,44 +1084,32 @@ def get_universe_ranking(shared_prices: dict = None, tag_map: dict = None) -> st
 
 def get_index_status(market_code: str):
     """
-    네이버 증권에서 지수 정보를 크롤링하여 현재가와 등락률을 반환합니다.
-    하락 시 마이너스(-) 부호가 누락되지 않도록 판별 로직을 강화했습니다.
+    코스피(0001)·코스닥(1001) 현재 지수와 등락률 — KIS 업종 일자별지수 API.
+
+    구: 네이버 finance.naver.com/sise/sise_index 크롤링. 네이버가 이 페이지를
+    stock.naver.com(SPA)으로 리다이렉트하면서 #now_value가 사라져, 예외 없이
+    0.00(➖0.00%)이 점심·마감 브리핑과 /시황에 찍혔다(10월 확인).
+    KIS 경로는 collect_macro와 동일한 단일 출처다(output1 = 장중 실시간 현재가).
+    실패 시 None → 호출부가 '데이터 없음'으로 표시(0을 실제 값처럼 내보내지 않음).
     """
-    result = {"price": 0.0, "rate": 0.0}
     target = "KOSPI" if market_code == "0001" else "KOSDAQ"
     try:
-        url = f"https://finance.naver.com/sise/sise_index.naver?code={target}"
-        headers = {'User-Agent': 'Mozilla/5.0'} 
-        res = requests.get(url, headers=headers, timeout=3)
-        soup = BeautifulSoup(res.text, "html.parser")
-
-        # 1. 현재 지수 추출
-        now_val = soup.select_one("#now_value")
-        if now_val: 
-            result["price"] = float(now_val.text.replace(',', ''))
-            
-        # 2. 등락 정보 추출 및 하락 판별
-        change_tag = soup.select_one("#change_value_and_rate")
-        
-        if change_tag:
-            raw_text = change_tag.text.strip()
-            # 숫자(등락률)만 추출 (예: 2.49)
-            match = re.search(r'([\d\.]+)\s*%', raw_text)
-            if match:
-                rate = float(match.group(1))
-                
-                # [개선된 판별 로직]
-                # 텍스트에 하락 기호(▼)가 있거나, 
-                # 태그 클래스에 하락을 뜻하는 'nv'가 포함되어 있다면 마이너스 처리
-                is_down = any(keyword in raw_text for keyword in ["▼", "하락", "-"]) or "nv" in str(change_tag)
-                
-                result["rate"] = -rate if is_down else rate
-                
-        return result
+        from collect_macro import fetch_kr_index_kis   # 지연 import — 로드비용·순환 회피
+        price, rate, data_date = fetch_kr_index_kis(market_code)
+        if not price:
+            logging.warning(f"⚠️ [{target}] 지수 조회 실패 — KIS 응답 없음")
+            return None
+        # 장중인데 기준일이 오늘이 아니면 전 거래일 종가가 온 것 — 감지용
+        from managers import market_timer
+        if (market_timer.is_market_open() and data_date
+                and data_date != datetime.now().strftime('%Y%m%d')):
+            logging.warning(f"⚠️ [{target}] 장중인데 지수 기준일 {data_date} — 실시간 아님")
+        return {"price": price, "rate": rate or 0.0}
     except Exception as e:
-        logging.error(f"❌ [{target}] 지수 크롤링 실패: {e}")
+        logging.error(f"❌ [{target}] 지수 조회 실패: {e}")
         return None
-    
+
+
 def compare_sectors(sec1: str, sec2: str) -> str:
     if sec1 not in INDUSTRY_HIERARCHY: return f"⚠️ '{sec1}' 섹터 정보가 없습니다."
     if sec2 not in INDUSTRY_HIERARCHY: return f"⚠️ '{sec2}' 섹터 정보가 없습니다."
