@@ -243,6 +243,14 @@ def parse_amendment(kv: dict) -> list:
         old_c = re.sub(r'\s+', ' ', old_v).strip()
         new_c = re.sub(r'\s+', ' ', new_v).strip()
         if old_c and new_c and old_c != new_c and not _is_header_row(field, old_c, new_c):
+            # 긴 서술형(주요내용 등) — 양쪽 60자 절단 한 줄로는 무엇이 바뀌었는지 안 보임.
+            # 바뀐 항목/문장만 [전]/[후] 줄로(정정후가 조각일 때의 전문 비교는 _prose_diff).
+            if (max(len(old_c), len(new_c)) > _MAX_VAL_LEN
+                    and re.search(r'[가-힣]{2}.*[다음함됨임]\.', old_c + ' ' + new_c)):
+                full = re.sub(r'\s+', ' ', kv.get(field, '') or '').strip()
+                if pd := _prose_diff(_clean_amendment_field(field), old_c, new_c, full):
+                    change_lines.append(pd)
+                continue
             old_fmt = _fmt_amendment_val(field, _trunc(old_c, _MAX_VAL_LEN))
             new_fmt = _fmt_amendment_val(field, _trunc(new_c, _MAX_VAL_LEN))
             change_lines.append(f'🔧 {_clean_amendment_field(field)}: {old_fmt} → {new_fmt}')
@@ -314,13 +322,16 @@ def parse_amendment(kv: dict) -> list:
 def parse_misc_mgmt(kv: dict) -> list:
     """기타주요경영사항(자율공시) — 주요내용이 곧 공시의 본체.
 
-    구조: 1.제출사유 / 2.주요내용 / 3.결정(발생)일자 / 4.기타(관련공시).
-    제출사유는 공시 제목 괄호에 이미 노출되므로 생략, 주요내용을 넉넉히(500자,
-    문장경계) 표시. 번호목록 구조면 _parse_numbered_body로 분리.
+    양식 두 가지: 1.제출사유/2.주요내용/3.결정(발생)일자/4.기타 투자판단에 참고할 사항,
+    1.제목/2.주요내용/3.결정(확인)일자/4.기타 투자판단과 관련한 중요사항/※관련공시.
+    제출사유·제목은 공시 제목 괄호에 이미 노출되므로 생략, 주요내용을 넉넉히 표시.
+    4.기타엔 철회사유·계약금 몰취·FDA 허가일 등 핵심이 자주 담겨 관련공시 목록·
+    '결정일자는 이사회 결의일' 상투문만 떼고 표시.
     """
     lines = []
 
-    body = _get(kv, '2. 주요내용', '주요내용') or ''
+    # [기재정정]이면 정정후 값은 바뀐 문장 조각일 수 있음 → 정정 반영 전문 우선
+    body = _get_body(kv, '2. 주요내용', '주요내용') or ''
     stripped = _strip_disclaimer(body).strip()
     if stripped:
         bullets = _parse_numbered_body(stripped)
@@ -332,15 +343,24 @@ def parse_misc_mgmt(kv: dict) -> list:
             # 4000자 초과 발송은 managers._split_text가 분할 처리)
             lines.append(f'📋 {_trunc_clean(clean, 2000)}')
 
-    if v := _get(kv, '3. 결정(발생)일자', '결정(발생)일자', '결정일자', '발생일자'):
+    if v := _get(kv, '결정(발생)일자', '결정(확인)일자', '결정일자', '발생일자', '확인일자'):
         lines.append(f'📅 결정일: {v}')
 
-    # 관련공시 (4.기타 값 안의 '※ 관련 공시 - 날짜. 제목 - ...' 목록 → 최근 2건)
-    etc = _get(kv, '4. 기타 투자판단에 참고할 사항', '기타 투자판단에 참고할 사항') or ''
-    rel = re.findall(r'(\d{4}\.\d{2}\.\d{2})\.?\s*([가-힣A-Za-z0-9()·\s]{4,40}?)(?=\s*-\s*\d{4}\.|\s*$)', etc)
-    if rel:
-        shown = ' · '.join(f'{d} {t.strip()}' for d, t in rel[-2:])
-        lines.append(f'🔗 관련: {_trunc(shown, 90)}')
+    etc = re.sub(r'\s+', ' ', _get(kv, '4. 기타 투자판단', '기타 투자판단') or '').strip()
+    rel_txt = _get(kv, '관련공시', '관련 공시') or ''
+    if m := _REL_MARK.search(etc):
+        rel_txt, etc = etc[m.start():] + ' ' + rel_txt, etc[:m.start()]
+    elif re.match(r'\d{4}[.-]\d{2}[.-]\d{2}', etc):     # 값 전체가 관련공시 목록
+        rel_txt, etc = etc + ' ' + rel_txt, ''
+    notes = [n for n in _etc_segments(etc) if not _ETC_BOILER.search(n)]
+    if len(notes) == 1:
+        lines.append(f'📎 참고: {_trunc_clean(notes[0], 400)}')
+    elif notes:
+        lines.append('📎 참고:')
+        lines.extend(f'  • {_trunc_clean(n, 250)}' for n in notes[:5])
+
+    if rel := _related_list(rel_txt):
+        lines.append(f'🔗 관련: {rel}')
 
     return lines
 

@@ -255,6 +255,106 @@ def _strip_disclaimer(text: str) -> str:
     return ''
 
 
+def _get_body(kv: dict, *keys: str) -> str | None:
+    """서술형 본문 필드 조회 — [기재정정]에서 '정정후_' 값은 바뀐 문장 조각뿐인 경우가
+    많아(세븐브로이 2026-10-02: 정정후=3번 항목만) 정정이 반영된 전문(접두어 없는 키)을 우선.
+    전문이 정정후 조각을 포함할 때만 채택 — 정정표 패턴 A처럼 접두어 없는 키에 구 값이
+    남는 양식에서 구 값을 오채택하지 않도록. 해당 없으면 _get과 동일."""
+    frag = _get(kv, *keys)
+    if not frag:
+        return frag
+    nf = re.sub(r'\s+', '', frag)
+    for key in keys:
+        for k, v in kv.items():
+            if key in k and '정정전' not in k and '정정후' not in k:
+                full = re.sub(r'\s+', ' ', v or '').strip()
+                if len(full) > len(frag) and nf in re.sub(r'\s+', '', full):
+                    return full
+    return frag
+
+
+_DIFF_SPLIT = re.compile(
+    # 번호('1. '·'2) ')·한글 순번('가. ')·'※' — 앞 공백 직전이 '숫자.'면 제외('2026. 9. 13.' 날짜 보호)
+    r'(?:^|(?<!\d\.)\s+)(?:-\s*)?(?:\d{1,2}[.)）](?!\d)|[가나다라마바사아자차카타파하][.)]|※\.?)\s*'
+    # 대시 불릿 — 뒤가 공백·한글·괄호일 때만('-\'주식수' 표 셀·'-18회차' 보호), 콜론 뒤 값 대시는 제외
+    r'|(?:^|(?<!:)\s+)-(?=\s|[가-힣(㈜])\s*'
+    # 문장 끝
+    r'|(?<=[다음함됨임]\.)\s+')
+
+
+def _diff_segments(text: str) -> list[str]:
+    """정정 비교용 분절 — 번호·순번·대시 불릿·문장끝 모두 경계(정정전/후 분절 기준 일치).
+    표지·대시만 남은 빈 조각('가. - 나. -', '-', '다 음')과 중복 조각은 버림."""
+    t = re.sub(r'\s+', ' ', text or '').strip()
+    segs, seen = [], set()
+    for p in _DIFF_SPLIT.split(t):
+        s = (p or '').strip(' -')
+        k = re.sub(r'[\s.。]', '', s)
+        if len(re.sub(r'[^가-힣A-Za-z0-9]', '', s)) < 3 or k in seen:   # '다 음'·'가.' 잔여 제외
+            continue
+        seen.add(k)
+        segs.append(s)
+    return segs
+
+
+def _prose_diff(field: str, old: str, new: str, full: str = '') -> str:
+    """긴 서술형 정정 → 바뀐 항목/문장만 '[전]'/'[후]' 줄로(공통 문장은 생략).
+    'old → new' 한 줄(양쪽 60자 절단)로는 무엇이 바뀌었는지 알 수 없던 문제 대응.
+
+    full: 정정 반영 전문(접두어 없는 키). 정정후가 바뀐 문장 조각뿐이고 정정전은 구 전문인
+    양식(세븐브로이 2026-10-02)에선 조각과 비교하면 안 바뀐 항목이 [전]으로 오표시됨 →
+    '정정전에 있고 조각엔 없는 문장이 전문에 남아 있을' 때만 전문과 비교. 정정전도 조각인
+    양식(한미약품 2026-08-26)에서 전문과 비교하면 안 바뀐 항목이 [후]로 쏟아지므로 조각 유지.
+    차이가 공백·마침표뿐이면 ''."""
+    def norm(s):
+        return re.sub(r'[\s.。]', '', s)
+    o, n = _diff_segments(old), _diff_segments(new)
+    on, nn = {norm(s) for s in o}, {norm(s) for s in n}
+    if full and len(full) > len(new) and norm(new) in norm(full):
+        fs = _diff_segments(full)
+        if any(norm(s) in on and norm(s) not in nn for s in fs):
+            n, nn = fs, {norm(s) for s in fs}
+    rem = [s for s in o if norm(s) not in nn]
+    add = [s for s in n if norm(s) not in on]
+    if not rem and not add:
+        return ''
+    out = [f'🔧 {field}:']
+    for tag, segs in (('전', rem), ('후', add)):
+        out += [f'    [{tag}] {_trunc_clean(s, 250)}' for s in segs[:4]]
+        if len(segs) > 4:
+            out.append(f'    [{tag}] …외 {len(segs) - 4}건')
+    return '\n'.join(out)
+
+
+_REL_MARK = re.compile(r'(?:※|-|\d\.)?\s*관련\s*공시\s*-?\s*(?=\d{4}[.-]\d{2}[.-]\d{2})')
+_ETC_BOILER = re.compile(r'(?:상기\s*)?결정\S*\s*일자는.{0,40}?이사회\s*(?:결의일|개최일)'
+                         r'|관련\s*공시를?\s*참(?:조|고)하시기\s*바랍니다')
+
+
+def _etc_segments(text: str) -> list[str]:
+    """'기타 투자판단 참고사항' 서술 → 항목 목록('- '·'1. '·'가. ' 구분, 4자 미만·'-' 제외)."""
+    t = re.sub(r'\s+', ' ', text or '').strip()
+    if not t or t in ('-', '해당사항 없음', '해당없음', '없음'):
+        return []
+    parts = re.split(r'(?:^|\s+)(?:[-·•]|(?<![\w.])\d{1,2}[.)](?!\d)|[가나다라마바사아][.)])\s*', t)
+    segs = [p.strip(' -') for p in parts if p]
+    return [s for s in segs if len(s) >= 4]
+
+
+def _related_list(text: str, n: int = 2) -> str:
+    """관련공시 목록 텍스트 → 최신 n건 '날짜 제목 · 날짜 제목'.
+    날짜 표기 '2026.01.19'·'2026-01-19' 모두, 구분자(' - '·공백) 무관, 날짜순 정렬."""
+    hits = list(re.finditer(r'(\d{4})[.-](\d{2})[.-](\d{2})\.?', text or ''))
+    out = []
+    for j, m in enumerate(hits):
+        end = hits[j + 1].start() if j + 1 < len(hits) else len(text)
+        title = re.sub(r'\s+', ' ', text[m.end():end]).strip(' -·,')
+        if title:
+            out.append((m.group(1) + m.group(2) + m.group(3), m.group(0).rstrip('.'), title))
+    out.sort(key=lambda x: x[0])
+    return ' · '.join(f'{d} {_trunc(t, 35)}' for _, d, t in out[-n:])
+
+
 _LETTER_SEQS = ('abcdefgh', '가나다라마바사아')
 
 
@@ -372,9 +472,10 @@ def _parse_numbered_body(text: str, max_items: int = 8, val_limit: int = 300) ->
                 items.append(f'  • {_trunc_clean(_subs[0], val_limit)}')
                 for _s in _subs[1:7]:
                     items.append(f'      - {_trunc_clean(_s, 140)}')
-            # 단순 섹션 헤더(짧고 콜론/값 없는 것)는 생략
-            elif 10 <= len(short) <= val_limit:
-                items.append(f'  • {short}')
+            # 단순 섹션 헤더(10자 미만)만 생략 — 예전엔 val_limit 초과 서술 항목도
+            # 통째로 빠졌음(조용한 누락). 길면 문장경계 절단으로라도 표시.
+            elif len(short) >= 10:
+                items.append(f'  • {_trunc_clean(short, max(val_limit, 600))}')
         i += 2
         if len(items) >= max_items:
             break
@@ -575,4 +676,4 @@ def _parse_agm_notice_text(kv: dict) -> list:
     return lines
 
 
-__all__ = ['log', '_get', '_trunc', '_trunc_clean', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text']
+__all__ = ['log', '_get', '_trunc', '_trunc_clean', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list']

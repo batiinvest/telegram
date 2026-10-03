@@ -20,7 +20,7 @@ def parse_mgmt_event(kv: dict) -> list:
         lines.append(f'📌 {_trunc(v, 80)}')
 
     # 주요내용 파싱 — 두 가지 구조 처리
-    body_raw = _get(kv, '2. 주요내용', '주요내용', '결정내용') or ''
+    body_raw = _get_body(kv, '2. 주요내용', '주요내용', '결정내용') or ''  # 정정 시 전문 우선
     stripped = _strip_disclaimer(body_raw).strip()
 
     # [구조 A] 번호 항목이 KV 개별 행으로 분리된 경우
