@@ -153,62 +153,111 @@ def _run_batch_job(items: List[Any], worker_func) -> List[Any]:
 # ==========================================
 # 📊 [Data Fetching] 데이터 수집
 # ==========================================
-def _fetch_naver_financials(code: str) -> Optional[Dict]:
+_FIN_Q_MONTH = {1: '03', 2: '06', 3: '09', 4: '12'}
+
+
+def _load_db_financials(codes) -> Dict[str, Dict]:
+    """
+    자체 financials 테이블(DART 수집)에서 매출·영업이익 추이를 읽어
+    {6자리코드: {"dates","sales","op","num_annual"}} 로 반환한다(금액 단위 억원).
+
+    구: 네이버 finance.naver.com/item/main.nhn '기업실적분석' 표 크롤링. 네이버가 이 페이지를
+    stock.naver.com(SPA)으로 리다이렉트하면서 표가 사라져 항상 None → 종목 재무·산업 재무
+    랭킹의 실적 부분이 예외 없이 비어 나갔다(10월 확인).
+
+    - 행은 대부분 '분기 순액'(Q4도 순액)이라 연간 = 4분기까지의 연초 누계.
+      누계를 끝까지 알 수 있는 해만 연간으로 친다(부분 합이 연간처럼 보이지 않게).
+    - 단, 일부 행은 연초부터의 누적값(is_cumulative=true)으로만 저장돼 있다
+      (10월 실측 510종목·684행, 같은 분기에 순액 행 없음) → 직전 분기 누적을 빼서
+      순액으로 바꾼다. 직전 분기가 없어 바꿀 수 없으면 그 분기는 버린다.
+    - 4분기가 누적이면 그 값이 곧 연간 합계(사업보고서)다 → 1~3분기가 없어도 연간으로 쓴다.
+      첫 보고서가 반기·3분기 누적인 최근 상장사도 '누적 + 이후 분기 순액'으로 연간이 나온다.
+    - 연결(CFS) 우선, 없으면 별도(OFS). 한 해 안에서는 같은 기준만 쓴다(합산·차감 정합).
+    - 추정치(E)는 없다 — 실적만. 연간 최근 4개년 + 분기 최근 6개 분기.
+    """
+    want = sorted({str(c).split('.')[0] for c in codes if c})
+    if not want:
+        return {}
     try:
-        clean_code = code.split('.')[0]
-        url = f"https://finance.naver.com/item/main.nhn?code={clean_code}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        
-        res = _session.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        
-        target_table = soup.select_one('div.section.cop_analysis table')
-        if not target_table: return None
+        from db_client import get_supabase_client
+        from db_utils import fetch_all_pages
+        sb = get_supabase_client()
+        if not sb:
+            return {}
+        since = str(datetime.now().year - 5)
+        rows = []
+        for i in range(0, len(want), 100):
+            rows += fetch_all_pages(
+                sb.table('financials')
+                  .select('stock_code,bsns_year,quarter,fs_div,is_cumulative,revenue,operating_profit')
+                  .in_('stock_code', want[i:i + 100])
+                  .gte('bsns_year', since))
+    except Exception as e:
+        logging.warning(f"⚠️ [재무] financials 조회 실패: {e}")
+        return {}
 
-        rows = target_table.select('tr')
-        dates = []
-        header_idx = -1
-        for i, row in enumerate(rows):
-            if re.search(r'20\d{2}[\./]\d{2}', row.text):
-                cols = row.select('th') + row.select('td')
-                dates = [c.text.strip() for c in cols if re.search(r'20\d{2}[\./]\d{2}', c.text.strip())]
-                header_idx = i
-                break
-        
-        if not dates: return None
-        total_cols = len(dates)
-
-        num_annual = 4
+    # (코드, 연도) → {fs_div: {분기: (매출, 영업익, 누적여부)}}
+    grp = {}
+    for r in rows:
         try:
-            header_row = target_table.select_one('thead tr')
-            if header_row:
-                ths = header_row.find_all('th')
-                quarter_colspan = sum(int(th.get('colspan', 1)) for th in ths if "분기" in th.get_text())
-                if quarter_colspan > 0: num_annual = total_cols - quarter_colspan
-        except: pass
+            y = int(r['bsns_year'])
+            q = int(str(r['quarter']).upper().lstrip('Q'))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if q not in _FIN_Q_MONTH or r.get('revenue') is None or r.get('operating_profit') is None:
+            continue
+        grp.setdefault((r['stock_code'], y), {}).setdefault(r.get('fs_div') or '', {})[q] = (
+            r['revenue'], r['operating_profit'], bool(r.get('is_cumulative')))
 
-        sales_data, op_data = [], []
-        for row in rows[header_idx+1:]:
-            title = row.select_one('th').text.strip() if row.select_one('th') else ""
-            cols = [c.text.strip().replace(',', '') for c in row.select('td')]
-            
-            if "매출액" in title and "률" not in title: sales_data = cols
-            elif "영업이익" in title and "률" not in title: op_data = cols
+    per_code = {}   # 코드 → {(연도, 분기): (매출, 영업익)} 분기 순액
+    annual = {}     # 코드 → {연도: (매출, 영업익)}
+    for (code, y), by_fs in sorted(grp.items()):
+        fs = 'CFS' if 'CFS' in by_fs else ('OFS' if 'OFS' in by_fs else next(iter(by_fs)))
+        qrows = by_fs[fs]
+        ytd = (0, 0)               # 직전 분기까지의 연초 누적 (None = 알 수 없음)
+        for q in (1, 2, 3, 4):
+            row = qrows.get(q)
+            if row is None:
+                ytd = None
+                continue
+            rev, op, cum = row
+            if cum:                # 누적 → 순액 = 이번 누적 − 직전 누적
+                net = (rev - ytd[0], op - ytd[1]) if ytd is not None else None
+                ytd = (rev, op)
+            else:
+                net = (rev, op)
+                ytd = (ytd[0] + rev, ytd[1] + op) if ytd is not None else None
+            if net is not None:
+                per_code.setdefault(code, {})[(y, q)] = net
+        # 4분기까지의 연초 누계를 알면 그게 연간 — 4분기 순액 합, 4분기 누적(사업보고서),
+        # 상장 첫해처럼 '3분기 누적 + 4분기 순액' 등 모두 같은 규칙으로 처리된다.
+        if ytd is not None and 4 in qrows:
+            annual.setdefault(code, {})[y] = ytd
 
-        def clean_list(lst):
-            return [int(x) if x.lstrip('-').isdigit() else 0 for x in lst]
+    def eok(v):
+        return int(round(v / 1e8))
 
-        sales_data = clean_list(sales_data)
-        op_data = clean_list(op_data)
-
-        if len(sales_data) > total_cols: sales_data = sales_data[-total_cols:]
-        if len(op_data) > total_cols: op_data = op_data[-total_cols:]
-        
-        return {
-            "dates": dates, "sales": sales_data, "op": op_data, "num_annual": num_annual
+    out = {}
+    for code in set(per_code) | set(annual):
+        qmap = per_code.get(code, {})
+        amap = annual.get(code, {})
+        years = sorted(amap)[-4:]
+        qk = sorted(qmap)[-6:]
+        if not years and not qk:
+            continue
+        out[code] = {
+            "dates": [f"{y}.12" for y in years] + [f"{y}.{_FIN_Q_MONTH[q]}" for y, q in qk],
+            "sales": [eok(amap[y][0]) for y in years] + [eok(qmap[k][0]) for k in qk],
+            "op":    [eok(amap[y][1]) for y in years] + [eok(qmap[k][1]) for k in qk],
+            "num_annual": len(years),
         }
-    except Exception:
-        return None
+    return out
+
+
+def _fetch_db_financials(code: str) -> Optional[Dict]:
+    """단일 종목 — _load_db_financials 래퍼. 데이터 없으면 None."""
+    c = str(code or '').split('.')[0]
+    return _load_db_financials([c]).get(c)
 
 def _format_financial_msg(data: Dict) -> str:
     if not data: return "(재무 정보 없음)"
@@ -227,8 +276,8 @@ def _format_financial_msg(data: Dict) -> str:
             if s_val == 0: continue
             
             margin = (o_val / s_val) * 100
-            s_str = f"{s_val//10000}조" if s_val >= 10000 else f"{s_val}억"
-            o_str = f"{o_val//10000}조" if abs(o_val) >= 10000 else f"{o_val}억"
+            s_str = format_money(s_val, short=True)
+            o_str = format_money(o_val, short=True)
             txt += f"{d_str}: {s_str} / {o_str} ({margin:.1f}%)\n"
         return txt.strip()
 
@@ -405,8 +454,8 @@ def get_investor_trend_cumulative(code: str, name: str) -> Optional[str]:
 
 def get_financial_summary(code: str) -> str:
     try:
-        data = _fetch_naver_financials(code)
-        if not data: return "(재무 데이터 불러오기 오류)"
+        data = _fetch_db_financials(code)
+        if not data: return "(재무 데이터 없음)"
         return _format_financial_msg(data)
     except Exception as e:
         logging.error(f"Financial Summary Error: {e}")
@@ -1306,7 +1355,7 @@ def _get_trend_raw(code: str) -> Dict[str, float]:
 def _crawl_financial_raw(code: str) -> Dict[str, Any]:
     res_data = {"full_msg": "(데이터 없음)", "latest_opm": -999.0}
     
-    data = _fetch_naver_financials(code)
+    data = _fetch_db_financials(code)
     if not data: return res_data
     
     res_data["full_msg"] = _format_financial_msg(data)
@@ -1950,49 +1999,26 @@ def get_industry_cap_ranking(industry_name: str) -> str:
     return msg
 
 def _fetch_financials_batch(target_codes_map: Dict[str, str]) -> Dict[str, Dict]:
-    def _worker(name, code):
-        data = _fetch_naver_financials(code)
-        if not data: return None
-        
-        try:
-            num_annual = data['num_annual']
-            if num_annual < 1: return None
-            
-            target_idx = num_annual - 1
-            
-            def get_data_at(idx):
-                s = data['sales'][idx]
-                o = data['op'][idx]
-                d = data['dates'][idx]
-                return s, o, d
-
-            sales, op, date = get_data_at(target_idx)
-            is_fallback = False
-
-            if sales == 0 and target_idx > 0:
-                prev_sales, prev_op, prev_date = get_data_at(target_idx - 1)
-                if prev_sales != 0:
-                    sales = prev_sales
-                    op = prev_op
-                    date = prev_date
-                    is_fallback = True 
-
-            opm = 0.0
-            if sales != 0:
-                opm = (op / sales) * 100
-                
-            return {
-                "name": name, "date": date, "sales": sales, "op": op, "opm": opm,
-                "is_fallback": is_fallback 
-            }
-        except: return None
-
-    # ✅ [Refactor Step 2] 공통 배치 실행기 사용
-    items = list(target_codes_map.items())
-    results_list = _run_batch_job(items, _worker)
-    
-    # 리스트 결과를 딕셔너리로 변환
-    return {item['name']: item for item in results_list}
+    """
+    산업 재무 랭킹용 — 종목별 '최근 연간 실적'(4분기 합). DB 1회 일괄 조회.
+    기준연도(전 종목 중 최신 연도)보다 오래된 연도만 있는 종목은 is_fallback=True
+    (예: 사업보고서가 아직 수집 안 된 종목).
+    """
+    data_map = _load_db_financials(target_codes_map.values())
+    picked = {}
+    for name, code in target_codes_map.items():
+        data = data_map.get(str(code).split('.')[0])
+        if not data or data['num_annual'] < 1:
+            continue
+        i = data['num_annual'] - 1
+        sales, op, date = data['sales'][i], data['op'][i], data['dates'][i]
+        picked[name] = {"name": name, "date": date, "sales": sales, "op": op,
+                        "opm": (op / sales * 100) if sales else 0.0}
+    if picked:
+        top = max(int(v['date'][:4]) for v in picked.values())
+        for v in picked.values():
+            v['is_fallback'] = int(v['date'][:4]) < top
+    return picked
 
 def get_industry_financial_ranking(industry_name: str) -> str:
     _t = _get_industry_targets(industry_name)
@@ -2011,9 +2037,9 @@ def get_industry_financial_ranking(industry_name: str) -> str:
         cap_100m = safe_int(raw_price.get('hts_avls', 0))
         
         fin = fin_map.get(name, {})
-        sales = fin.get('sales', 0)
-        op = fin.get('op', 0)
-        opm = fin.get('opm', 0.0)
+        sales = fin.get('sales')      # 재무 없으면 None → '—'
+        op = fin.get('op')
+        opm = fin.get('opm')
         is_fallback = fin.get('is_fallback', False)
         
         if fin.get('date'):
@@ -2032,16 +2058,10 @@ def get_industry_financial_ranking(industry_name: str) -> str:
         max_year_val = max([int(y) for y in year_counts.keys()])
         main_year = str(max_year_val)
 
-    try:
-        prev_year_val = int(main_year) - 1
-        prev_year_str = str(prev_year_val)[2:] 
-    except:
-        prev_year_str = "전년"
-
     combined_list.sort(key=lambda x: x['cap'], reverse=True)
 
     msg = (
-        f"📊 <b>[{industry_name} 실적 현황]</b> ({main_year} 기준)\n"
+        f"📊 <b>[{industry_name} 실적 현황]</b> ({main_year}년 실적 기준)\n"
         f"<pre>순위 종목(시총) 매출|영업익|이익률</pre>\n"
     )
 
@@ -2050,7 +2070,7 @@ def get_industry_financial_ranking(industry_name: str) -> str:
         cap_str = format_money(item['cap'], short=True)
         s_str = format_money(item['sales'], short=True)
         o_str = format_money(item['op'], short=True)
-        opm_str = f"{item['opm']:.1f}%"
+        opm_str = f"{item['opm']:.1f}%" if item['opm'] is not None else "—"
         
         data_part = f"{s_str}|{o_str}|{opm_str}"
         
@@ -2063,7 +2083,8 @@ def get_industry_financial_ranking(industry_name: str) -> str:
         )
 
     msg += "──────────────\n"
-    msg += f"ℹ️ <u>밑줄</u>: 추정치 없어 '{prev_year_str}년 실적 반영\n"
+    if any(x['is_fallback'] for x in combined_list):
+        msg += f"ℹ️ <u>밑줄</u>: {main_year}년 실적 미수집 — 이전 연도 실적\n"
     msg += f"(총 {len(combined_list)}개 종목)"
     return msg
 
