@@ -26,7 +26,7 @@
   - leading_sectors: 판정일별 중분류 28개 보드
   - market_data.lead_flags(판정일 행): {lead, mid, rs, tv, tvu, nb, cons, nh, cl}
     tvu = 거래대금 상위150 ∧ 당일 상승, cl = 소분류 신고가 군집(09-19 회원 영상 — 후보 A의 OR 조건)
-    sv = 종목 매도 조건 재료(원저자 '일관성' 시트 — sell_checks, KIS 일봉·주봉). 10-03 추가
+    sv = 원저자 '일관성' 시트 매도 규칙 옆에 보여줄 사실(sell_facts — KIS 일봉·주봉, 판정 없음). 10-03 추가
     후보 판정(빈집·후보A·후보B)은 화면이 수급 칸(flow_gauge)과 합쳐 계산한다(config.js flowIsEmpty·taerinEval).
 """
 
@@ -58,10 +58,6 @@ CLUSTER_MIN = 3      # 신고가 군집 = 같은 WICS 소분류에서 최근 NH_
                      # (원본에 수치 없음 — "같은 색깔 종목들이 무리 지어 신고가", 09-19 회원 영상)
 CONS_DAYS = 30       # 컨센 상향으로 보는 최근 기간(달력일)
 RS_WORKERS = 8
-# 종목 매도 조건(원저자 '일관성' 시트) — 원본에 수치가 없어 정한 값
-SELL_NH_DAYS = 3     # '신고가 갱신 후 밀리는 음봉' — 52주 신고가가 최근 이 거래일 안
-SELL_NH_RECENT = 5   # 예외 '주도주 신고가 들어가면서' — 최근 이 거래일 안 52주 신고가
-SELL_YB_WEEKS = 4    # '주봉상 직전 양봉' — 이번 주 앞 이 주 안에서 가장 가까운 양봉
 
 
 def _thread_client():
@@ -280,23 +276,19 @@ def _chart(code: str, start: str, end: str, div: str) -> list:
     return out
 
 
-def sell_checks(day: list, wk: list, target: str, krx: tuple | None = None) -> dict | None:
-    """원저자 '일관성' 시트(외국인기관수급오실레이터 700) 종목 매도 조건의 재료 — 판정일 종가 기준.
-    화면(config.js holdRules)이 수급 칸·주도 업종과 합쳐 규칙을 고른다. 판정일 일봉이 없으면 None.
+def sell_facts(day: list, wk: list, target: str, krx: tuple | None = None) -> dict | None:
+    """원저자 '일관성' 시트(외국인기관수급오실레이터 700) 매도 규칙 옆에 보여줄 사실 — 판정일 기준.
+    판정은 하지 않는다: 원본은 글로 적은 규칙이라 수치 기준이 없다(10-03 사용자 결정 '원본 문장 + 사실만').
+    화면(investment.js 내 종목 현황 '매매 규칙')이 원문과 함께 보여준다. 판정일 일봉이 없으면 None.
 
-      tr   추세 — up: 20일선 ≥ 60일선(상승 추세) · rb: 20일선 < 60일선('하락 후 반등'으로 읽음)
-      b5·b10   종가가 5일선·10일선 아래            b10w  이번 주 종가가 10주선 아래
-      nhd  신고가 갱신 후 밀리는 음봉(일봉) — 최근 SELL_NH_DAYS거래일 안에 52주 신고가 + 오늘 음봉 + 전날보다 낮은 종가
-      nhw  신고가 갱신 후 밀리는 음봉(주봉) — 이번 주나 지난주에 52주 신고가 + 이번 주 음봉 + 지난주보다 낮은 종가
-      hm   주봉 직전 양봉 중간 아래 — 앞 SELL_YB_WEEKS주 안 가장 가까운 양봉 몸통의 가운데보다 이번 주 종가가 낮다
-      big  양봉보다 큰 음봉 — 이번 주 음봉 몸통이 그 직전 양봉 몸통보다 크다
-      nh5  최근 SELL_NH_RECENT거래일 안 52주 신고가(예외 조건 '주도주 신고가 들어가면서')
-      m5·m10·w10  5일선·10일선·10주선 값(원) — 화면 설명용
-    ⚠ 원본에 수치가 없어 정한 것: 추세 구분(20·60일선), '신고가 후'의 기간, '직전 양봉'을 찾는 범위.
+      d_o·d_c·d_pc       판정일 시가·종가 · 전날 종가                 m5·m10  5일선·10일선(종가 평균)
+      w_d·w_o·w_c·w_pc   이번 주(그 주 월요일)·시가·종가 · 지난주 종가   w10     10주선(주봉 종가 10개 평균)
+      yb {d, o, c}       이번 주 앞에서 가장 가까운 주봉 양봉 — '주봉상 직전 양봉'
+      hi·hi_d·hi_w       52주(이번 주 포함 주봉 52개) 최고가와 그날. 일봉(100거래일)에 없으면 그 주 월요일, hi_w=True
 
-    krx = 판정일 market_data (종가, 고가, 저가). KIS 일봉의 당일 봉은 장 마감 뒤에도 값이 바뀐다(10-03 실측:
-    10-02 원익IPS 일봉 종가 239,500 vs 정규장 종가 237,000 — 시간외 거래가 섞이는 것으로 보임). 주봉과
-    market_data는 정규장 값이라 당일 봉(과 이번 주 주봉 종가)을 정규장 값으로 맞춘다.
+    krx = 판정일 market_data (종가, 고가, 저가). KIS 일봉의 당일 봉 종가는 정규장 종가와 다르다(10-03 실측:
+    10-02 원익IPS 일봉 239,500 · 네이버 239,500 vs 정규장 237,000 — 시간외·대체거래소가 섞인 값). 지난 날 종가와
+    시가는 정규장과 같아(5종목 4일 대조) 당일 봉의 종가·고가·저가와 이번 주 종가만 정규장 값으로 맞춘다.
     """
     t = target.replace('-', '')
     if len(day) < 2 or day[0]['d'] != t or len(wk) < 2:
@@ -306,34 +298,26 @@ def sell_checks(day: list, wk: list, target: str, krx: tuple | None = None) -> d
         day = [dict(day[0], c=c, h=h or day[0]['h'], l=l or day[0]['l'])] + day[1:]
         if wk[0]['d'] <= t:
             wk = [dict(wk[0], c=c, h=max(wk[0]['h'], h or 0))] + wk[1:]
+    iv = lambda v: None if v is None else int(round(v))
     closes = [b['c'] for b in day]
     ma = lambda n: sum(closes[:n]) / n if len(closes) >= n else None
-    m5, m10, m20, m60 = ma(5), ma(10), ma(20), ma(60)
-    c0 = closes[0]
-    w52h = max(b['h'] for b in wk[:52])            # 이번 주 포함 52주 최고가(일봉과 같은 수정주가)
-    nh_in = lambda n: max(b['h'] for b in day[:n]) >= w52h
-    yin = lambda b: b['c'] < b['o']
-    w0, w1 = wk[0], wk[1]
-    yb = next((b for b in wk[1:1 + SELL_YB_WEEKS] if b['c'] > b['o']), None)   # 직전 양봉
-    w10 = sum(b['c'] for b in wk[:10]) / 10 if len(wk) >= 10 else None
-    iv = lambda v: None if v is None else int(round(v))
+    hi = max(b['h'] for b in wk[:52])
+    hd = next((b['d'] for b in day if b['h'] >= hi), None)            # 최근 쪽부터 — 같은 값이면 가까운 날
+    hw = None if hd else next((b['d'] for b in wk[:52] if b['h'] >= hi), None)
+    yb = next((b for b in wk[1:] if b['c'] > b['o']), None)            # 직전 양봉(범위 제한 없음)
     return {
-        'tr': None if m20 is None or m60 is None else ('up' if m20 >= m60 else 'rb'),
-        'b5': m5 is not None and c0 < m5,
-        'b10': m10 is not None and c0 < m10,
-        'b10w': w10 is not None and w0['c'] < w10,
-        'nhd': yin(day[0]) and c0 < day[1]['c'] and nh_in(SELL_NH_DAYS),
-        'nhw': yin(w0) and w0['c'] < w1['c'] and max(w0['h'], w1['h']) >= w52h,
-        'hm': yb is not None and w0['c'] < (yb['o'] + yb['c']) / 2,
-        'big': yb is not None and yin(w0) and (w0['o'] - w0['c']) > (yb['c'] - yb['o']),
-        'nh5': nh_in(SELL_NH_RECENT),
-        'm5': iv(m5), 'm10': iv(m10), 'w10': iv(w10),
+        'd_o': iv(day[0]['o']), 'd_c': iv(day[0]['c']), 'd_pc': iv(day[1]['c']),
+        'm5': iv(ma(5)), 'm10': iv(ma(10)),
+        'w_d': wk[0]['d'], 'w_o': iv(wk[0]['o']), 'w_c': iv(wk[0]['c']), 'w_pc': iv(wk[1]['c']),
+        'w10': iv(sum(b['c'] for b in wk[:10]) / 10) if len(wk) >= 10 else None,
+        'yb': {'d': yb['d'], 'o': iv(yb['o']), 'c': iv(yb['c'])} if yb else None,
+        'hi': iv(hi), 'hi_d': hd or hw, 'hi_w': bool(hw),
     }
 
 
 def rs_and_sell(codes: list, price_now: dict, target: str, krx_now: dict | None = None) -> tuple:
     """종목마다 KIS 주봉(1년) + 일봉(100거래일) 한 번씩.
-    RS = IBD 원점수 → 전 종목 백분위 1~99(주봉 26주 미만 신규 상장은 제외) · 매도 조건 재료 = sell_checks."""
+    RS = IBD 원점수 → 전 종목 백분위 1~99(주봉 26주 미만 신규 상장은 제외) · 매도 규칙 사실 = sell_facts."""
     end = date.today().strftime('%Y%m%d')
     w_start = (date.today() - timedelta(days=400)).strftime('%Y%m%d')
     d_start = (date.today() - timedelta(days=160)).strftime('%Y%m%d')
@@ -347,7 +331,7 @@ def rs_and_sell(codes: list, price_now: dict, target: str, krx_now: dict | None 
             day = _chart(code, d_start, end, 'D')
         except Exception:
             day = []
-        sv = sell_checks(day, wk, target, (krx_now or {}).get(code)) if wk else None
+        sv = sell_facts(day, wk, target, (krx_now or {}).get(code)) if wk else None
         w = [b['c'] for b in wk]   # [이번 주, 1주 전, …]
         now = price_now.get(code) or (w[0] if w else None)
         if not now or len(w) < 27:
@@ -371,10 +355,7 @@ def rs_and_sell(codes: list, price_now: dict, target: str, krx_now: dict | None 
     order = sorted(raw, key=lambda c: raw[c])
     n = len(order)
     rs = {c: max(1, min(99, int(round((i + 1) / n * 99)))) for i, c in enumerate(order)} if n else {}
-    cnt = {k: sum(1 for v in sell.values() if v.get(k)) for k in ('nhd', 'nhw', 'hm', 'big', 'b10w', 'nh5')}
-    log.info(f'[RS·매도조건] {len(codes)}종목 주봉·일봉 조회 {time.time() - t0:.0f}초 → RS {n}종목 · 매도 조건 {len(sell)}종목 '
-             f"(신고가 후 음봉 일 {cnt['nhd']}·주 {cnt['nhw']} · 양봉 중간 아래 {cnt['hm']} · 큰 음봉 {cnt['big']}"
-             f" · 10주선 아래 {cnt['b10w']} · 최근 신고가 {cnt['nh5']})")
+    log.info(f'[RS·매도규칙] {len(codes)}종목 주봉·일봉 조회 {time.time() - t0:.0f}초 → RS {n}종목 · 매도 규칙 사실 {len(sell)}종목')
     return rs, sell
 
 
@@ -532,7 +513,7 @@ def run(dry: bool = False, rs: bool = True) -> dict:
                        'tvu': code in tv_up, 'cl': ind_of.get(code) in clusters,
                        'cons': code in cons, 'nh': code in nh_today}
         if code in sv_map:
-            flags[code]['sv'] = sv_map[code]   # 종목 매도 조건 재료(sell_checks) — 화면 holdRules
+            flags[code]['sv'] = sv_map[code]   # 매도 규칙 옆 사실(sell_facts) — 내 종목 현황 '매매 규칙'
     info = {'target': target, 'leads': [board[c]['name'] for c in leads], 'flags': len(flags),
             'lead_stocks': sum(1 for f in flags.values() if f['lead']),
             'rs70': sum(1 for f in flags.values() if (f['rs'] or 0) >= 70),
