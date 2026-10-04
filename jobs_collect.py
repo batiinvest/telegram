@@ -1183,6 +1183,20 @@ def job_collect_fear_greed():
 
 
 @_job(holiday=True)
+def job_portfolio_nav():
+    """평일 16:30 — 투자노트(원본 포트폴리오 표) 순자산·기준가 일별 기록. 정규장 종가(15:45 수집) 뒤.
+    순자산 = Σ(현보유 × 종가) + 현금, 기준가 = 순자산 ÷ 좌수 × 1000 (collect_portfolio_nav.py)."""
+    try:
+        logging.info("📒 [기준가] collect_portfolio_nav 실행 시작")
+        import collect_portfolio_nav
+        r = collect_portfolio_nav.run()
+        logging.info(f"=== [기준가] 완료: {r.get('date')} 기준가 {r.get('price')} ===")
+    except Exception as e:
+        logging.error(f"❌ [기준가] 오류: {e}")
+        mark_failed(e)
+
+
+@_job(holiday=True)
 def job_collect_active_etf():
     """평일 저녁 (19:35) — 액티브 ETF 30개 구성종목(PDF) 일별 저장 (화면 '액티브 ETF' 페이지).
     KRX 정보데이터시스템(로그인, .env KRX_ID·KRX_PW). 최근 10일 중 빠진 날만 채워 멱등."""

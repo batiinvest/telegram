@@ -39,7 +39,7 @@ from jobs_collect import (
     job_flow_empty,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
     job_daily_summary, job_collect_credit_balance, job_collect_wics,
-    job_collect_investor_market, job_collect_fear_greed, job_retry_failed, job_collect_active_etf,
+    job_collect_investor_market, job_collect_fear_greed, job_retry_failed, job_collect_active_etf, job_portfolio_nav,
     job_snapshot_qtr_consensus, job_earnings_surprise_briefing, job_earnings_reconcile,
 )
 from jobs_briefing import (
@@ -137,6 +137,7 @@ def run_scheduler():
     schedule.every().day.at("15:35").do(job_collect_foreign_institution)  # 기관/외국인 수급 ⑤ (장 마감 최종)
     schedule.every().day.at("16:10").do(_threaded(job_collect_macro))  # 장 마감 후 매크로 수집
     schedule.every().day.at("16:20").do(_threaded(job_collect_us_etf)) # US ETF 수집 (미장 전일 종가)
+    schedule.every().day.at("16:30").do(job_portfolio_nav)             # 투자노트 순자산·기준가 일별 (정규장 종가 수집 15:45 뒤)
     schedule.every().day.at("17:20").do(job_collect_new_high)          # 신고가 종목 수집 (장마감 확정 수집 17:00 이후 — market_data 기준)
     schedule.every().day.at("16:45").do(job_collect_investor_trend)    # 종목별 외국인·기관 순매수 확정 (sector_summary 전)
     schedule.every().day.at("18:15").do(job_collect_investor_trend_ranked)  # 수급 확정 정산 + 거래대금 상위 종목 확장 (18:30 브리핑 Top3를 시장 전체 기준으로)
