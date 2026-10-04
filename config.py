@@ -141,7 +141,7 @@ COMMON_BUTTON = {
 #    (구 sys.modules setattr 해킹을 대체하는 메커니즘)
 # ==========================================
 COMPANY_CODES: dict = {}        # 종목명 → 코드
-COMPANY_KEYWORDS: list = []     # [{name, related_keywords, additional_keywords}]
+COMPANY_KEYWORDS: list = []     # [{name, aliases(뉴스 별칭), related_keywords, additional_keywords}]
 INDUSTRY_HIERARCHY: dict = {}   # 산업 → {세부섹터: [종목명]}
 THEME_MAP: dict = {}            # 세부섹터 → [종목명]
 COMPANY_TO_INDUSTRY: dict = {}  # 종목명 → 산업
@@ -215,9 +215,23 @@ def _build_company_dicts(data: list) -> tuple:
         if item.get("code") and item.get("active", True)
     }
 
+    def _aliases(item) -> list:
+        """뉴스 별칭 — companies.keywords(쉼표 구분, 웹 종목 관리 '뉴스 별칭' 칸).
+        기사 제목이 정식 종목명 대신 약칭을 쓰는 경우(예: '큐리옥스바이오시스템즈' → '큐리옥스')
+        뉴스봇이 별칭으로도 검색하고 제목 매칭한다."""
+        seen, out = {item["name"]}, []
+        for k in (item.get("keywords") or "").split(","):
+            k = k.strip()
+            if k and k not in seen:
+                seen.add(k)
+                out.append(k)
+        return out
+
     keywords = [
         {
             "name": item["name"],
+            "aliases": _aliases(item),
+            # 아래 두 필드는 DB 컬럼(keywords_related/additional)이 이미 없어 늘 빈 목록 — JSON 폴백 호환용
             "related_keywords":    [k.strip() for k in (item.get("keywords_related")    or "").split(",") if k.strip()],
             "additional_keywords": [k.strip() for k in (item.get("keywords_additional") or "").split(",") if k.strip()],
         }

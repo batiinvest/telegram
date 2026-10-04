@@ -572,6 +572,14 @@ class NaverNewsBot:
         except Exception:
             return False
 
+    @staticmethod
+    def _pub_ts(item) -> float:
+        """검색 결과 정렬용 발행시각(타임스탬프). 파싱 실패는 가장 오래된 것으로."""
+        try:
+            return parsedate_to_datetime(item.get('pubDate', '')).timestamp()
+        except Exception:
+            return 0.0
+
     # ──────────────────────────────────────────
     #  7. 메인 루프
     # ──────────────────────────────────────────
@@ -600,7 +608,20 @@ class NaverNewsBot:
 
             for company_info in COMPANY_KEYWORDS:
                 company_name = company_info["name"]
-                news_items   = self.search_news(company_name)
+                # 정식 종목명 + 뉴스 별칭(companies.keywords). 기사 제목이 약칭만 쓰면
+                # (예: '큐리옥스바이오시스템즈' → '큐리옥스') 검색·제목 매칭 양쪽에서 놓쳤다.
+                names = [company_name] + list(company_info.get("aliases") or [])
+                news_items = self.search_news(company_name)
+                if len(names) > 1:
+                    _links = {(it.get('originallink') or it.get('link', '')) for it in news_items}
+                    for alias in names[1:]:
+                        for it in self.search_news(alias):
+                            lk = it.get('originallink') or it.get('link', '')
+                            if lk not in _links:
+                                _links.add(lk)
+                                news_items.append(it)
+                    # 검색 결과는 최신순 — 합친 뒤에도 최신순으로 맞춰 아래 reversed()가 오래된 것부터 처리
+                    news_items.sort(key=self._pub_ts, reverse=True)
 
                 for item in reversed(news_items):
                     link = item.get('originallink') or item.get('link', '')
@@ -616,9 +637,17 @@ class NaverNewsBot:
                     title = self.clean_text(item.get('title', ''))
                     desc  = self.clean_text(item.get('description', ''))
 
-                    # ③ 종목명이 제목에 포함되어야 함
-                    if company_name not in title:
+                    # ③ 종목명(또는 뉴스 별칭)이 제목에 포함되어야 함
+                    if not any(n in title for n in names):
                         continue
+
+                    # 중복판정용 제목 — 별칭 표기를 정식 종목명으로 맞춰
+                    # '큐리옥스, …'와 '큐리옥스바이오시스템즈, …'를 같은 기사로 본다(발송·저장은 원문)
+                    dedup_title = title
+                    if company_name not in title:
+                        alias = next((a for a in names[1:] if a in title), None)
+                        if alias:
+                            dedup_title = title.replace(alias, company_name)
 
                     # ④ 스팸/광고성 뉴스 필터
                     if self.is_spam(title, link):
@@ -632,7 +661,7 @@ class NaverNewsBot:
                         continue
 
                     # ⑥ 중복 감지
-                    if self.is_duplicate(title, desc, company_name, link):
+                    if self.is_duplicate(dedup_title, desc, company_name, link):
                         self.history.add(link)
                         continue
 
@@ -696,7 +725,7 @@ class NaverNewsBot:
                             pass
 
                     self.history.add(link)
-                    self._register_sent(title, desc, company_name)
+                    self._register_sent(dedup_title, desc, company_name)   # 중복판정과 같은 기준으로 등록
                     self._persist_news(company_name, title, desc, link, pub_dt)
                     logging.info(f"✅ Sent: {company_name} - {title}")
 
