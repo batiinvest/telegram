@@ -1183,6 +1183,20 @@ def job_collect_fear_greed():
 
 
 @_job(holiday=True)
+def job_collect_active_etf():
+    """평일 저녁 (19:35) — 액티브 ETF 30개 구성종목(PDF) 일별 저장 (화면 '액티브 ETF' 페이지).
+    KRX 정보데이터시스템(로그인, .env KRX_ID·KRX_PW). 최근 10일 중 빠진 날만 채워 멱등."""
+    try:
+        logging.info("📦 [액티브ETF] collect_active_etf 실행 시작")
+        import collect_active_etf
+        r = collect_active_etf.run()
+        logging.info(f"=== [액티브ETF] 완료: {len(r.get('dates', []))}일 · {r.get('rows', 0)}행 ===")
+    except Exception as e:
+        logging.error(f"❌ [액티브ETF] 오류: {e}")
+        mark_failed(e)
+
+
+@_job(holiday=True)
 def job_collect_credit_balance():
     """평일 저녁 (19:00, +10:30 보정) — KOFIA 신용공여 잔고(신용거래융자 등) 수집.
     직전 영업일분이 당일 오후 발표되므로(2026-07-22 실측) 저녁 실행이 본 수집,

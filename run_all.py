@@ -39,7 +39,7 @@ from jobs_collect import (
     job_flow_empty,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
     job_daily_summary, job_collect_credit_balance, job_collect_wics,
-    job_collect_investor_market, job_collect_fear_greed, job_retry_failed,
+    job_collect_investor_market, job_collect_fear_greed, job_retry_failed, job_collect_active_etf,
     job_snapshot_qtr_consensus, job_earnings_surprise_briefing, job_earnings_reconcile,
 )
 from jobs_briefing import (
@@ -146,6 +146,7 @@ def run_scheduler():
     schedule.every().day.at("19:45").do(job_sector_summary)            # 산업집계 재계산 (19:30 수급 확정 후 — 당일 최종 반영)
     schedule.every().day.at("19:00").do(_threaded(job_disclosure_digest))  # 오늘 주요·긴급 공시 다이제스트 → 메인 채널
     schedule.every().day.at("19:25").do(job_retry_failed)              # 실패 잡 자동 재처리 (job_runs 기반, 멱등 잡만)
+    schedule.every().day.at("19:35").do(_threaded(job_collect_active_etf))  # 액티브 ETF 구성종목(KRX PDF, 로그인) — 빠진 날 채움
     schedule.every().day.at("17:30").do(job_leading_stocks)            # 주도주 탐색기 스코어 계산
     schedule.every().day.at("18:20").do(job_collect_investor_market)   # KIS 시장별 투자자매매동향 (장마감 확정 후, 시황 카드)
     schedule.every().day.at("18:22").do(job_collect_fear_greed)        # 한국 피어앤그리드 원재료 (옵션 풋/콜은 당일 값만 → 거래일 저녁 필수)
