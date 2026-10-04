@@ -40,11 +40,27 @@ def _base_type(nm: str) -> str:
 
 
 def _fetch_rows(sb):
-    """오늘(KST) 발송된 공시 notice_history — (level, corp, report_nm, rcept) 중복제거."""
+    """오늘(KST) 발송된 공시 notice_history — (level, corp, report_nm, rcept) 중복제거.
+
+    19:00 실행 순간의 일시적 네트워크 끊김(httpx 'Server disconnected')으로 그날
+    다이제스트가 통째로 누락되던 사례(2026-10-02) 방지 — DB 조회를 3회까지 재시도.
+    발송 전 단계라 재시도에 중복 발송 위험 없음.
+    """
+    import time as _time
     since = datetime.datetime.now(_KST).strftime('%Y-%m-%d') + 'T00:00:00+09:00'
-    res = (sb.table('notice_history').select('target,content')
-           .gte('created_at', since).like('content', '[공시/%')
-           .limit(2000).execute().data or [])
+    res = None
+    for attempt in (1, 2, 3):
+        try:
+            res = (sb.table('notice_history').select('target,content')
+                   .gte('created_at', since).like('content', '[공시/%')
+                   .limit(2000).execute().data or [])
+            break
+        except Exception as e:
+            if attempt == 3:
+                log.error(f"[공시 다이제스트] notice_history 조회 3회 실패: {e}")
+                raise
+            log.warning(f"[공시 다이제스트] notice_history 조회 재시도 {attempt}/2: {e}")
+            _time.sleep(2 * attempt)
     seen, items = set(), []
     for x in res:
         m = re.match(r'\[공시/(\w+)\]\s*(.+?)\s*#(\d+)', x.get('content', ''))

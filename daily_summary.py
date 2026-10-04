@@ -42,8 +42,13 @@ SIGNIFICANT_CATS = {
 
 MAX_NEWS = 5        # 카드에 노출할 뉴스 이벤트 수
 MAX_DISC = 8        # 카드에 노출할 공시 수
-MAX_AI_CALLS = 30   # 1회 실행당 Gemini 호출 상한 (무료 쿼터 보호)
-AI_CALL_DELAY = 13  # Gemini 무료 티어 분당 5회 한도 → 호출 간 최소 간격(초). 30개 ≈ 6분.
+# Gemini 무료 티어 일일 쿼터는 모델별(PerProjectPerModel)이라, 저녁요약은 주간
+# ai_analyst(긴급공시 분석)가 쓰는 flash와 다른 모델(flash-lite)을 써 별도 버킷을
+# 쓴다 → 서로 쿼터를 잠식하지 않음. (2026-10-02 flash 일한도 20 소진으로 저녁요약
+# AI 서술이 매일 429로 누락되던 문제 해결)
+EVENING_AI_MODEL = "gemini-3.5-flash-lite"  # 2.5-flash-lite는 신규키 404 → 구글 권장 후속
+MAX_AI_CALLS = 15   # 1회 실행당 Gemini 호출 상한 (일일 쿼터 보호 — 종전 30은 한도 초과)
+AI_CALL_DELAY = 13  # Gemini 무료 티어 분당 5회 한도 → 호출 간 최소 간격(초). 15개 ≈ 3분.
 
 
 # ══════════════════════════════════════════════════════════════
@@ -150,7 +155,7 @@ def ai_synthesis(corp_name: str, disc_titles: list, news_titles: list,
 """
     try:
         resp = ai_analyst.client.models.generate_content(
-            model=ai_analyst.AI_MODEL_ID, contents=prompt)
+            model=EVENING_AI_MODEL, contents=prompt)
         return (resp.text or '').strip() or None
     except Exception as e:
         logging.warning(f"⚠️ [저녁요약] AI 실패({corp_name}): {e}")
