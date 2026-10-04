@@ -409,17 +409,6 @@ def calc_cashflow_derived(row: dict) -> dict:
     return result
 
 
-def is_cumulative_by_comparison(cur_val: int, prev_val: int) -> bool:
-    """
-    Q2/Q3 값이 누적인지 단독인지 자동 판별.
-    cur_val이 prev_val의 1.8배 이상이면 누적으로 판단.
-    금융사처럼 일부 업종이 누적값을 제공하는 경우 대비.
-    """
-    if cur_val is None or prev_val is None or prev_val == 0:
-        return False
-    return cur_val > prev_val * 1.8
-
-
 def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> Optional[dict]:
     """
     Q4 변환용 Q3 누적값을 DART 3분기보고서에서 직접 조회.
@@ -716,13 +705,6 @@ def build_fin_cache(sb) -> dict:
             break
         page += 1
     return cache
-
-
-def get_pure_val_from_cache(cache: dict, stock_code: str, year: str, quarter: str,
-                            field: str, fs_div: str = "CFS") -> Optional[int]:
-    """캐시에서 순수 분기값 반환 (DB에 이미 단독값으로 저장된 값 기준)"""
-    stock_cache = cache.get(stock_code, {})
-    return stock_cache.get((year, quarter, fs_div), {}).get(field)
 
 
 def calculate_growth_rates(cache: dict, row: dict) -> dict:

@@ -458,54 +458,6 @@ def format_surge_msg(surges: list[dict], trd_date: str = None, multiplier: float
     return "\n".join(lines)
 
 
-def run_and_alert(trd_date: str = None, telegram_token: str = None,
-                  chat_id: str = None, n_days: int = 5, multiplier: float = 2.0) -> int:
-    """
-    공매도 수집 → 급증 알림 일괄 처리.
-    run_all.py의 job_short_surge에서 호출.
-
-    Returns: 알림 발송 건수
-    """
-    if not SB_URL or not SB_SERVICE_KEY:
-        log.error("SB_URL, SB_SERVICE_KEY 환경변수 필요")
-        return 0
-
-    sb = get_supabase_client()
-
-    # 1. 당일 데이터 수집
-    run(trd_date)
-
-    # 2. 급증 탐지
-    surges = check_surge(sb, n_days=n_days, multiplier=multiplier)
-    if not surges:
-        return 0
-
-    # 3. 텔레그램 알림 (stock_api.send_telegram 사용)
-    if not telegram_token or not chat_id:
-        log.info("📉 [공매도급증] 텔레그램 미설정 — 콘솔 출력만")
-        for s in surges[:10]:
-            log.info(f"  {s['corp_name']}({s['stock_code']}) "
-                     f"오늘 {s['today_ratio']}% / 5일평균 {s['avg_ratio']}% "
-                     f"→ {s['surge_ratio']}배")
-        return len(surges)
-
-    # 상위 10개 알림 포맷 (run_all·CLI 공용 포매터)
-    msg = format_surge_msg(surges, trd_date, multiplier)
-
-    try:
-        import requests as _req
-        _req.post(
-            f"https://api.telegram.org/bot{telegram_token}/sendMessage",
-            json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"},
-            timeout=10
-        )
-        log.info(f"📉 [공매도급증] 텔레그램 발송 완료 ({len(surges)}건)")
-    except Exception as e:
-        log.error(f"❌ [공매도급증] 텔레그램 발송 실패: {e}")
-
-    return len(surges)
-
-
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="KRX 공매도 거래 비중 수집")

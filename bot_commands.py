@@ -34,8 +34,6 @@ try:
 except ImportError:
     _BRIDGE_OK = False
 
-from telegram_utils import get_admin_chat_id as _get_admin_chat
-
 _TG = "https://api.telegram.org/bot{token}/{method}"
 _running = False
 
@@ -98,35 +96,6 @@ def _ensure_menu():
         log.info("[cmd] 봇 메뉴(명령어) 등록 완료")
     except Exception as e:
         log.debug(f"[cmd] 메뉴 등록 실패(무시): {e}")
-
-
-def _notify_admin_subscribe(uid: int, fname: str, lname: str, username: str):
-    """구독 신청 내용을 어드민에게 전달 (인라인 버튼 포함)."""
-    admin = _get_admin_chat()
-    if not admin:
-        log.warning(f"[cmd] 어드민 chat_id 미설정 — 구독 신청 알림 전송 불가 (uid={uid})")
-        return
-
-    name_display  = f"{fname} {lname}".strip()
-    uname_display = f"@{username}" if username else "없음"
-    msg = (
-        f"📩 <b>[프로 채널 구독 신청]</b>\n\n"
-        f"이름: <b>{name_display}</b>\n"
-        f"@username: {uname_display}\n"
-        f"텔레그램 ID: <code>{uid}</code>"
-    )
-    # 인라인 버튼: 1개월 승인 / 3개월 승인 / 거절
-    keyboard = {'inline_keyboard': [[
-        {'text': '✅ 1개월 승인 + 초대', 'callback_data': f'PRO|approve|{uid}|1'},
-        {'text': '✅ 3개월',             'callback_data': f'PRO|approve|{uid}|3'},
-        {'text': '❌ 거절',              'callback_data': f'PRO|reject|{uid}'},
-    ]]}
-    res = _post('sendMessage', chat_id=admin, parse_mode='HTML',
-                text=msg, reply_markup=keyboard)
-    if res.get('ok'):
-        log.info(f"[cmd] 어드민 알림 전송 완료 → {admin}")
-    else:
-        log.warning(f"[cmd] 어드민 알림 실패: {res.get('description')} (admin={admin})")
 
 
 def _handle(update: dict):
@@ -425,45 +394,6 @@ def start_thread() -> threading.Thread:
 def stop():
     global _running
     _running = False
-
-
-def _reply_long(chat_id: int, text: str):
-    """4096자 제한 대응 — 줄 단위로 잘라 여러 메시지로 발송."""
-    LIMIT = 3800
-    buf = ""
-    for line in text.split("\n"):
-        if len(buf) + len(line) + 1 > LIMIT:
-            if buf:
-                _reply(chat_id, buf)
-            buf = line
-        else:
-            buf = (buf + "\n" + line) if buf else line
-    if buf:
-        _reply(chat_id, buf)
-
-
-def _fmt_room_list(rooms: list) -> str:
-    """관리자용 방 목록 텍스트."""
-    import html as _h
-    if not rooms:
-        return "등록된 방이 없습니다."
-    _ICON = {'paid': '🔒', 'full': '🚫', 'open': '🟢'}
-    lines = [f"📋 <b>채팅방 목록</b> ({len(rooms)}개)"]
-    cur = None
-    for r in rooms:
-        cat = r.get('cat') or '기타'
-        if cat != cur:
-            cur = cat
-            lines.append(f"\n<b>[{_h.escape(str(cat))}]</b>")
-        icon = _ICON.get(r.get('status'), '·')
-        nm = _h.escape(str(r.get('name') or ''))
-        cid = r.get('chat_id') or '—'
-        flag = '✅' if str(cid).lstrip('-').isdigit() else '⚠️'
-        mem = r.get('members') or 0
-        mx = r.get('max_members') or 1000
-        lines.append(f"{icon} <b>{nm}</b> <code>#{r.get('id')}</code> {mem}/{mx} {flag}<code>{_h.escape(str(cid))}</code>")
-    lines.append("\n명령: /방상태 [종목] [open|paid|full] · /방연결 [종목] [chat_id]")
-    return "\n".join(lines)
 
 
 def _build_room_list(page=0):

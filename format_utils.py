@@ -111,13 +111,6 @@ def parse_date(val: str) -> Optional[str]:
     return f'{s[:4]}-{s[4:6]}-{s[6:]}'
 
 
-def yyyymmdd(dt) -> str:
-    """date/datetime → 'YYYYMMDD' 문자열"""
-    if hasattr(dt, 'strftime'):
-        return dt.strftime('%Y%m%d')
-    return str(dt).replace('-', '')[:8]
-
-
 # ── 분기 ─────────────────────────────────────────────────────────────────────
 
 def get_prev_quarter(year: str, quarter: str) -> tuple[str, str]:
