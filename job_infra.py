@@ -271,7 +271,7 @@ def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
                 logging.info(f"⏸ [{key}] 비활성화 (DB 설정)")
                 return
             start = time.time()
-            # 중첩 잡(job_collect_market_closing → job_watchlist_alert)이 실재하므로
+            # 잡 안에서 다른 잡을 부르는 중첩이 생길 수 있으므로
             # 바깥 잡의 실패 목록을 보존했다가 finally에서 되돌린다.
             prev = getattr(_JOB_LOCAL, 'failures', None)
             _JOB_LOCAL.failures = []

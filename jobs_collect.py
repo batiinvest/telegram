@@ -14,7 +14,6 @@ import datetime
 import stock_api
 from managers import market_timer
 from db_utils import fetch_all_pages
-from collect_utils import safe_execute
 from format_utils import fmt_change_pct
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, CHAT_IDS_BY_CODE
@@ -954,8 +953,8 @@ def job_collect_market_closing():
         logging.error(f"❌ [시장수집-전체] 오류: {e}")
         mark_failed(e)
 
-    # 시장 수집 완료 후 관심가/목표가 도달 알림 (장 마감 기준)
-    job_watchlist_alert()
+    # (관심가·목표가 도달 알림 job_watchlist_alert는 10-04 투자노트가 원본 포트폴리오 표로 바뀌며
+    #  관심가·목표가 칸이 없어져 껐다 — 화면에서 고칠 수 없는 옛 값으로 메인 채팅방 알림이 나가던 것)
 
     # 거래소 신규 지정 종목 알림 (장 마감 후 1회)
     _check_market_warnings()
@@ -1285,144 +1284,6 @@ def job_daily_summary():
         logging.info(f"✅ [저녁요약] 기업채팅방 발송 {sent}건")
     except Exception as e:
         logging.error(f"❌ [저녁요약] 오류: {e}")
-        mark_failed(e)
-
-
-@_job()
-def job_watchlist_alert():
-    """
-    장 마감 후 — watchlist 종목의 관심가/목표가 도달 여부 체크 & 개별 알림.
-
-    체크 조건:
-      - watch_price:  현재가 ≤ 관심가 (매수 고려 구간 진입)
-      - target_price: 현재가 ≥ 목표가 × 0.95 (목표가 5% 이내 근접 또는 도달)
-
-    알림 발송 대상:
-      - DEFAULT_CHAT_ID (메인 채팅방)
-      - 해당 종목 전용 채팅방 (COMPANY_CHAT_IDS에 있을 경우)
-
-    중복 방지:
-      - app_config의 watchlist_alerted_today 키에 오늘 알림 발송한
-        (stock_code, alert_type) 세트를 저장. 당일 중복 발송 방지.
-    """
-    if not _BRIDGE_OK:
-        return
-
-    today = datetime.date.today().isoformat()
-
-    try:
-        sb = _bridge._get_client()
-
-        # ── 오늘 이미 발송한 알림 목록 조회 ──
-        alerted_today = set()
-        try:
-            cfg_res = sb.table('app_config') \
-                        .select('value').eq('key', 'watchlist_alerted_today').single().execute()
-            if cfg_res.data:
-                raw = json.loads(cfg_res.data['value'])
-                # 오늘 날짜 것만 유지
-                if raw.get('date') == today:
-                    alerted_today = set(tuple(x) for x in raw.get('alerted', []))
-        except Exception:
-            pass  # 없으면 빈 세트로 시작
-
-        # ── watchlist 전체 조회 ──
-        wl_res = safe_execute(sb.table('watchlist')
-                   .select('stock_code,corp_name,watch_price,target_price,group_name'),
-                   label='watchlist')
-        watchlist = [
-            w for w in (wl_res.data or [])
-            if w.get('watch_price') or w.get('target_price')
-        ]
-        if not watchlist:
-            return
-
-        # ── 최신 market_data 조회 (오늘 또는 최근 거래일) ──
-        date_res = safe_execute(sb.table('market_data')
-                     .select('base_date').order('base_date', desc=True).limit(1),
-                     label='market_data date')
-        max_date = (date_res.data or [{}])[0].get('base_date')
-        if not max_date:
-            return
-
-        codes = list({w['stock_code'] for w in watchlist if w.get('stock_code')})
-        mkt_res = safe_execute(sb.table('market_data')
-                    .select('stock_code,price,price_change_rate')
-                    .eq('base_date', max_date)
-                    .in_('stock_code', codes),
-                    label='market_data prices')
-        price_map = {r['stock_code']: r for r in (mkt_res.data or [])}
-
-        # ── 도달 여부 체크 ──
-        alerts = []  # [(stock_code, alert_type, msg)]
-
-        for w in watchlist:
-            code  = w.get('stock_code')
-            name  = w.get('corp_name', code)
-            mkt   = price_map.get(code)
-            if not mkt or not mkt.get('price'):
-                continue
-
-            price = mkt['price']
-            chg   = mkt.get('price_change_rate', 0) or 0
-            chg_str = fmt_change_pct(chg)
-
-            # 관심가 도달: 현재가 ≤ 관심가
-            watch_p = w.get('watch_price')
-            if watch_p and price <= watch_p:
-                key = (code, 'watch')
-                if key not in alerted_today:
-                    gap = (watch_p - price) / watch_p * 100
-                    msg = (
-                        f"🔔 <b>[관심가 도달] {name}</b>\n"
-                        f"현재가 {price:,.0f}원 ({chg_str})\n"
-                        f"관심가 {watch_p:,.0f}원 — {gap:.1f}% 하회\n"
-                        f"📈 <a href='https://finance.naver.com/item/main.nhn?code={code}'>네이버 금융</a>"
-                    )
-                    alerts.append((code, name, 'watch', msg))
-                    alerted_today.add(key)
-
-            # 목표가 근접: 현재가 ≥ 목표가 × 0.95
-            target_p = w.get('target_price')
-            if target_p and price >= target_p * 0.95:
-                key = (code, 'target')
-                if key not in alerted_today:
-                    gap = (price - target_p) / target_p * 100
-                    reached = price >= target_p
-                    label = "도달 🎯" if reached else f"근접 ({abs(gap):.1f}% 이내)"
-                    msg = (
-                        f"{'🎯' if reached else '⚠️'} <b>[목표가 {label}] {name}</b>\n"
-                        f"현재가 {price:,.0f}원 ({chg_str})\n"
-                        f"목표가 {target_p:,.0f}원\n"
-                        f"📈 <a href='https://finance.naver.com/item/main.nhn?code={code}'>네이버 금융</a>"
-                    )
-                    alerts.append((code, name, 'target', msg))
-                    alerted_today.add(key)
-
-        # ── 알림 발송 ──
-        if alerts:
-            target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
-
-            for code, name, alert_type, msg in alerts:
-                stock_api.send_telegram(target, msg)
-                logging.info(f"📢 [관심가알림] {name} ({alert_type}) → {target}")
-
-            # 오늘 알림 목록 저장 (중복 방지)
-            safe_execute(sb.table('app_config').upsert({
-                'key':         'watchlist_alerted_today',
-                'value':       json.dumps({
-                    'date':    today,
-                    'alerted': [list(k) for k in alerted_today],
-                }, ensure_ascii=False),
-                'description': f'{today} 관심가/목표가 알림 발송 이력'
-            }, on_conflict='key'), label='watchlist dedup')
-
-        logging.info(
-            f"📋 [관심가알림] 체크 완료 — {len(watchlist)}개 종목 중 {len(alerts)}개 발송"
-        )
-
-    except Exception as e:
-        logging.error(f"❌ [관심가알림] 오류: {e}")
         mark_failed(e)
 
 

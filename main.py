@@ -537,6 +537,19 @@ class DartRoutingBot:
             trend = self._earnings_trend(stock_code, rcept_no, report_nm=report_nm)
             if trend:
                 detail = f"{detail}\n\n{trend}".strip()
+            # 어닝 서프라이즈 — 컨센 대비 발표 영업익 (메시지 표기 + 리스트 적재). 8a83a62에서 넣었는데
+            # a50734f(08-05, 관리종목 지정우려 분류 픽스)에 섞여 빠졌던 것을 10-04 되살림
+            try:
+                import earnings_surprise
+                _code0 = stock_code.split('.')[0]
+                _sp = earnings_surprise.compute_surprise(_code0, rcept_no)
+                if _sp:
+                    _cl = earnings_surprise.consensus_line(_sp)
+                    if _cl:
+                        detail = f"{detail}\n\n{_cl}".strip()
+                    earnings_surprise.record_if_surprise(_code0, corp_name, _sp)
+            except Exception:
+                logging.exception("⚠️ [서프라이즈] 처리 실패")
         # 정기보고서(사업/반기/분기) — 본문 skip이라 빈 알림 → financials 핵심 요약 덧붙임
         elif any(k in report_nm for k in ('사업보고서', '반기보고서', '분기보고서')) and stock_code:
             fin = self._periodic_financials_summary(stock_code, report_nm)
