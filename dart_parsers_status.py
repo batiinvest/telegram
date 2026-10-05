@@ -490,90 +490,201 @@ def parse_market_measure(kv: dict) -> list:
     if not (_get(kv, '제목') and _get(kv, '내용')) and (v := _get(kv, '5.기타', '기타')):
         lines.extend(_parse_etc_field(v)[:4])
 
-    # KRX 기타시장안내형 폴백 — 정형 필드가 없으면 제목/내용 KV,
-    # 그마저 없으면(표 없는 산문 문서) 원문 텍스트의 '제목 :' 이후를 추출
+    # KRX 기타시장안내형 — 정형 필드가 없으면 제목/내용 KV, 그마저 없으면(표 없는 산문)
+    # 원문 '제목 :' 이후를 공시명 괄호 제목 기준으로 제목/본문 분리(_mkt_title_body).
+    # 결과 라벨은 _mkt_verdict — 제목 신호 우선, 없으면 본문의 '확정' 문장만(…한 바 있/…경우
+    # 문장 제외). 예전엔 본문 아무 데서나 단어를 잡아 '우려' 공지에 '상장폐지 결정',
+    # 실질심사 대상 결정에 '개선기간 종료', 상장폐지 의결에 '개선기간 부여'가 붙었음(10-05 감사).
     if not lines:
         title = _get(kv, '제목')
-        body  = _get(kv, '내용')
+        body = _get(kv, '내용')
         if not title and not body:
-            raw = kv.get('_html', '')
-            if raw:
-                no_css = re.sub(r'<(style|script)[^>]*>.*?</\1>', ' ', raw,
-                                flags=re.DOTALL | re.IGNORECASE)
-                txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', no_css)).strip()
-                m = re.search(r'제\s*목\s*[:：]\s*(.+)$', txt)
-                if m:
-                    seg = m.group(1).strip()
-                    # 제목 ↔ 본문 분리 — 제목 끝은 ① 제목 종결 괄호 ')'(핀텔형) 또는
-                    # ② 본문 시작 날짜('26.MM.DD, 자이글형) 중 더 앞선 것.
-                    cand = []
-                    p_paren = seg.find(')')
-                    if 0 <= p_paren < 80:            # 제목 끝 괄호(길지 않은 것만)
-                        cand.append(p_paren + 1)      # ')' 포함
-                    md = re.search(r"['\"]?\d{2,4}\s?[.\-]\s?\d{1,2}\s?[.\-]", seg)
-                    if md and md.start() > 8:         # 본문 시작 날짜
-                        cand.append(md.start())
-                    if cand:
-                        pos = min(cand)
-                        title, body = seg[:pos].strip(), seg[pos:].strip()
-                        if not body:
-                            title = seg
-                    else:
-                        title = seg
+            title, body = _mkt_title_body(kv)
+        title = re.sub(r'\s+', ' ', title or '').strip()
+        body = re.sub(r'\s+', ' ', body or '').strip()
         if title:
-            t = re.sub(r'\s+', ' ', title).strip()
-            # 제목 뒤에 본문 번호섹션('1. 법원 결정'…)이 붙어 크램되면 첫 섹션에서 절단
-            t = re.split(r'\s[1-9]\.\s', t, maxsplit=1)[0].strip()
-            lines.append(f'📋 {_trunc_clean(t, 100)}')
-        if body:
-            body = re.sub(r'\s+', ' ', body).strip()
-            _tb = f"{title or ''} {body}"
-            _appeal = False   # 이의신청 기한 표시 여부 (상폐 해당/결정 단계에서만)
-            # 핵심 결과 상단 요약. ※ 순서 중요 — 결정된 것 먼저, 진행중(예정)은 뒤.
-            #   불복(효력정지 가처분) → 상폐기준 해당(결정) → 개선기간 종료(심사 예정)
-            #   → 개선기간 부여 → 심의대상 → 상폐 결정
-            if any(k in _tb for k in ('효력정지', '가처분', '집행정지')):
-                # 가처분은 신청/인용/기각 구분 필수 — '기각'인데 '불복 신청'으로
-                # 표기하면 보유자가 상폐 정지로 오해(실제는 불복 실패→정리매매 재개).
-                if '기각' in _tb or '각하' in _tb:
-                    _m = '🚨 결과: 효력정지 가처분 기각'
-                    if '재개' in _tb or '정리매매' in _tb:
-                        _m += ' — 상장폐지 절차 재개'
-                    lines.append(_m)
-                    mtm = re.search(r"정리매매\s*\(?\s*('?[\d.]+\s*~\s*'?[\d.]+)", _tb)
-                    if mtm:
-                        lines.append(f'🕐 정리매매: {mtm.group(1).strip()}')
-                elif '인용' in _tb:
-                    lines.append('🛡 결과: 효력정지 가처분 인용 — 상장폐지 절차 정지')
-                else:
-                    lines.append('🛡 상장폐지 불복 — 효력정지 가처분 신청')
-            elif '상장폐지기준에 해당' in body:
-                lines.append('🚨 결과: 상장폐지기준 해당 (이의신청 가능)')
-                _appeal = True
-            elif '개선기간' in _tb and '종료' in _tb and '예정' in body:
-                # 개선기간 종료 — 상폐 여부 아직 미결정(심사 예정)
-                lines.append('⏳ 결과: 개선기간 종료 — 상장폐지 여부 심사 예정')
-            elif '개선기간' in _tb and '부여' in body:
-                lines.append('🚨 결과: 개선기간 부여')
-            elif '심의대상' in body:
-                lines.append('🚨 결과: 실질심사 대상 결정')
-            elif '상장폐지' in body and ('결정하' in body or '확정' in body):
-                lines.append('🚨 결과: 상장폐지 결정')
-                _appeal = True
-            # 이의신청 기한 — 상폐 해당/결정 단계에서만(개선기간 종료 등은 조건부·미래라 제외)
-            if _appeal:
-                ma = re.search(r'(\d+)\s*일\s*\(?\s*영업일', body)
-                if ma and '이의신청' in body:
-                    lines.append(f'📅 이의신청 기한: {ma.group(1)}영업일')
-            # 본문 문장별 분리 (통짜 500자 → 스캔 가능)
-            for s in re.split(r'(?<=[다요][.)])\s+', body):
-                s = s.strip()
-                if len(s) >= 8:
-                    lines.append(f'  • {_trunc_clean(s, 400)}')
-                if len(lines) >= 12:   # 7→12: 2번째 섹션(실질심사 사유 추가 등)까지 — 이오플로우
-                    break
+            lines.append(f'📋 {_trunc_clean(title, 150)}')
+        # 결과 판정엔 공시명 괄호 제목도 함께 — 표형(1.제목/2.내용)은 제목에 '(상장폐지 기준 해당)'이 없음
+        _nm = re.sub(r'^\[[^\]]+\]', '', kv.get('_report_nm', ''))
+        lines.extend(_mkt_verdict(f'{title} {_nm}', body))
+        # 본문 문장별 분리 (통짜 → 스캔 가능)
+        for s_ in re.split(r'(?<=[다요][.)])\s+', body):
+            s_ = s_.strip()
+            if len(s_) >= 8:
+                lines.append(f'  • {_trunc_clean(s_, 400)}')
+            if len(lines) >= 12:   # 7→12: 2번째 섹션(실질심사 사유 추가 등)까지 — 이오플로우
+                break
 
     return lines
+
+
+_MKT_DATEP = r"\(\s*['‘’]?\d{2,4}\s?[.\-]\s?\d{1,2}\s?[.\-]\s?\d{1,2}\.?\s*\)"
+_MKT_Q = str.maketrans({'‘': "'", '’': "'", '“': '"', '”': '"', 'ㆍ': '·'})
+
+
+def _ws_find_end(seg: str, pat: str) -> int:
+    """공백·따옴표 변형 무시하고 pat을 seg에서 찾아 끝 위치(seg 인덱스) 반환, 없으면 -1."""
+    s = seg.translate(_MKT_Q)
+    p = re.sub(r'\s+', '', pat.translate(_MKT_Q))
+    if not p:
+        return -1
+    idx = [i for i, ch in enumerate(s) if not ch.isspace()]
+    j = ''.join(s[i] for i in idx).find(p)
+    return idx[j + len(p) - 1] + 1 if j >= 0 else -1
+
+
+def _mkt_title_body(kv: dict):
+    """표 없는 KRX 산문 공지 → (제목, 본문). 제목 끝 = 공시명 괄호 제목('시가총액 미달에 따른
+    상장폐지 우려 관련 안내')이 원문에 나타나는 끝(+닫는 괄호·'(2026.09.29)' 날짜). 예전엔 첫 ')'나
+    첫 날짜에서 잘라 '📋 (주)', '…안내(' 제목·'…결정 거래소는' 본문 섞임이 생겼음."""
+    import html as _html
+    raw = kv.get('_html', '')
+    if not raw:
+        return None, None
+    txt = re.sub(r'<(style|script)[^>]*>.*?</\1>', ' ', raw, flags=re.DOTALL | re.IGNORECASE)
+    txt = _html.unescape(re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', txt))).strip()
+    m = re.search(r'제\s*목\s*[:：]\s*(.+)$', txt)
+    if not m:
+        return None, None
+    seg = m.group(1).strip()
+    nm = re.sub(r'^\[[^\]]+\]', '', kv.get('_report_nm', '')).strip()
+    ends = [e for g in re.findall(r'\(((?:[^()]|\([^()]*\))+)\)', nm)
+            if len(re.sub(r'\s+', '', g)) >= 4
+            for e in [_ws_find_end(seg[:300], g)] if e > 0]
+    if ends:
+        cut = max(ends)
+        m2 = re.match(r'\s*\)?\s*(?:' + _MKT_DATEP + r')?', seg[cut:])
+        cut += m2.end()
+    elif mk := re.search(r'기타시장안내\s*\([^()]*\)', seg[:200]):
+        cut = mk.end()
+    else:
+        md = re.search(_MKT_DATEP, seg[:200])
+        mb = re.search(r"\s(?=(?:한국)?거래소는|동\s?사는|당사는|코스닥시장(?:본부|위원회)는|"
+                       r"유가증권시장본부는|['‘]\d{2}\.\d)", seg[:250])
+        ms = re.search(r'\s[1-9]\.\s', seg[:250])
+        cut = md.end() if md else (mb.start() if mb and mb.start() > 5 else (ms.start() if ms else 0))
+    title, body = seg[:cut].strip(), seg[cut:].strip()
+    return (title or None), (body or None)
+
+
+def _mkt_date(y: str, mo: str, d: str) -> str:
+    y = ('20' + y) if len(y) == 2 else y
+    return f'{y}-{int(mo):02d}-{int(d):02d}'
+
+
+def _mkt_deadline(text: str, last: bool = False):
+    """기한 날짜 — "'26.10.30 限" / "20영업일(2026.10.30.) 이내" / "'26.10.21까지".
+    본문 위치 기준 첫 기한(기본) 또는 마지막 기한(last — 연장 공지: "당초 조사기간('26.09.28 限)을
+    15일 연장 … '26.10.21까지"에서 새 기한은 뒤쪽)."""
+    hits = []
+    for pat in (r"['‘’]?(\d{2,4})\.\s?(\d{1,2})\.\s?(\d{1,2})\.?\s*限",
+                r"(\d{4})\.\s?(\d{1,2})\.\s?(\d{1,2})\.?\s*\)\s*(?:이내|까지)",
+                r"['‘’](\d{2})\.\s?(\d{1,2})\.\s?(\d{1,2})\.?\s*까지",
+                r"(\d{4})\.\s?(\d{1,2})\.\s?(\d{1,2})\.?\s*까지"):
+        hits += [(m.start(), _mkt_date(*m.groups())) for m in re.finditer(pat, text or '')]
+    if not hits:
+        return None
+    return (max(hits) if last else min(hits))[1]
+
+
+# 결과 공지 본문의 '확정' 문장 패턴(공백 제거 후 비교) — 과거('…한 바 있')·조건('…경우') 문장 제외
+_MKT_DECISIONS = (
+    ('🚨 결과: 상장폐지 결정',
+     r'"?상장폐지"?로(?:심의[·]?)?의결|상장폐지를의결|상장폐지를결정하였|상장폐지가결정되었|'
+     r'상장폐지하기로결정|'
+     r'상장폐지기준(?:\([^)]*\))?에해당한다고결정|상장폐지기준(?:\([^)]*\))?에해당됨에따라'),
+    ('🚨 결과: 개선기간 부여', r'개선기간을?\S{0,25}?부여(?:하기로|하였|하고자|함)'),
+    ('⏳ 결과: 상장폐지 여부 심의 속행', r'심의를속행'),
+    ('⚠️ 결과: 상장적격성 실질심사 사유 발생 — 심의대상 여부 결정 예정', r'실질심사사유가(?:추가로)?발생하였'),
+    ('✅ 결과: 상장 유지', r'상장(?:을)?유지(?:하기로)?(?:결정|의결)하였|상장적격성이인정되었'),
+)
+
+
+def _mkt_body_decision(body: str):
+    for s in re.split(r'(?<=다[.)])\s+|(?<=니다)\s+', body or ''):
+        # 과거('…한 바 있')·조건('…하는 경우 …')만 제외 — '…정지된 경우로'·'경우에 해당'은 분류 서술이라 유지
+        if '바 있' in s or re.search(r"경우(?![\"”’']?(?:로|에\s*해당))", s):
+            continue
+        sf = re.sub(r'\s+', '', s).translate(_MKT_Q)
+        for label, pat in _MKT_DECISIONS:
+            if re.search(pat, sf):
+                return label
+    return None
+
+
+def _mkt_verdict(title: str, body: str) -> list:
+    """시장조치 결과 한 줄(+이의신청·정리매매 일정). 판단 불가면 [] — 오라벨보다 무라벨."""
+    t = re.sub(r'\s+', '', title or '').translate(_MKT_Q)
+    b = body or ''
+    bf = re.sub(r'\s+', '', b).translate(_MKT_Q)
+    tb = t + bf
+    dl = _mkt_deadline(b, last='연장' in t)
+    dls = f' (~{dl})' if dl else ''
+    out = []
+    resume = False
+    if '무효확인' in t and ('기각' in t or '각하' in t):
+        out.append('🚨 결과: 상장폐지 무효확인 소송 기각 — 상장폐지 절차 재개')
+        resume = True
+    elif any(k in tb for k in ('효력정지', '가처분', '집행정지')):
+        # 가처분 신청/인용/기각 구분 필수 — '기각'을 '불복 신청'으로 표기하면 보유자가 상폐 정지로 오해
+        if '기각' in tb or '각하' in tb:
+            resume = '재개' in tb or '정리매매' in tb
+            out.append('🚨 결과: 효력정지 가처분 기각' + (' — 상장폐지 절차 재개' if resume else ''))
+        elif '인용' in tb:
+            out.append('🛡 결과: 효력정지 가처분 인용 — 상장폐지 절차 정지')
+        elif '보류' in tb:
+            out.append('⏸ 결과: 상장폐지 절차(정리매매) 보류 — 가처분 결정 확인 시까지')
+        else:
+            out.append('🛡 상장폐지 불복 — 효력정지 가처분 신청')
+    elif '우려' in t:
+        return []        # 우려·예고는 조건부 경고 — 결과 라벨 없음(제목·본문이 그대로 설명)
+    elif '중단' in t and '실질심사' in t:
+        out.append('⏹ 결과: 상장적격성 실질심사 절차 중단'
+                   + (' — 이미 상장폐지 결정' if '상장폐지결정' in bf else ''))
+    elif '조사기간' in t and '연장' in t:
+        out.append(f'⏳ 결과: 실질심사 대상 여부 조사기간 연장{dls}')
+    elif '개최기한' in t and '연장' in t:
+        out.append(f'⏳ 결과: 기업심사위원회 개최기한 연장{dls}')
+    elif '기한' in t and ('대상결정' in t or '대상여부' in t):
+        out.append(f'⏳ 결과: 실질심사 대상 여부 결정 예정{dls}')
+    elif ('실질심사대상' in t or '심의대상' in t) and '결정' in t:
+        out.append('🚨 결과: 상장적격성 실질심사(기업심사위원회 심의) 대상 결정'
+                   + (f' — 심의 기한 {dl}' if dl else ''))
+    elif '실질심사사유' in t:
+        out.append('⚠️ 결과: 상장적격성 실질심사 사유 ' + ('추가 ' if '추가' in t else '')
+                   + '발생 — 심의대상 여부 결정 예정')
+    elif '개선기간종료' in t:
+        out.append(f'⏳ 결과: 개선기간 종료 — 상장폐지 여부 심의 예정{dls}')
+    elif ('개선계획' in t or '이행내역' in t) and '제출' in t:
+        out.append(f'⏳ 결과: 개선계획(이행내역) 제출 — 상장폐지 여부 심의 예정{dls}')
+    elif '정리매매' in t and '보류' in t:
+        out.append('⏸ 결과: 정리매매 보류')
+    elif '상장폐지' in t and '기준' in t and '해당' in t:
+        out.append('🚨 결과: 상장폐지기준 해당 — 상장폐지 절차 진행')
+    elif '상장폐지사유' in t and '발생' in t and '해소' not in t:
+        out.append('⚠️ 결과: 상장폐지 사유 발생')
+    else:
+        v = _mkt_body_decision(b)
+        if v:
+            out.append(v)
+        elif '상장폐지결정' in t:
+            out.append('🚨 결과: 상장폐지 결정')
+    if resume:
+        mtm = re.search(r"정리매매\s*\(?\s*('?[\d.]+\s*~\s*'?[\d.]+)", b)
+        if mtm:
+            out.append(f'🕐 정리매매: {mtm.group(1).strip()}')
+    # 상장폐지 결정·기준 해당 → 이의신청 기한(날짜 또는 영업일)
+    if out and out[0].startswith('🚨 결과: 상장폐지') and '이의신청' in b:
+        md = re.search(r'이의신청\s*(?:시한|기한)\s*(\d{4})\.\s?(\d{1,2})\.\s?(\d{1,2})', b)
+        mn = re.search(r'(\d+)\s*일\s*\(?\s*영업일[^)]*\)?\s*이내에\s*이의신청', b)
+        if md:
+            out.append(f'📅 이의신청 기한: {_mkt_date(*md.groups())}')
+        elif mn:
+            out.append(f'📅 이의신청 기한: 통보일로부터 {mn.group(1)}영업일')
+    # 본 결과와 별개로 실질심사 사유가 추가 발생한 경우(이오플로우 2번 섹션)
+    if out and '실질심사' not in out[0] and re.search(r'실질심사사유가?추가로?발생', bf):
+        out.append('⚠️ 상장적격성 실질심사 사유 추가 발생')
+    return out
 
 
 def parse_unfaithful_disclosure(kv: dict) -> list:
@@ -932,4 +1043,108 @@ def parse_business_suspension(kv: dict) -> list:
         notes = _etc_segments(v)
         if notes:
             lines.append(f'📎 참고: {_trunc_clean(" ".join(notes), 300)}')
+    return lines if len(lines) > 1 else []
+
+
+def _split_num(v):
+    v = (v or '').strip()
+    return int(v.replace(',', '')) if re.fullmatch(r'[\d,]+', v) and v.replace(',', '') else None
+
+
+def _split_money(label: str, v) -> str:
+    n = _split_num(v)
+    return f'{label} {_fmt_amount(str(n))}원' if n else ''
+
+
+def _split_ymd(s: str):
+    m = re.search(r'(\d{4})\s*[년.\-]\s*(\d{1,2})\s*[월.\-]\s*(\d{1,2})', s or '')
+    return f'{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}' if m else None
+
+
+def parse_split(kv: dict) -> list:
+    """회사분할결정 — 분할방식(인적/물적·비율), 존속/신설 회사별 재무·매출·상장 여부, 일정.
+
+    국/영문 이중언어 서식이라 범용 폴백이 영문 라벨과 값이 한 칸씩 밀린 채 덤프 —
+    현대모비스(2026-09-30) '자산총계/부채총계 541,529,971,210'처럼 존속·신설 수치가 뒤섞임.
+    원문 텍스트의 국문 라벨('분할 후 존속회사 … 자산총계 … 분할 후 상장유지 여부',
+    '분할설립회사 … 재상장신청 여부', '분할기일')로 직접 추출."""
+    nm = kv.get('_report_nm', '')
+    if '분할합병' in nm:
+        return []
+    raw = kv.get('_html', '')
+    t = re.sub(r'<(style|script)[^>]*>.*?</\1>', ' ', raw, flags=re.DOTALL | re.IGNORECASE)
+    t = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', t)).strip()
+    if '분할' not in t:
+        return []
+    lines = []
+
+    # 분할 방식 + 비율
+    # '분할방법' 첫 등장은 정정표 행일 수 있음 — 인적/물적 문구가 있는 첫 구간 사용
+    meth = next((t[m_.end():m_.end() + 900] for m_ in re.finditer(r'분할방법', t)
+                 if re.search(r'(?:인적|물적)분할', t[m_.end():m_.end() + 900])), '')
+    kind = ('인적분할' if '인적분할' in meth else '물적분할' if '물적분할' in meth else '')
+    if kind:
+        simple = '단순·' if re.search(r'단순\s*[·ㆍ]?\s*(?:인적|물적)', meth) else ''
+        if kind == '물적분할':
+            lines.append(f'✂️ {simple}물적분할 — 신설회사 지분 100%를 존속회사가 보유')
+        else:
+            rs = re.search(r'분할존속회사\s*[:：]\s*([\d.]+)', t)
+            rn = re.search(r'분할신설회사\s*[:：]\s*([\d.]+)', t)
+            ratio = f' — 비율 존속 {rs.group(1)} : 신설 {rn.group(1)}' if rs and rn else ''
+            lines.append(f'✂️ {simple}인적분할 (기존 주주가 신설회사 주식 배정){ratio}')
+
+    # 존속회사
+    ms = re.search(r'분할\s*후\s*존속회사\s*회사명\s*(.+?)\s*분할\s*후\s*재무내용\s*\(원\)\s*'
+                   r'자산총계\s*(\S+)\s*부채총계\s*(\S+)\s*자본총계\s*(\S+)\s*자본금\s*(\S+)'
+                   r'.*?매출액\s*\(원\)\s*(\S+)\s*주요사업\s*(.+?)\s*분할\s*후\s*상장유지\s*여부\s*(\S+)', t)
+    if ms:
+        name, a, l_, e, _cap, sales, _biz, keep = ms.groups()
+        st = ' · 상장유지 예' if keep.startswith(('예', 'Y')) else (' · 상장유지 아니오' if keep.startswith(('아니', 'N')) else '')
+        lines.append(f'🏢 존속: {_trunc_clean(name, 60)}{st}')
+        fin = [x for x in (_split_money('자산', a), _split_money('부채', l_), _split_money('자본', e),
+                           _split_money('매출', sales)) if x]
+        if fin:
+            lines.append('     ' + ' · '.join(fin))
+
+    # 신설회사(복수 가능)
+    for mn in re.finditer(r'분할\s*설립회사\s*회사명\s*(.+?)\s*(?:설립시\s*재무내용\s*\(원\)\s*'
+                          r'자산총계\s*(\S+)\s*부채총계\s*(\S+)\s*자본총계\s*(\S+)\s*)?자본금\s*\(?원?\)?\s*(\S+)'
+                          r'(?:.*?매출액\s*\(원\)\s*(\S+))?\s*주요사업\s*(.+?)\s*'
+                          r'(?:재상장\s*신청\s*여부\s*(\S+)|\d{1,2}\.\s*감자에)', t):
+        name, a, l_, e, cap, sales, biz, relist = mn.groups()
+        st = ''
+        if relist:
+            st = ' · 재상장 신청' if relist.startswith(('예', 'Y')) else ' · 재상장 신청 안 함'
+        lines.append(f'🆕 신설: {_trunc_clean(name, 60)}{st}')
+        fin = [x for x in (_split_money('자산', a), _split_money('부채', l_), _split_money('자본', e),
+                           _split_money('매출', sales)) if x] or [x for x in (_split_money('자본금', cap),) if x]
+        if fin:
+            lines.append('     ' + ' · '.join(fin))
+        lines.append(f'     사업: {_trunc_clean(biz, 120)}')
+        if len(lines) > 8:
+            break
+
+    # 일정
+    sched = []
+    _DT = r'(\d{4}\s*[년.\-]\s*\d{1,2}\s*[월.\-]\s*\d{1,2})'
+    # 라벨 첫 등장은 '분할기일 현재 …' 같은 문장일 수 있어 날짜가 바로 붙은 첫 위치를 사용
+    if m_ := re.search(r'주주총회\s*예정일(?:자)?\s*' + _DT, t):
+        sched.append(f'주총 {_split_ymd(m_.group(1))}')
+    if m_ := re.search(r'분할기일\s*(?:은|:)?\s*(?:\(예정\)\s*)?' + _DT, t):
+        sched.append(f'분할기일 {_split_ymd(m_.group(1))}')
+    mh = re.search(r'매매거래정지\s*예정기간\s*시작일\s*(\S+\s*\S*\s*\S*)\s*종료일\s*(\S+\s*\S*\s*\S*)', t)
+    if mh and _split_ymd(mh.group(1)) and _split_ymd(mh.group(2)):
+        sched.append(f'거래정지 {_split_ymd(mh.group(1))}~{_split_ymd(mh.group(2))}')
+    if sched:
+        lines.append('📅 ' + ' · '.join(sched))
+
+    # 목적 — 국문 '분할목적' 섹션 첫 문장(영문 키 값도 국문)
+    pur = _get(kv, 'Purpose of split-off', '분할목적')
+    if not pur:
+        mp = re.search(r'분할\s*목적\s*(.+?)\s*3\.\s*분할의\s*중요', t)
+        pur = mp.group(1) if mp else ''
+    pur = re.sub(r'^\(?1\)\s*', '', re.sub(r'\s+', ' ', pur or '')).strip()
+    if pur:
+        first = re.split(r'(?<=다\.)\s', pur)[0]
+        lines.append(f'🎯 목적: {_trunc_clean(first, 200)}')
     return lines if len(lines) > 1 else []

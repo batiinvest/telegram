@@ -603,10 +603,24 @@ def parse_share_transfer(kv: dict) -> list:
         if buyer:
             lines.append(f'  양수인: {_trunc(buyer, 30)}')
 
+    # 정확 키 우선 + 값 형식 검증 — _get은 '정정후_' 키를 우선하는데, 정정표의 합성행
+    # ('정정후_3. 변경예정 최대주주 -변경 예정일자 -예정 소유주식수(주) -예정 소유비율(%)' =
+    # '(주)성진홀딩스 2026-10-08 5,005,050 18.24')을 집어 숫자만 이어붙인
+    # '변경후 지분: 2,026,100,850,050,501,824주'가 나가던 문제(파인테크닉스 2026-09-30).
+    def _val(pat, *keys):
+        for k in keys:
+            v = (kv.get(k) or '').strip()
+            if v and re.fullmatch(pat, v):
+                return v
+        v = (_get(kv, *keys) or '').strip()
+        return v if v and re.fullmatch(pat, v) else None
+
+    _N, _R, _D = r'[\d,]+', r'[\d.]+', r'\d{4}[-.]\d{2}[-.]\d{2}\.?'
+
     # 거래 규모
-    shares = _get(kv, '양수도 주식수(주)', '양수도주식수')
-    price  = _get(kv, '1주당 가액(원)', '1주당가액')
-    amount = _get(kv, '양수도 대금(원)', '양수도대금')
+    shares = _val(_N, '-양수도 주식수(주)', '양수도 주식수(주)', '양수도주식수')
+    price  = _val(r'[\d,.]+', '-1주당 가액(원)', '1주당 가액(원)', '1주당가액')
+    amount = _val(_N, '-양수도 대금(원)', '양수도 대금(원)', '양수도대금')
     if shares and re.search(r'\d', shares):
         ps = f' (주당 {price}원)' if price else ''
         lines.append(f'🔢 양수도 주식: {int(re.sub(r"[^0-9]", "", shares)):,}주{ps}')
@@ -614,8 +628,8 @@ def parse_share_transfer(kv: dict) -> list:
         lines.append(f'💰 양수도 대금: {_fmt_amount(amount)}원')
 
     # 변경 후 지분 (양수인 인수 후)
-    a_sh = _get(kv, '-예정 소유주식수(주)', '예정 소유주식수')
-    a_rt = _get(kv, '-예정 소유비율(%)', '예정 소유비율')
+    a_sh = _val(_N, '-예정 소유주식수(주)', '예정 소유주식수')
+    a_rt = _val(_R, '-예정 소유비율(%)', '예정 소유비율')
     if a_sh or a_rt:
         parts = []
         if a_sh and re.search(r'\d', a_sh):
@@ -625,9 +639,9 @@ def parse_share_transfer(kv: dict) -> list:
         if parts:
             lines.append(f'📊 변경후 지분: {" / ".join(parts)}')
 
-    if v := _get(kv, '-변경 예정일자', '변경 예정일자'):
+    if v := _val(_D, '-변경 예정일자', '변경 예정일자'):
         lines.append(f'📅 변경예정일: {v}')
-    if v := _get(kv, '4. 계약일자', '계약일자'):
+    if v := _val(_D, '4. 계약일자', '계약일자'):
         lines.append(f'📝 계약일자: {v}')
     if v := _get(kv, '관련공시', '※관련공시', '※ 관련공시'):
         lines.append(f'🔗 관련: {_rel_text(v)}')
