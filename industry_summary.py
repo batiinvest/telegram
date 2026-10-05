@@ -14,6 +14,7 @@ market_data)를 얹는다.
   python3 industry_summary.py 2026-07-24 --sample 조선 반도체 바이오   # 개인방 샘플
 """
 import sys
+import html
 import datetime
 import logging
 
@@ -121,9 +122,15 @@ def _best_disc(discs):
     return min(discs, key=lambda x: _disc_rank(x.get('category'))) if discs else None
 
 
+def _e(s) -> str:
+    """텔레그램 HTML 본문용 이스케이프 — 뉴스 제목의 '<편집자주>'·종목명 'F&F' 등이 태그·엔티티로
+    오인돼 메시지 전체가 평문으로 떨어지지 않게(news_main 발송과 같은 처리)."""
+    return html.escape(str(s or ''), quote=False)
+
+
 def _highlight(row) -> str | None:
     """daily_summaries 한 종목 → 재료 한 줄."""
-    corp = row['corp_name']
+    corp = _e(row['corp_name'])
     items = row.get('items') or {}
     news = items.get('news') or []
     discs = items.get('disclosures') or []
@@ -132,7 +139,8 @@ def _highlight(row) -> str | None:
     if news:
         n = news[0]
         more = f" <i>· {n['sources']}개 매체</i>" if n.get('sources', 1) > 1 else ""
-        return f"<b>{corp}</b> · <a href='{n['link']}'>{n['title']}</a>{more}"
+        href = html.escape(n.get('link') or '', quote=True)
+        return f"<b>{corp}</b> · <a href='{href}'>{_e(n.get('title'))}</a>{more}"
 
     # 뉴스 없으면 티어 최상위 공시
     d = _best_disc(discs)
@@ -140,7 +148,7 @@ def _highlight(row) -> str | None:
         rno = d.get('rcept_no')
         link = f" <a href='{DART_URL.format(rno)}'>DART</a>" if rno else ""
         nm = ' '.join((d.get('report_nm') or '').split())   # 내부 공백 정리
-        return f"<b>{corp}</b> · [{d.get('category')}] {nm}{link}"
+        return f"<b>{corp}</b> · [{_e(d.get('category'))}] {_e(nm)}{link}"
     return None
 
 
@@ -204,15 +212,15 @@ def build_message(industry, date_obj, sector, movers, summ_rows) -> str:
 
     # 거래대금 상위
     if by_tv and (by_tv[0].get('tv') or 0) > 0:
-        tv3 = " · ".join(f"{m['name']} {fmt_won(m['tv'])}" for m in by_tv[:3] if (m.get('tv') or 0) > 0)
+        tv3 = " · ".join(f"{_e(m['name'])} {fmt_won(m['tv'])}" for m in by_tv[:3] if (m.get('tv') or 0) > 0)
         L.append(f"💵 거래대금  {tv3}")
 
     # 상승/하락
     L.append("")
     if up:
-        L.append("🔴 " + "  ".join(f"{m['name']} {fmt_pct(m['chg'])}" for m in by_chg[:3] if (m['chg'] or 0) > 0))
+        L.append("🔴 " + "  ".join(f"{_e(m['name'])} {fmt_pct(m['chg'])}" for m in by_chg[:3] if (m['chg'] or 0) > 0))
     if dn:
-        L.append("🔵 " + "  ".join(f"{m['name']} {fmt_pct(m['chg'])}" for m in by_chg[::-1][:3] if (m['chg'] or 0) < 0))
+        L.append("🔵 " + "  ".join(f"{_e(m['name'])} {fmt_pct(m['chg'])}" for m in by_chg[::-1][:3] if (m['chg'] or 0) < 0))
 
     # 오늘의 공시·뉴스 (종목 리포트 카드와 용어 통일)
     L.append("")

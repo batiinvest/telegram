@@ -679,12 +679,17 @@ class NaverNewsBot:
                         if price_info:
                             stock_msg = f"{price_info}\n"
 
-                    hidden_link = f"<a href='{link}'>&#8203;</a>"
+                    # 제목·요약은 clean_text가 HTML 엔티티를 푼 원문이라 '<편집자주>'·'<비즈니스포스트>'
+                    # 같은 꺾쇠가 그대로 있다. parse_mode=HTML이라 이스케이프 안 하면 텔레그램이 태그로
+                    # 오인해 400 → 평문 재전송(링크·굵게 소실). 9/16~10/5 실측 41건 전부 이 경우.
+                    # (stock_msg는 내부에서 HTML로 만든 시세 문자열이라 그대로)
+                    l_attr = html.escape(link, quote=True)
+                    hidden_link = f"<a href='{l_attr}'>&#8203;</a>"
                     msg = (
                         f"{hidden_link}"
-                        f"🏢 <b>[{company_name}] ({time_str})</b>\n{stock_msg}"
-                        f"<b><a href='{link}'>{title}</a></b>\n\n"
-                        f"📄 {desc}..."
+                        f"🏢 <b>[{html.escape(company_name, quote=False)}] ({time_str})</b>\n{stock_msg}"
+                        f"<b><a href='{l_attr}'>{html.escape(title, quote=False)}</a></b>\n\n"
+                        f"📄 {html.escape(desc, quote=False)}..."
                     )
 
                     industry = COMPANY_TO_INDUSTRY.get(company_name)
