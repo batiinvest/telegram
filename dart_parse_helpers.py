@@ -276,6 +276,8 @@ def _get_body(kv: dict, *keys: str) -> str | None:
 _DIFF_SPLIT = re.compile(
     # 번호('1. '·'2) ')·한글 순번('가. ')·'※' — 앞 공백 직전이 '숫자.'면 제외('2026. 9. 13.' 날짜 보호)
     r'(?:^|(?<!\d\.)\s+)(?:-\s*)?(?:\d{1,2}[.)）](?!\d)|[가나다라마바사아자차카타파하][.)]|※\.?)\s*'
+    # 공백 없이 붙은 번호('…중요사항1) 합병…', '…입니다.2) 상기…') — 띄어 쓴 쪽과 분절 기준을 맞춤
+    r'|(?<=[가-힣])\d{1,2}\)\s*|(?<=[가-힣]\.)\d{1,2}\)\s*'
     # 대시 불릿 — 뒤가 공백·한글·괄호일 때만('-\'주식수' 표 셀·'-18회차' 보호), 콜론 뒤 값 대시는 제외
     r'|(?:^|(?<!:)\s+)-(?=\s|[가-힣(㈜])\s*'
     # 문장 끝
@@ -299,7 +301,8 @@ def _diff_segments(text: str) -> list[str]:
     return segs
 
 
-def _prose_diff(field: str, old: str, new: str, full: str = '') -> str:
+def _prose_diff(field: str, old: str, new: str, full: str = '', max_seg: int = 4,
+                seg_len: int = 250) -> str:
     """긴 서술형 정정 → 바뀐 항목/문장만 '[전]'/'[후]' 줄로(공통 문장은 생략).
     'old → new' 한 줄(양쪽 60자 절단)로는 무엇이 바뀌었는지 알 수 없던 문제 대응.
 
@@ -326,9 +329,9 @@ def _prose_diff(field: str, old: str, new: str, full: str = '') -> str:
         return ''
     out = [f'🔧 {field or "변경"}:']
     for tag, segs in (('전', rem), ('후', add)):
-        out += [f'    [{tag}] {_trunc_clean(s, 250)}' for s in segs[:4]]
-        if len(segs) > 4:
-            out.append(f'    [{tag}] …외 {len(segs) - 4}건')
+        out += [f'    [{tag}] {_trunc_clean(s, seg_len)}' for s in segs[:max_seg]]
+        if len(segs) > max_seg:
+            out.append(f'    [{tag}] …외 {len(segs) - max_seg}건')
     return '\n'.join(out)
 
 

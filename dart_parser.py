@@ -157,7 +157,10 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
                 has_changes = any(l.startswith('🔧') for l in lines)
                 lines.insert(0, '🔄 정정 내용')
                 # 카테고리 파서 또는 범용 파서로 원문 내용 추가
-                sub = _run_chain()[1] or (parse_all_fields(kv) if not has_changes else None)
+                # 금감원 서식(정정대상 공시서류)은 전용 파서가 없으면 헤더가 있어도 범용 본문 유지 —
+                # 의결권대리행사권유·증권신고서 등에서 일시·장소·전자투표 기간이 사라지지 않도록
+                _fss = any('정정대상 공시서류' in k for k in kv)
+                sub = _run_chain()[1] or (parse_all_fields(kv) if (not has_changes or _fss) else None)
                 if sub:
                     # 정정사유가 원공시 블록의 '사유' 필드로 중복 노출되는 것 제거
                     # (예: 정정 내용 '📋 사유: 오기 정정' + 시장조치 '🚨 사유: 오기 정정')

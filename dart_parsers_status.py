@@ -190,6 +190,12 @@ def parse_amendment(kv: dict) -> list:
       패턴 B: "N. 섹션명": 부모헤더  +  "- 필드명: OLD": "- 필드명: NEW"
       패턴 C: "정정전_필드명": OLD  +  "정정후_필드명": NEW  (접두어 방식)
     """
+    # 금감원 서식(주요사항보고서·증권신고서 등: '정정대상 공시서류 :' + [항목|정정사유|정정전|정정후] 표)
+    # — 아래 거래소 서식 로직은 이 표를 못 읽어 헤더 없이 본문만 나가던 문제(무엇이 정정됐는지 미표시)
+    if any('정정대상 공시서류' in k for k in kv):
+        if fss := _fss_amendment(kv):
+            return fss
+
     lines = []
 
     # ── 원공시 + 정정사유 ──────────────────────────────
@@ -347,6 +353,188 @@ def parse_amendment(kv: dict) -> list:
         break  # 정정 섹션 끝
 
     lines.extend(change_lines)
+    return lines
+
+
+_FSS_REF = re.compile(r'[<(（]?\s*주?\s*\d+(?:-\d+)?\s*[>)）]\s*(?:정정\s*[전후]|참조)?'
+                      r'|정정\s*[전후]\s*[<(（]?\s*주?\s*\d+(?:-\d+)?\s*[>)）]?'
+                      r'|\[?\s*변경\s*[전후]\s*\]?|주\s*\d+(?:-\d+)?')
+
+
+def _fss_is_ref(v: str) -> bool:
+    """정정전/후 칸이 본문 주석 참조('<주1> 정정 전', '1) 정정 후', '주2) 참조')인지."""
+    v = (v or '').strip()
+    return bool(v) and (bool(_FSS_REF.fullmatch(v)) or (len(v) <= 20 and v.endswith('참조')))
+
+
+def _fss_ref_texts(full: str, start: int, ref_b: str, ref_a: str, doc: str = ''):
+    """표 뒤 본문에서 '1) 정정 전 …(구) 1) 정정 후 …(신) 2) 정정 전'의 구·신 텍스트. 없으면 None."""
+    def lab(r):
+        return re.compile(r'[\s\-:：]*'.join(re.escape(ch) for ch in re.sub(r'\s+', '', r)))
+    # 표 안의 참조 셀('(주1) 정정 전 | (주1) 정정 후')은 사이 글이 없음 — 본문 주석이 나올 때까지 다음 위치로
+    for _ in range(4):
+        mb = lab(ref_b).search(full, start)
+        if not mb:
+            return None
+        ma = lab(ref_a).search(full, mb.end())
+        if not ma:
+            return None
+        if ma.start() - mb.end() >= 5:
+            break
+        start = ma.end()
+    else:
+        return None
+    nxt = re.compile(r'(?:[<(（]\s*주\s*\d+(?:-\d+)?\s*[>)）]|주\s*\d+(?:-\d+)?\)|(?<![\d.])\d{1,2}\))\s*정정\s*전'
+                     r'|정정\s*전\s*[<(（]?\s*주?\s*\d+')
+    mn = nxt.search(full, ma.end())
+    # 마지막 주석은 다음 참조가 없어 본문 서식까지 이어짐 — 서식 머리말 또는 구 문구 길이 비례로 끝냄
+    md = re.compile(r'주요사항보고서\s*/\s*거래소|금융위원회\s*(?:/\s*한국거래소\s*)?귀중|금융감독원장\s*귀하'
+                    ).search(full, ma.end())
+    cap = ma.end() + int((ma.start() - mb.end()) * 1.6) + 300
+    ends = [mn.start() if mn else len(full), md.start() if md else len(full), cap, len(full)]
+    if doc:      # 본 서류 제목('주식매수선택권 부여에 관한 신고')이 나오면 본문 시작
+        key = re.sub(r'\s+', '', re.sub(r'\(.*$', '', doc))[:8]
+        if len(key) >= 4:
+            mt = re.compile(r'\s*'.join(map(re.escape, key))).search(full, ma.end())
+            if mt:
+                ends.append(mt.start())
+    end = min(ends)
+    strip_lab = lambda x: re.sub(r'^[\s:：\-]*정정\s*[전후][\s:：\-]*', '', x).strip()   # 남은 ': 정정전-' 라벨
+    old, new = strip_lab(full[mb.end():ma.start()]), strip_lab(full[ma.end():end])
+    return (old, new) if old or new else None
+
+
+def _table_grid(tbl) -> list:
+    """HTML 표 → 2차원 격자(rowspan·colspan 반영, 병합 칸은 같은 텍스트 반복). 중첩 표 제외."""
+    grid, pending = [], {}
+    for tr in [tr for tr in tbl.find_all('tr') if tr.find_parent('table') is tbl]:
+        cells = tr.find_all(['td', 'th'], recursive=False)
+        out, col, k = {}, 0, 0
+        while True:
+            if col in pending:
+                rem, txt = pending[col]
+                out[col] = txt
+                if rem <= 1:
+                    del pending[col]
+                else:
+                    pending[col] = (rem - 1, txt)
+                col += 1
+                continue
+            if k < len(cells):
+                c = cells[k]
+                k += 1
+                txt = re.sub(r'\s+', ' ', c.get_text(' ')).strip()
+                try:
+                    cs = max(1, int(c.get('colspan') or 1))
+                    rs = max(1, int(c.get('rowspan') or 1))
+                except ValueError:
+                    cs = rs = 1
+                for j in range(cs):
+                    out[col + j] = txt
+                    if rs > 1:
+                        pending[col + j] = (rs - 1, txt)
+                col += cs
+                continue
+            if any(c_ > col for c_ in pending):
+                col += 1
+                continue
+            break
+        grid.append([out.get(i, '') for i in range(max(out) + 1)] if out else [])
+    return grid
+
+
+def _fss_amendment(kv: dict) -> list:
+    """금감원 서식 [기재정정] 헤더 — 📄 대상 서류(최초 제출일) · 📋 사유 · 🔧 항목별 변경.
+
+    정정표 [항목|정정사유|정정전|정정후]는 같은 사유가 rowspan으로 병합돼 이어지는 행의 칸
+    수가 1 적고, 주석 참조('1) 정정 전')는 표 아래 본문에 구·신 문구가 따로 있다 — colspan으로
+    칸을 정렬하고 참조는 본문에서 찾아 바뀐 문장만 [전]/[후]로."""
+    from bs4 import BeautifulSoup
+    lines = []
+    doc = next((v for k, v in kv.items() if '정정대상 공시서류' in k and '최초' not in k and v), None)
+    date = next((v for k, v in kv.items() if '최초제출일' in k and v), None)
+    if date and (md := re.search(r'(\d{4})\s*[년.\-]\s*(\d{1,2})\s*[월.\-]\s*(\d{1,2})', date)):
+        date = f'{md.group(1)}-{int(md.group(2)):02d}-{int(md.group(3)):02d}'
+    if doc:
+        doc = re.sub(r'[:：]\s*$', '', doc.strip())
+        lines.append(f'📄 {_trunc_clean(doc, 80)}' + (f' (최초 {date})' if date else ''))
+
+    raw = kv.get('_html', '')
+    if not raw:
+        return lines
+    soup = BeautifulSoup(raw, 'html.parser')
+    tbl = None
+    for tb in soup.find_all('table'):
+        rows_ = [tr for tr in tb.find_all('tr') if tr.find_parent('table') is tb]
+        if rows_:
+            h0 = re.sub(r'\s+', '', rows_[0].get_text(' '))
+            if '항목' in h0 and '정정전' in h0 and '정정후' in h0:
+                tbl = tb
+                break
+    if not tbl:
+        return lines
+    grid = _table_grid(tbl)
+    hdr = [re.sub(r'\s+', '', c) for c in grid[0]]
+    it_cols = [i for i, h in enumerate(hdr) if h == '항목']
+    i_b = next((i for i, h in enumerate(hdr) if h == '정정전'), None)
+    i_a = next((i for i, h in enumerate(hdr) if h == '정정후'), None)
+    i_rs = next((i for i, h in enumerate(hdr) if '정정사유' in h), None)
+    if not it_cols or i_b is None or i_a is None:
+        return lines
+
+    full = re.sub(r'\s+', ' ', soup.get_text(' '))
+    ttxt = re.sub(r'\s+', ' ', tbl.get_text(' ')).strip()
+    p = full.find(ttxt[-80:]) if ttxt else -1
+    after_tbl = p + 80 if p >= 0 else 0
+
+    entries, reasons, section = [], [], ''
+    need = max(it_cols + [i_b, i_a] + ([i_rs] if i_rs is not None else []))
+    for row in grid[1:]:
+        if row and len(set(row)) == 1:                       # 섹션 머리행(전폭 병합)
+            section = re.sub(r'^\s*\d{1,2}\.\s*', '', row[0])[:30]
+            continue
+        if len(row) <= need:
+            continue
+        item = ' '.join(dict.fromkeys(x for x in (row[i] for i in it_cols) if x))
+        if len(re.sub(r'[\s.]', '', item)) <= 2 and section:
+            item = f'{section} {item}'
+        b, a = row[i_b], row[i_a]
+        rs = row[i_rs] if i_rs is not None else ''
+        if rs and rs not in reasons and rs not in ('-', ''):
+            reasons.append(rs)
+        if not item or (b == a and not _fss_is_ref(b)):
+            continue
+        entries.append((re.sub(r'^\s*\d{1,2}\.\s*', '', item), b, a))
+
+    if reasons:
+        shown = ' · '.join(_trunc_clean(r, 60) for r in reasons[:2])
+        lines.append(f'📋 사유: {shown}' + (f' 외 {len(reasons) - 2}건' if len(reasons) > 2 else ''))
+
+    shown = 0
+    for item, b, a in entries[:6]:
+        it = _trunc_clean(item, 40)
+        bb, aa = b.strip(), a.strip()
+        if _fss_is_ref(bb) or _fss_is_ref(aa):
+            got = _fss_ref_texts(full, after_tbl, bb, aa, doc or '') if bb != aa else None
+            pd = _prose_diff(it, got[0], got[1], max_seg=3, seg_len=200) if got else ''
+            lines.append(pd or f'🔧 {it}: 세부 내용 원문 참조({_trunc(aa or bb, 20)})')
+        elif bb in ('-', '') and aa not in ('-', ''):
+            if '첨부' in aa:
+                lines.append(f'🔧 {it}: 첨부 추가')
+            else:
+                lines.append(f'🔧 {it}: 내용 추가 — {_trunc_clean(aa, 200)}')
+        elif aa in ('-', '') and bb not in ('-', ''):
+            lines.append(f'🔧 {it}: 삭제 — {_trunc_clean(bb, 150)}')
+        elif max(len(bb), len(aa)) <= 60:
+            lines.append(f'🔧 {it}: {bb} → {aa}')
+        else:
+            lines.append(_prose_diff(it, bb, aa, max_seg=3, seg_len=200)
+                         or f'🔧 {it}: {_trunc_clean(bb, 80)} → {_trunc_clean(aa, 80)}')
+        shown += 1
+        if sum(len(x) for x in lines) > 2200:      # 대형 신고서 정정(수십 항목·표 덤프) 길이 상한
+            break
+    if len(entries) > shown:
+        lines.append(f'🔧 …외 {len(entries) - shown}개 항목')
     return lines
 
 
