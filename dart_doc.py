@@ -418,8 +418,11 @@ def _build_kv(html: str) -> dict:
                 pass
         return v
 
-    # 기재정정 공시에서 [항목 | 정정전 | 정정후] 3컬럼 테이블 헤더를 만나면 True
+    # 기재정정 공시에서 [항목 | 정정전 | 정정후] 3컬럼 테이블 헤더를 만나면 True — 그 표를 벗어나면
+    # 해제(예전엔 끝까지 유지돼 본문의 [구분|내용|이유] 3열 표까지 정정전_/정정후_로 저장 →
+    # 대구백화점 소집결의 정정에 없던 '🔧 추가: 사업목적 27건 → 신규사업 계획에 따른…' 오표시)
     _in_amendment_cols = False
+    _amend_table = None
 
     for row in soup.find_all('tr'):
         tds = row.find_all(['td', 'th'])
@@ -478,6 +481,8 @@ def _build_kv(html: str) -> dict:
             cells = [_cell_text(c) for c in tds]
             cells = [c for c in cells if c]
             n = len(cells)
+            if _in_amendment_cols and row.find_parent('table') is not _amend_table:
+                _in_amendment_cols = False
             if n == 2:
                 if cells[0] and cells[1]:
                     kv[cells[0]] = cells[1]
@@ -485,6 +490,7 @@ def _build_kv(html: str) -> dict:
                 # [항목 | 정정전 | 정정후] 헤더 감지
                 if '정정전' in cells and '정정후' in cells:
                     _in_amendment_cols = True
+                    _amend_table = row.find_parent('table')
                 elif _in_amendment_cols and cells[0] and (cells[1] or cells[2]):
                     # 정정전/후 데이터 행: 정정전_필드명 / 정정후_필드명 키로 저장
                     field = cells[0]
@@ -561,6 +567,8 @@ _SKIP_KEY_PATTERNS = [
     '참석여부', '불참', '공정거래위원회', '공시유보', '유보사유', '대규모법인여부',
     # 기재정정 헤더 필드 — parse_amendment가 📄/📋로 이미 표시 (sub 출력 중복 방지)
     '정정관련', '정정사유', '정정일자',
+    # 서식 머리말 — '금융위원회 / 한국거래소 귀중', '회 사 명 :', '(직 책) 상 무: (성 명) …'
+    '귀중', '귀하', '회사명:', '(직책)', '(성명)',
 ]
 
 # 출력 제외할 값
@@ -571,7 +579,7 @@ _SKIP_VALUES = frozenset([
 ])
 
 # 값 최대 길이 (Telegram 메시지 길이 고려)
-_MAX_VAL_LEN = 100
+_MAX_VAL_LEN = 250
 
 # 텔레그램 메시지 전체 최대 필드 수
 _MAX_FIELDS = 20
@@ -603,6 +611,38 @@ def _is_header_val(v: str) -> bool:
     return bool(toks) and all(any(h in t for h in _HEADERISH) for t in toks)
 
 
+# 다열 표의 컬럼 라벨이 값 자리로 밀려든 행('행사가격: 행사기간', '인수인: 증권의종류',
+# '성명: 최대주주와의 관계') 판정용 라벨 어미
+_LABEL_SUFFIX = ('일자', '개시일', '종료일', '납입일', '기준일', '시작일', '공고일', '예정일',
+                 '기일', '금액', '총액', '가액', '가격', '수량', '주식수', '증권수', '총수', '건수',
+                 '비율', '비중', '방법', '목적', '종류', '기간', '조건', '현황', '구분', '관계', '비고',
+                 '대표자', '법인명', '회사명', '성명', '종목명', '명칭', '내용', '범위', '소재지',
+                 '이자율', '수익률', '단가', '대가', '회차', '기타', '소유수', '보증료', '분담금',
+                 '기관', '항목', '정정후', '정정전', '경력', '사유', '여부')
+
+
+def _is_label_val(v: str) -> bool:
+    """값이 실데이터가 아니라 컬럼 라벨인지 — 숫자 없고 20자 이하이며, 순번 표지('가. ')를
+    뗀 뒤 라벨형 어미로 끝날 때만('공모'·'계열회사'·'장내매수' 같은 실값은 통과)."""
+    if len(v) > 20 or re.search(r'\d', v):
+        return False
+    c = re.sub(r'\s+', '', re.sub(r'^(?:[가나다라마바사아자차카타파하][.)]|\(?[ivx]+\))\s*', '', v))
+    return c.endswith(_LABEL_SUFFIX)
+
+
+def _doc_unit(kv: dict):
+    """공정거래법 기업집단 공시('기업집단명' 키)의 금액 단위 — 문서 내 '단위 : 백만원' 등이
+    한 종류일 때만(표마다 단위가 다른 문서는 오표기 위험이라 None)."""
+    if not any('기업집단명' in k for k in kv):
+        return None
+    txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', kv.get('_html', '')))
+    units = {u + '원' for u in re.findall(r'단위\s*[:：]\s*(백만|억|천)\s*원', txt)}   # '(단위 : 백만 원)'
+    return units.pop() if len(units) == 1 else None
+
+
+_UNIT_MUL = {'백만원': 1_000_000, '억원': 100_000_000, '천원': 1_000}
+
+
 def parse_all_fields(kv: dict) -> list:
     """
     범용 파서: DART HTML 테이블에서 추출한 전체 KV를 정리해 반환.
@@ -616,6 +656,7 @@ def parse_all_fields(kv: dict) -> list:
     seen_vals: set = set()
     # 정규화 키 집합 — "값이 다른 행의 키와 동일" = 컬럼 헤더 짝밀림 판정용
     key_set = {re.sub(r'\s+', ' ', k).strip() for k in kv if not k.startswith('_')}
+    unit = _doc_unit(kv)
 
     for k, v in kv.items():
         # 내부 키(_html·_rcept_no 등) 노출 방지
@@ -643,7 +684,7 @@ def parse_all_fields(kv: dict) -> list:
         if re.match(r'^[\d,.\s\-/%()~:]+$', k):
             continue
         # 표 짝밀림 행 제외 ②: 값이 컬럼 헤더인 경우 ('결산기간: 당해사업연도 직전사업연도')
-        if _is_header_val(v):
+        if _is_header_val(v) or _is_label_val(v):
             continue
         # 표 짝밀림 행 제외 ③: 순한글 라벨값이 다른 행의 키와 동일
         # ('6. 합병상대회사: 회사명' — 실데이터는 '회사명: …' 행에 별도 존재)
@@ -663,9 +704,15 @@ def parse_all_fields(kv: dict) -> list:
             continue
         seen_vals.add(v_norm)
 
-        # 너무 긴 값 truncate
+        # 기업집단 공시 금액 — 단위 없는 숫자('양도가액: 14,135')에 문서 단위·억 환산 부기
+        if unit and re.search(r'금액|가액', k) and re.fullmatch(r'[\d,]+', v):
+            n = int(v.replace(',', '')) * _UNIT_MUL[unit]
+            eok = f'{n / 100_000_000:,.0f}억원' if n >= 100_000_000 else f'{n:,}원'
+            v = f'{v}{unit} ({eok})'
+
+        # 너무 긴 값 — 문장경계 절단(숫자·괄호 중간 절단 방지)
         if len(v) > _MAX_VAL_LEN:
-            v = v[:_MAX_VAL_LEN] + '…'
+            v = _trunc_clean(v, _MAX_VAL_LEN)
 
         lines.append(f'{k}: {v}')
 

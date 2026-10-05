@@ -330,7 +330,7 @@ def parse_rights_exercise(kv: dict) -> list:
 
     # 관련공시
     if v := _get(kv, '※관련공시', '※ 관련공시', '관련공시'):
-        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+        lines.append(f'🔗 관련: {_rel_text(v)}')
 
     return lines
 
@@ -646,7 +646,7 @@ def parse_merger(kv: dict) -> list:
         lines.append(f'📊 합병비율 {a} : {b}' + (' · 무증자(신주 미발행)' if noshare else ''))
 
     if v := _get(kv, '2. Purpose of merger', 'Purpose of merger'):
-        lines.append(f'🎯 목적: {_trunc_clean(v, 60)}')
+        lines.append(f'🎯 목적: {_trunc_clean(v, 150)}')
     if v := _get(kv, '합병기일', 'Merger date'):
         lines.append(f'📅 합병기일: {v}')
 
@@ -688,4 +688,83 @@ def parse_offering_price(kv: dict) -> list:
         if m:
             lines.append(f'📋 확정발행가: {m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d} 공고 예정')
 
+    return lines if len(lines) > 1 else []
+
+
+def _kstart(k: str) -> str:
+    """키 정규화 — 앞 번호('1. '·'가. ')·공백·콜론 제거."""
+    k = re.sub(r'^\s*(?:\d+\.|[가-하]\.)\s*', '', k)
+    return re.sub(r'[\s:：]', '', k)
+
+
+def _kv_start(kv: dict, *names: str, ok=None):
+    """정규화 키가 항목명으로 '시작'하는 첫 값(ok 검사 통과분) — '표지-모집 또는 매출…'·
+    '[청약권유 인쇄물] 납입기일' 같은 정정표 행, 정관 조문 키에 걸리지 않도록."""
+    for name in names:
+        nm = re.sub(r'\s', '', name)
+        for k, v in kv.items():
+            if k.startswith('_') or k.startswith(('정정전', '정정후')):
+                continue
+            if _kstart(k).startswith(nm):
+                v = re.sub(r'\s+', ' ', v or '').strip()
+                if v and (ok is None or ok(v)):
+                    return v
+    return None
+
+
+def _first_num(kv: dict, *keys: str):
+    """후보 항목(키 시작 일치) 순서대로, 4자리 이상 숫자가 있는 첫 값의 최대 수치."""
+    v = _kv_start(kv, *keys, ok=lambda x: bool(re.search(r'\d[\d,]{3,}', x)))
+    if v:
+        return max(int(x.replace(',', '')) for x in re.findall(r'\d[\d,]{3,}', v))
+    return None
+
+
+def _date_part(v: str):
+    """'종목명 : 2026년 10월 16일 (…)' → 첫 날짜부터(80자 이내 값만)."""
+    if not v or len(v) > 120:
+        return None
+    m = re.search(r'\d{4}\s*년.*|\d{4}[.-]\d{1,2}[.-]\d{1,2}.*', v)
+    return _trunc_clean(m.group(0).strip(), 80) if m else None
+
+
+def parse_offering_doc(kv: dict) -> list:
+    """투자설명서·일괄신고추가서류·증권발행실적보고서·소액공모공시서류 — 무엇을·얼마나·언제.
+    범용 폴백이 ELS/DLS 약관(거래소·교란일…)·위험등급표·컬럼 헤더 짝('행사가격: 행사기간')을
+    20줄 덤프하던 문제 — 종목·모집총액·청약/납입·(채권)수익률·상환일·신용등급만."""
+    lines = []
+    name = None
+    for k, v in kv.items():
+        if '종목명' in k and k.lstrip().startswith('['):
+            m = re.search(r'종목명\s*[:：]*\s*([^\]]+)', f'{k} {v}')
+            if m:
+                name = re.sub(r'\(\s*단위\s*[:：][^)]*\)', '', m.group(1)).strip(' :')
+                break
+    if not name:
+        name = _kv_start(kv, '모집 또는 매출 증권의 종류', ok=lambda x: len(x) <= 150)
+    if not name and (dn := _kv_start(kv, '채무증권 명칭')):
+        rnd = _kv_start(kv, '회차', ok=lambda x: len(x) <= 20)
+        name = f'{dn}' + (f' 제{rnd}회' if rnd else '')
+    if name:
+        lines.append(f'📄 종목: {_trunc_clean(name, 120)}')
+    total = _first_num(kv, '모집 또는 매출총액', '모집(매출)총액', '모집가액',
+                       'Total amount of offering', '모 집(a)')
+    if total:
+        lines.append(f'💰 모집총액: {_fmt_amount(str(total))}원')
+    if v := _kv_start(kv, '모집 또는 매출가액',
+                      ok=lambda x: len(x) <= 60 and bool(re.search(r'\d[\d,]*\s*원', x))):
+        lines.append(f'💵 발행가: {v}')
+    sub = _date_part(_kv_start(kv, '청약기간', '청약기일', ok=_date_part))
+    pay = _date_part(_kv_start(kv, '납입기일', '납입일', ok=_date_part))
+    if sub:
+        lines.append(f'📅 청약: {sub}' + (f' · 납입: {pay}' if pay else ''))
+    debt = []
+    if v := _kv_start(kv, '발행수익률', ok=lambda x: bool(re.fullmatch(r'[\d.]+', x))):
+        debt.append(f'수익률 {v}%')
+    if v := _date_part(_kv_start(kv, '상환기일', ok=_date_part)):
+        debt.append(f'상환 {v}')
+    if debt:
+        lines.append('📈 ' + ' · '.join(debt))
+    if v := _kv_start(kv, '신용등급', ok=lambda x: len(x) <= 120 and bool(re.search(r'\b[A-D]{1,3}[+-]?', x))):
+        lines.append(f'🏷 신용등급: {v}')
     return lines if len(lines) > 1 else []

@@ -35,7 +35,7 @@ def parse_equity_acquisition(kv: dict) -> list:
     _f(lines, kv, '📋 취득방법', '4. 취득방법', '취득방법', trunc=60)
     _f(lines, kv, '📋 목적', '5. 취득목적', '취득목적', trunc=60)
     _f(lines, kv, '📅 취득예정', '6. 취득예정일자', '취득예정일자')
-    _f(lines, kv, '🔗 관련', '※ 관련공시', '관련공시', trunc=50)
+    _f(lines, kv, '🔗 관련', '※ 관련공시', '관련공시', fmt=_rel_text)
 
     return lines
 
@@ -188,7 +188,7 @@ def parse_major_shareholder_change(kv: dict) -> list:
 
     # 관련공시
     if v := _get(kv, '관련공시', '※ 관련공시'):
-        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+        lines.append(f'🔗 관련: {_rel_text(v)}')
 
     return lines
 
@@ -229,22 +229,30 @@ def parse_insider_report(kv: dict) -> list:
 
     # 보고사유 + 변동일 (첫 데이터 행: '[사유] YYYY.MM.DD ...')
     reason, change_date = '', ''
-    m_row = re.match(r'\s*(.+?)\s+(\d{4}\.\d{2}\.\d{2})', detail)
+    # 날짜는 '2026.09.21'(구서식)·'2026년 09월 21일'(신서식) 모두, 수량 '-'는 0(신규보고의
+    # 변동전) — 신서식에서 둘 다 불일치해 보고자 한 줄만 나가던 문제(국민연금 2026-09-29 등 11건).
+    _D = r'\d{4}(?:\.\d{2}\.\d{2}|-\d{2}-\d{2}|년\s*\d{1,2}월\s*\d{1,2}일)'
+    _N = r'(-|[\d,]+)'
+    _M = r'(?:-?[\d,]+|-)'          # 증감(음수 가능)
+
+    def _n(s: str) -> int:
+        return 0 if s == '-' else int(s.replace(',', ''))
+
+    m_row = re.match(rf'\s*(.+?)\s+({_D})', detail)
     if m_row:
         reason = re.sub(r'\s*\([+\-]\)\s*$', '', m_row.group(1)).strip()
-        change_date = m_row.group(2).replace('.', '-')
+        _dm = re.match(r'(\d{4})\D+(\d{1,2})\D+(\d{1,2})', m_row.group(2))
+        change_date = f'{_dm.group(1)}-{int(_dm.group(2)):02d}-{int(_dm.group(3)):02d}'
 
     # 변동전 / 변동후 (합계 행 우선, 없으면 첫 데이터 행)
     prev = after = None
-    m_sum = re.search(r'합\s*계\s+([\d,]+)\s+[\d,]+\s+([\d,]+)', detail)
+    m_sum = re.search(rf'합\s*계\s+{_N}\s+{_M}\s+{_N}', detail)
     if m_sum:
-        prev  = int(m_sum.group(1).replace(',', ''))
-        after = int(m_sum.group(2).replace(',', ''))
+        prev, after = _n(m_sum.group(1)), _n(m_sum.group(2))
     else:
-        m_d = re.search(r'\d{4}\.\d{2}\.\d{2}\s+\S+\s+([\d,]+)\s+[\d,]+\s+([\d,]+)', detail)
+        m_d = re.search(rf'{_D}\s+\S+\s+{_N}\s+{_M}\s+{_N}', detail)
         if m_d:
-            prev  = int(m_d.group(1).replace(',', ''))
-            after = int(m_d.group(2).replace(',', ''))
+            prev, after = _n(m_d.group(1)), _n(m_d.group(2))
 
     if prev is not None and after is not None:
         change = after - prev
@@ -622,6 +630,6 @@ def parse_share_transfer(kv: dict) -> list:
     if v := _get(kv, '4. 계약일자', '계약일자'):
         lines.append(f'📝 계약일자: {v}')
     if v := _get(kv, '관련공시', '※관련공시', '※ 관련공시'):
-        lines.append(f'🔗 관련: {_trunc(v, 50)}')
+        lines.append(f'🔗 관련: {_rel_text(v)}')
 
     return lines

@@ -34,6 +34,13 @@ def _parse_ci_or_rights(kv: dict) -> list:
 
 
 _PARSER_MAP = [
+    # 문서 유형이 곧 이벤트인 제목은 최상단 — 뒤 괄호의 자유 텍스트('…(유상증자 추진설)',
+    # '…(배당 계획)')가 아래 키워드에 먼저 걸려 엉뚱한 파서로 새지 않도록.
+    (['조회공시요구'],                          parse_inquiry),
+    (['풍문또는보도에대한해명'],                 parse_rumor_reply),
+    (['수시공시의무관련사항'],                   parse_fair_disclosure),
+    (['영업정지'],                              parse_business_suspension),
+    (['투자설명서', '일괄신고추가서류', '증권발행실적보고서', '소액공모공시서류'], parse_offering_doc),
     # 거래정지·권리락은 최우선 — 제목 '(사유)'에 무상증자·유상증자·상장폐지 등이 붙어도
     # 주권매매거래정지/권리락은 항상 그 이벤트 (사유 파서로 새면 빈결과→폴백 노이즈)
     (['거래정지', '매매거래정지'],           parse_trading_halt),
@@ -99,7 +106,7 @@ _PARSER_MAP = [
     (['금전대여'],                            parse_money_lending),
     (['기업설명회', 'IR개최'],               parse_ir_event),
     (['주주총회결과'],                        parse_agm_result),
-    (['대표이사변경', '임원변경'],            parse_executive_change),
+    (['대표이사변경', '임원변경', '(대표집행임원)변경'], parse_executive_change),
     (['본점소재지변경'],                      parse_hq_relocation),
     (['사외이사의선임', '사외이사선임'],       parse_outside_director),
     (['기업가치제고'],                         parse_value_enhancement),

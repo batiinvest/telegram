@@ -279,7 +279,9 @@ _DIFF_SPLIT = re.compile(
     # 대시 불릿 — 뒤가 공백·한글·괄호일 때만('-\'주식수' 표 셀·'-18회차' 보호), 콜론 뒤 값 대시는 제외
     r'|(?:^|(?<!:)\s+)-(?=\s|[가-힣(㈜])\s*'
     # 문장 끝
-    r'|(?<=[다음함됨임]\.)\s+')
+    r'|(?<=[다음함됨임]\.)\s+'
+    # 담보·보증 내역 '[순번 N]' — 순번이 밀려도 같은 계약은 같은 조각(번호는 비교에서 제외)
+    r'|\s*\[\s*순번\s*\d+\s*\]\s*')
 
 
 def _diff_segments(text: str) -> list[str]:
@@ -314,11 +316,15 @@ def _prose_diff(field: str, old: str, new: str, full: str = '') -> str:
         fs = _diff_segments(full)
         if any(norm(s) in on and norm(s) not in nn for s in fs):
             n, nn = fs, {norm(s) for s in fs}
-    rem = [s for s in o if norm(s) not in nn]
-    add = [s for s in n if norm(s) not in on]
+    # 공백·숫자·콜론 없는 12자 이하 단일 토큰('임상시험명칭'·'계약상대방'·'회사명'·'가~라')은
+    # 값이 아닌 항목 머리말 — 정정 [전]/[후]에 단독으로 뜨면 소음
+    def bare(s):
+        return len(s) <= 12 and not re.search(r'[\d\s:：]', s)
+    rem = [s for s in o if norm(s) not in nn and not bare(s)]
+    add = [s for s in n if norm(s) not in on and not bare(s)]
     if not rem and not add:
         return ''
-    out = [f'🔧 {field}:']
+    out = [f'🔧 {field or "변경"}:']
     for tag, segs in (('전', rem), ('후', add)):
         out += [f'    [{tag}] {_trunc_clean(s, 250)}' for s in segs[:4]]
         if len(segs) > 4:
@@ -336,7 +342,7 @@ def _etc_segments(text: str) -> list[str]:
     t = re.sub(r'\s+', ' ', text or '').strip()
     if not t or t in ('-', '해당사항 없음', '해당없음', '없음'):
         return []
-    parts = re.split(r'(?:^|\s+)(?:[-·•]|(?<![\w.])\d{1,2}[.)](?!\d)|[가나다라마바사아][.)])\s*', t)
+    parts = re.split(r'(?:^|\s+)(?:[-·•●○▶■□]|(?<![\w.])\d{1,2}[.)](?!\d)|[가나다라마바사아][.)])\s*', t)
     segs = [p.strip(' -') for p in parts if p]
     return [s for s in segs if len(s) >= 4]
 
@@ -345,14 +351,23 @@ def _related_list(text: str, n: int = 2) -> str:
     """관련공시 목록 텍스트 → 최신 n건 '날짜 제목 · 날짜 제목'.
     날짜 표기 '2026.01.19'·'2026-01-19' 모두, 구분자(' - '·공백) 무관, 날짜순 정렬."""
     hits = list(re.finditer(r'(\d{4})[.-](\d{2})[.-](\d{2})\.?', text or ''))
-    out = []
+    out, seen = [], set()
     for j, m in enumerate(hits):
         end = hits[j + 1].start() if j + 1 < len(hits) else len(text)
         title = re.sub(r'\s+', ' ', text[m.end():end]).strip(' -·,')
-        if title:
-            out.append((m.group(1) + m.group(2) + m.group(3), m.group(0).rstrip('.'), title))
+        if len(title) > 45:   # '…사항(임상시험 계획 승인신청)(전이성 …)' → 첫 괄호까지
+            title = re.sub(r'(\([^()]*\))\s*\(.*$', r'\1', title)
+        key = (m.group(1) + m.group(2) + m.group(3), title)
+        if title and key not in seen:
+            seen.add(key)
+            out.append((key[0], m.group(0).rstrip('.'), title))
     out.sort(key=lambda x: x[0])
-    return ' · '.join(f'{d} {_trunc(t, 35)}' for _, d, t in out[-n:])
+    return ' · '.join(f'{d} {_trunc_clean(t, 45)}' for _, d, t in out[-n:])
+
+
+def _rel_text(v: str, n: int = 3) -> str:
+    """'🔗 관련' 값 — 최신 n건 '날짜 제목'(날짜 없는 서식은 문장경계 110자)."""
+    return _related_list(v, n) or _trunc_clean(re.sub(r'\s+', ' ', v or ''), 110)
 
 
 _LETTER_SEQS = ('abcdefgh', '가나다라마바사아')
@@ -480,6 +495,18 @@ def _parse_numbered_body(text: str, max_items: int = 8, val_limit: int = 300) ->
         if len(items) >= max_items:
             break
     return items
+
+
+def _numbered_with_lead(text: str, max_items: int = 8, val_limit: int = 300) -> list:
+    """_parse_numbered_body + 첫 번호 앞 서두를 첫 줄로 보존. _parse_numbered_body는 서두를
+    버려 '조회결과 공시후 30분 경과시점까지 단, 1) … 2) …'의 핵심 조건이 사라지던 문제."""
+    b = _parse_numbered_body(text, max_items=max_items, val_limit=val_limit)
+    if not b:
+        return b
+    lead = re.split(r'\s*(?<![\w".“”])\d{1,2}[.)）](?!\d)', text, maxsplit=1)[0].strip(' ,-')
+    if len(lead) >= 4:
+        b.insert(0, f'  • {_trunc_clean(lead, val_limit)}')
+    return b
 
 
 def _clinical_bullet(label: str, content: str, sec_limit: int) -> str:
@@ -676,4 +703,4 @@ def _parse_agm_notice_text(kv: dict) -> list:
     return lines
 
 
-__all__ = ['log', '_get', '_trunc', '_trunc_clean', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list']
+__all__ = ['log', '_get', '_trunc', '_trunc_clean', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list', '_rel_text', '_numbered_with_lead']

@@ -63,10 +63,22 @@ def parse_trading_halt(kv: dict) -> list:
             lines.append(f'🚨 {reason}')
         if v := _get(kv, '1.대상종목', '대상종목'):
             lines.append(f'📋 대상: {v}')
-        if before:
-            lines.append(f'  변경전: {_trunc(before, 80)}')
-        if after:
-            lines.append(f'  변경후: {_trunc(after, 80)}')
+        def _period(label: str, v: str):
+            m = re.match(r'^(.*?~)\s*(.*)$', v)
+            head, rest = (m.group(1).strip(), m.group(2).strip()) if m else (v, '')
+            b = _numbered_with_lead(rest, max_items=6, val_limit=300) if rest else []
+            if rest and not b and len(rest) <= 60:          # 짧은 조건은 한 줄('…~ 2026년 10월 01일')
+                return [f'  {label}: {_trunc_clean(head + " " + rest, 180)}'], rest
+            out = [f'  {label}: {_trunc_clean(head, 120)}']
+            if rest:
+                out += [f'  {x}' for x in b] if b else [f'      {_trunc_clean(rest, 300)}']
+            return out, rest
+
+        bl, brest = _period('변경전', before) if before else ([], '')
+        al, arest = _period('변경후', after) if after else ([], '')
+        if brest and brest == arest:     # 해제조건 동일 — 변경전은 기간만
+            bl = bl[:1]
+        lines.extend(bl + al)
         if v := _get(kv, '4.근거규정', '근거규정'):
             lines.append(f'📋 근거: {_trunc(v, 60)}')
         return lines
@@ -190,7 +202,7 @@ def parse_amendment(kv: dict) -> list:
         # "정정전" / "정정후" 등 의미 없는 placeholder 값 제외
         v_clean = re.sub(r'\s+', '', v)
         if v_clean not in ('정정전', '정정후', '해당없음', '없음', '-', '—'):
-            lines.append(f'📋 사유: {_trunc(v, 80)}')
+            lines.append(f'📋 사유: {_trunc_clean(v, 200)}')
 
     change_lines = []
     _MAX_CHANGES = 6  # 🔧 최대 출력 수
@@ -231,22 +243,35 @@ def parse_amendment(kv: dict) -> list:
             return True
         return False
 
+    # 'old → new' 한 줄이 잘릴 한글 값 — 바뀐 부분이 '…' 뒤로 숨음(비에이치 '연장 만기일 :
+    # 2026-… → 2028-…', 담보 채권자 KB증권→한국증권금융 등) → 바뀐 항목/문장만 [전]/[후] 줄로.
+    # 판정 = 실제 한 줄 포맷(_fmt_amendment_val: 60자 절단 후 일반 값은 40자)이 잘리는지 —
+    # 금액·비율·날짜처럼 깔끔히 포맷되는 값은 기존 한 줄 유지.
+    def _long(field: str, o: str, n: str) -> bool:
+        if not re.search(r'[가-힣]{2}', o + ' ' + n):
+            return False
+        if any('…' in _fmt_amendment_val(field, _trunc(x, _MAX_VAL_LEN)) for x in (o, n)):
+            return True
+        # 60자 초과 서술 — 날짜 포맷(_clean_date)이 긴 문장을 날짜 조각으로 뭉개 '…' 없이 잘리는
+        # 경우(디에스케이 '-거래종결일')도 포함. 금액·비율 필드는 포맷 한 줄이 더 읽기 좋아 제외.
+        return (max(len(o), len(n)) > _MAX_VAL_LEN
+                and not any(k in field for k in ('금액', '가격', '대금', '보증금', '대비', '비율', '%', '비중')))
+
     # ── 패턴 C: 정정전_* / 정정후_* 접두어 키 비교 (가장 신뢰도 높음) ──────
     before_keys = {k[4:]: v for k, v in kv.items() if k.startswith('정정전')}
     after_keys  = {k[4:]: v for k, v in kv.items() if k.startswith('정정후')}
     for field, old_v in before_keys.items():
         if len(change_lines) >= _MAX_CHANGES:
             break
-        if _clean_amendment_field(field) in _SKIP_FIELDS:
-            continue
+        if _clean_amendment_field(field) in _SKIP_FIELDS or re.search(r'참석|불참', field):
+            continue   # 사외이사 참석 인원('🔧 참석: 3 → 4')은 정정 핵심이 아님
         new_v = after_keys.get(field, '')
         old_c = re.sub(r'\s+', ' ', old_v).strip()
         new_c = re.sub(r'\s+', ' ', new_v).strip()
         if old_c and new_c and old_c != new_c and not _is_header_row(field, old_c, new_c):
             # 긴 서술형(주요내용 등) — 양쪽 60자 절단 한 줄로는 무엇이 바뀌었는지 안 보임.
             # 바뀐 항목/문장만 [전]/[후] 줄로(정정후가 조각일 때의 전문 비교는 _prose_diff).
-            if (max(len(old_c), len(new_c)) > _MAX_VAL_LEN
-                    and re.search(r'[가-힣]{2}.*[다음함됨임]\.', old_c + ' ' + new_c)):
+            if _long(field, old_c, new_c):
                 full = re.sub(r'\s+', ' ', kv.get(field, '') or '').strip()
                 if pd := _prose_diff(_clean_amendment_field(field), old_c, new_c, full):
                     change_lines.append(pd)
@@ -280,7 +305,10 @@ def parse_amendment(kv: dict) -> list:
             old_clean  = val.strip()
             new_clean  = new_val.strip()
             if old_clean and new_clean and old_clean != new_clean:
-                if not _is_header_row(field_name, old_clean, new_clean):
+                if not _is_header_row(field_name, old_clean, new_clean) and _long(field_name, old_clean, new_clean):
+                    if pd := _prose_diff(_clean_amendment_field(field_name), old_clean, new_clean):
+                        change_lines.append(pd)
+                elif not _is_header_row(field_name, old_clean, new_clean):
                     old_fmt = _fmt_amendment_val(field_name, _trunc(old_clean, _MAX_VAL_LEN))
                     new_fmt = _fmt_amendment_val(field_name, _trunc(new_clean, _MAX_VAL_LEN))
                     change_lines.append(f'🔧 {_clean_amendment_field(field_name)}: {old_fmt} → {new_fmt}')
@@ -305,7 +333,10 @@ def parse_amendment(kv: dict) -> list:
                     if _clean_amendment_field(fname) in _SKIP_FIELDS:
                         j += 1
                         continue
-                    if old_v != new_v and not _is_header_row(fname, old_v, new_v):
+                    if old_v != new_v and not _is_header_row(fname, old_v, new_v) and _long(fname, old_v, new_v):
+                        if pd := _prose_diff(_trunc(fname, 25), old_v, new_v):
+                            change_lines.append(pd)
+                    elif old_v != new_v and not _is_header_row(fname, old_v, new_v):
                         old_fmt = _fmt_amendment_val(fname, _trunc(old_v, _MAX_VAL_LEN))
                         new_fmt = _fmt_amendment_val(fname, _trunc(new_v, _MAX_VAL_LEN))
                         change_lines.append(f'🔧 {_trunc(fname, 25)}: {old_fmt} → {new_fmt}')
@@ -539,7 +570,7 @@ def parse_market_measure(kv: dict) -> list:
                 s = s.strip()
                 if len(s) >= 8:
                     lines.append(f'  • {_trunc_clean(s, 400)}')
-                if len(lines) >= 7:
+                if len(lines) >= 12:   # 7→12: 2번째 섹션(실질심사 사유 추가 등)까지 — 이오플로우
                     break
 
     return lines
@@ -694,7 +725,13 @@ def parse_rehabilitation(kv: dict) -> list:
                             'Actions to be taken and schedule')
     if plan:
         plan = re.sub(r'^-\s*', '', re.sub(r'\s+', ' ', plan)).strip()
-        lines.append(f'📋 향후대책: {_trunc_clean(plan, 150)}')
+        b = _numbered_with_lead(plan, max_items=6, val_limit=300) \
+            if re.search(r'(?:^|\s)1[.)]', plan) and re.search(r'\s2[.)]', plan) else []
+        if len(b) >= 2:
+            lines.append('📋 향후대책:')
+            lines.extend(b)
+        else:
+            lines.append(f'📋 향후대책: {_trunc_clean(plan, 400)}')
 
     return lines if len(lines) > 1 else []
 
@@ -733,4 +770,166 @@ def parse_investee_rehab(kv: dict) -> list:
     if seg:
         lines.append('🏛 ' + ' · '.join(seg))
 
+    return lines if len(lines) > 1 else []
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  2026-10-05 발송분 감사 — 폴백·빈 결과 유형 전용 파서
+# ══════════════════════════════════════════════════════════════════════
+
+_INQ_TAIL = re.compile(r'\s*(?:\(\s*공시책임자\s*\)|※\s*(?:본\s*공시는|이\s*내용은|본\s*답변은)).*$')
+
+
+def _answer_bullets(text: str, limit: int = 8) -> list:
+    """답변·해명 본문 → 줄별 불릿. 번호 목록이면 항목별, 아니면 '-'·문장 단위.
+    끝의 '※ 본 공시는 …조회공시요구에 대한 답변입니다'·'(공시책임자) …' 상투문 제거."""
+    t = _INQ_TAIL.sub('', re.sub(r'\s+', ' ', text or '').strip())
+    if not t or t in ('-', '해당사항 없음'):
+        return []
+    if re.search(r'(?:^|\s)1[.)]', t) and re.search(r'\s2[.)](?!\d)', t):
+        b = _numbered_with_lead(t, max_items=limit, val_limit=400)
+        if b:
+            return b
+    segs = []
+    for s in _etc_segments(t):
+        segs += ([x.strip() for x in re.split(r'(?<=[다음함됨임]\.)\s+', s) if x.strip()]
+                 if len(s) > 300 else [s])
+    return [f'  • {_trunc_clean(s, 400)}' for s in segs[:limit]]
+
+
+_ANS_BOILER = re.compile(r'^\s*•\s*본\s*공시는.{0,120}?(?:답변|재공시)(?:\s*내용)?입니다\.?\s*$')
+
+
+def parse_inquiry(kv: dict) -> list:
+    """조회공시요구(풍문·보도/현저한 시황변동)와 그 답변(확정·미확정·부인).
+
+    답변: 1.제목 / 2.답변내용(또는 2.내용) / 조회공시요구일·답변일 / 재공시 기한(또는 예정일).
+    요구: 조회공시요구내용 / 답변(공시)시한. 답변 본문은 절단 없이 항목별로 —
+    파이온엑스 파산신청설 답변이 범용 폴백 100자에서 '…관련문서 등을 송달받지 못하여'
+    핵심 직전에 잘리던 문제.
+    """
+    lines = []
+    if '답변' in kv.get('_report_nm', ''):
+        if v := _get(kv, '1. 제목', '제목'):
+            lines.append(f'📌 {_trunc_clean(v, 150)}')
+        lines += [b for b in _answer_bullets(_get(kv, '2. 답변내용', '답변내용', '2. 내용', '내용') or '')
+                  if not _ANS_BOILER.match(b)]     # '본 공시는 …에 대한 답변입니다' 상투문
+        req = _get(kv, '조회공시요구일')
+        ans = _get(kv, '조회공시답변일')
+        if req or ans:
+            lines.append('📅 ' + ' · '.join(x for x in (f'요구일: {req}' if req else '',
+                                                        f'답변일: {ans}' if ans else '') if x))
+        due = _get(kv, '재공시예정일') or next(
+            (v for k, v in kv.items() if k.strip() == '기한' and re.search(r'\d{4}', v or '')), None)
+        if due:
+            lines.append(f'⏰ 재공시 기한: {due}')
+    else:
+        if v := _get(kv, '조회공시요구내용', '조회공시 요구내용', '요구내용'):
+            lines.append(f'❓ 요구내용: {_trunc_clean(v, 200)}')
+        if dl := _get(kv, '답변시한', '공시시한'):
+            tm = (kv.get(dl) or '').strip()        # '4. 답변시한: 2026-09-29' + '2026-09-29: 18:00까지'
+            lines.append(f'⏰ 답변시한: {dl}' + (f' {tm}' if re.search(r'\d{1,2}:\d{2}', tm) else ''))
+    return lines
+
+
+def parse_rumor_reply(kv: dict) -> list:
+    """풍문또는보도에대한해명 — 보도 내용·매체·일자, 해명(또는 미확정 재공시 안내), 재공시예정일."""
+    lines = []
+    if v := _get(kv, '풍문 또는 보도의 내용', '보도의 내용'):
+        lines.append(f'📰 보도: {_trunc_clean(v, 200)}')
+    src = _get(kv, '보도의 매체')
+    dt = _get(kv, '보도의 발생일자', '발생일자')
+    if src or dt:
+        lines.append('🗞 ' + ' · '.join(x for x in (src, dt) if x))
+    if exp := _get(kv, '해명내용', '해명 내용'):
+        lines.append('📋 해명:')
+        lines += _answer_bullets(exp)
+    else:   # 미확정 재공시: 키 '2026-09-03' → 값 '일자 … 해명(미확정)의 재공시 사항임'
+        for k, v in kv.items():
+            if re.fullmatch(r'\d{4}-\d{2}-\d{2}', k.strip()) and '재공시' in (v or ''):
+                note = re.sub(r'\s+', ' ', v).strip()
+                lines.append(f'📋 {k.strip()} {note}')
+                break
+    if v := _get(kv, '재공시예정일'):
+        lines.append(f'⏰ 재공시예정일: {v}')
+    return lines if len(lines) > 1 else []
+
+
+_FAIR_SEC = re.compile(
+    r'(?:^|\s)\d\.\s*(공시제목|공정공시\s*대상정보|공정공시\s*정보|주요내용|연락처[^:：]*?|'
+    r'기타\s*투자판단에\s*참고할\s*사항|참고사항)\s*[:：]?\s*')
+
+
+def parse_fair_disclosure(kv: dict) -> list:
+    """수시공시의무관련사항(공정공시) — 표 없는 산문형(1.공시제목/2.공정공시 정보/4.기타/5.참고사항
+    또는 1.공정공시 대상정보/2.주요내용)과 표형(공시제목·관련 수시공시내용) 모두.
+    에코프로비엠 '대표이사 변경 예정'(2026-10-01)이 KV 0개라 본문 없이 발송되던 문제."""
+    lines = []
+    if title := _get(kv, '공시제목'):                       # 표형(리츠 등)
+        lines.append(f'📌 {_trunc_clean(title, 150)}')
+        lines += _answer_bullets(_get(kv, '관련 수시공시내용', '수시공시내용', '주요내용') or '')
+        ev = _get(kv, '행사명')
+        when = _get(kv, '정보제공(예정)일시', '정보제공일시')
+        if ev or when:
+            lines.append('🗓 정보제공: ' + ' · '.join(x for x in (ev, when) if x))
+        if v := _get(kv, '관련공시'):
+            lines.append(f'🔗 관련: {_rel_text(v)}')
+        return lines if len(lines) > 1 else []
+
+    raw = kv.get('_html', '')
+    txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ',
+                 re.sub(r'<(style|script)[^>]*>.*?</\1>', ' ', raw, flags=re.S | re.I))).strip()
+    parts = _FAIR_SEC.split(txt)
+    sec = {}
+    for i in range(1, len(parts) - 1, 2):
+        key = re.sub(r'\s+', '', parts[i])
+        sec.setdefault(key, parts[i + 1].strip())
+    title = sec.get('공시제목') or sec.get('공정공시대상정보')
+    if title:
+        lines.append(f'📌 {_trunc_clean(title.lstrip("- ").strip(), 150)}')
+    lines += _answer_bullets(sec.get('공정공시정보') or sec.get('주요내용') or '')
+    if v := sec.get('기타투자판단에참고할사항'):
+        notes = _etc_segments(v)
+        if notes:
+            lines.append(f'📎 참고: {_trunc_clean(" ".join(notes), 300)}')
+    if v := sec.get('참고사항'):
+        notes = _etc_segments(v)
+        if notes:
+            lines.append(f'📎 참고사항: {_trunc_clean(" · ".join(notes), 350)}')
+    return lines if len(lines) > 1 else []
+
+
+def parse_business_suspension(kv: dict) -> list:
+    """영업정지(주요사항보고서/거래소) — 분야·정지금액(매출 대비)·내용·사유·영향·향후대책·일자.
+    국문 키 + 국/영문 이중언어 서식의 영문 키 모두. 정정 서식은 정정표 행('5.향후대책: -진행사항
+    추가')이 본문 키보다 앞서 부분일치되므로 '5. 향후대책'처럼 번호+공백 키를 먼저 찾는다."""
+    lines = []
+    if v := _get(kv, '영업정지 분야', 'Suspended business operations'):
+        lines.append(f'⛔ 분야: {_trunc_clean(v, 120)}')
+    amt = None
+    for key in ('영업정지금액', 'Amount of business suspension', '영업정지내역', '영업정지 내역'):
+        cand = _get(kv, key)
+        if cand and re.fullmatch(r'[\d,]+', cand.replace(' ', '')):
+            amt = cand
+            break
+    ratio = _get(kv, '매출액 대비', '매출액대비', 'Ratio to sales')
+    if amt:
+        lines.append(f'💰 정지금액: {_fmt_amount(amt)}원' + (f' (매출 대비 {ratio}%)' if ratio else ''))
+    for label, keys in (('📋 내용', ('3. 영업정지 내용', '영업정지 내용', 'Details of business suspension')),
+                        ('🚨 사유', ('4. 영업정지사유', '영업정지사유', '영업정지 사유',
+                                    'Reasons for business suspension')),
+                        ('📉 영향', ('6. 영업정지영향', '6. 영업정지 영향', 'Impact of business suspension')),
+                        ('🔧 향후대책', ('5. 향후대책', 'Actions to be taken'))):
+        if v := _get(kv, *keys):
+            v = re.sub(r'^-\s*', '', v).strip()
+            if v:
+                lines.append(f'{label}: {_trunc_clean(v, 300)}')
+    if v := _get(kv, '7. 영업정지일자', '영업정지일자', 'Effective date of business suspension'):
+        lines.append(f'📅 정지일: {v}')
+    if v := _get(kv, '8. 이사회결의일', '이사회결의일', 'Board resolution date'):
+        lines.append(f'📅 결정일: {v}')
+    if v := _get(kv, '기타 투자판단'):
+        notes = _etc_segments(v)
+        if notes:
+            lines.append(f'📎 참고: {_trunc_clean(" ".join(notes), 300)}')
     return lines if len(lines) > 1 else []

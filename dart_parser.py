@@ -129,11 +129,24 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
         if report_nm.startswith('[기재정정]'):
             log.debug(f'[DART 파서] 기재정정 kv 키: {list(kv.keys())[:10]}')
 
-        parser = None
+        # 매칭 파서 전부(등록 순서, 중복 제거) — 첫 파서가 빈 결과면 다음 매칭 파서로.
+        # 이오플로우(2026-09-29): 제목의 '매매거래정지'로 거래정지 파서에 걸렸으나 산문형
+        # 기타시장안내라 빈 결과 → 시장조치 파서를 건너뛰고 본문 0줄로 발송되던 문제.
+        parsers = []
         for keywords, fn in _PARSER_MAP:
-            if any(k in clean_nm for k in keywords):
-                parser = fn
-                break
+            if any(k in clean_nm for k in keywords) and fn not in parsers:
+                parsers.append(fn)
+
+        def _run_chain():
+            for fn in parsers:
+                try:
+                    out = fn(kv)
+                except Exception as e:   # 한 파서 예외가 다음 후보·범용 폴백을 막지 않게
+                    log.warning(f'[DART 파서] {fn.__name__} 실패 ({report_nm}): {e}')
+                    continue
+                if out:
+                    return fn, out
+            return None, None
 
         is_amendment = report_nm.startswith('[기재정정]')
 
@@ -144,7 +157,7 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
                 has_changes = any(l.startswith('🔧') for l in lines)
                 lines.insert(0, '🔄 정정 내용')
                 # 카테고리 파서 또는 범용 파서로 원문 내용 추가
-                sub = (parser(kv) if parser else None) or (parse_all_fields(kv) if not has_changes else None)
+                sub = _run_chain()[1] or (parse_all_fields(kv) if not has_changes else None)
                 if sub:
                     # 정정사유가 원공시 블록의 '사유' 필드로 중복 노출되는 것 제거
                     # (예: 정정 내용 '📋 사유: 오기 정정' + 시장조치 '🚨 사유: 오기 정정')
@@ -161,12 +174,11 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
                 PARSER_STATS['amendment'] += 1
                 return '\n'.join(lines)
 
-        if parser:
-            lines = parser(kv)
-            if lines:
-                PARSER_STATS[parser.__name__] += 1
-                log.debug(f'[DART 파서] 카테고리 파서 사용 ({report_nm})')
-                return '\n'.join(lines)
+        fn, lines = _run_chain()
+        if lines:
+            PARSER_STATS[fn.__name__] += 1
+            log.debug(f'[DART 파서] 카테고리 파서 사용 ({report_nm})')
+            return '\n'.join(lines)
 
         # [첨부정정] 경량 요약 — 하위 파서 실패 시 정정표 노이즈 대신 정정대상·내용만
         if report_nm.startswith('[첨부정정]'):

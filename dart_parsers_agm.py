@@ -17,7 +17,7 @@ def parse_mgmt_event(kv: dict) -> list:
 
     # 제목
     if v := _get(kv, '1. 제목', '제목'):
-        lines.append(f'📌 {_trunc(v, 80)}')
+        lines.append(f'📌 {_trunc_clean(v, 200)}')
 
     # 주요내용 파싱 — 두 가지 구조 처리
     body_raw = _get_body(kv, '2. 주요내용', '주요내용', '결정내용') or ''  # 정정 시 전문 우선
@@ -95,7 +95,7 @@ def parse_mgmt_event(kv: dict) -> list:
 
     # 관련공시
     if v := _get(kv, '관련공시', '※ 관련 공시'):
-        lines.append(f'🔗 관련: {_trunc(v, 110)}')
+        lines.append(f'🔗 관련: {_rel_text(v)}')
 
     return lines
 
@@ -197,6 +197,8 @@ def parse_executive_change(kv: dict) -> list:
     # 변경전: '1. 변경내용' 값에서 이름 추출 ('변경전 대표이사 홍길동' 형태)
     before_raw = _get(kv, '1. 변경내용', '변경내용') or ''
     before = re.sub(r'^변경전\s*(대표이사|임원|이사|감사)?\s*', '', before_raw).strip()
+    if not before:   # '변경 전ㆍ후 대표이사(대표집행임원)' 서식 — '변경전' 키에 이름
+        before = (kv.get('변경전') or '').strip()
 
     # 변경후: '변경후 대표이사' 키 → 값, 또는 다른 패턴
     after = ''
@@ -240,7 +242,7 @@ def parse_executive_change(kv: dict) -> list:
         lines.append(f'📅 변경일: {v}')
 
     if v := _get(kv, '※ 관련공시', '관련공시'):
-        lines.append(f'🔗 관련: {_trunc(v, 110)}')
+        lines.append(f'🔗 관련: {_rel_text(v)}')
 
     return lines
 
@@ -333,7 +335,7 @@ def parse_agm_notice(kv: dict) -> list:
     _f(lines, kv, '📍 장소', '2. 장소', '장소', 'Place', trunc=50)
     _f(lines, kv, '📋 구분', '-주주총회 구분', '주주총회 구분')
     _f(lines, kv, '📋 의결권기준일', '3. 의결권행사기준일', '의결권행사기준일')
-    _f(lines, kv, '🔗 관련', '관련공시', '※관련공시', trunc=110)
+    _f(lines, kv, '🔗 관련', '관련공시', '※관련공시', fmt=_rel_text)
 
     # KV 테이블에서 못 뽑음(소집공고 자유서식) → 본문 텍스트 파싱 폴백
     if not lines:

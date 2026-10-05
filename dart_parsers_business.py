@@ -15,14 +15,14 @@ def parse_contract(kv: dict) -> list:
                        '판매ㆍ공급계약 내용', '판매·공급계약 내용',
                        '공급계약 내용', '수주 내용') or ''
     if contract_nm:
-        lines.append(f'📋 계약명: {_trunc(contract_nm, 60)}')
+        lines.append(f'📋 계약명: {_trunc_clean(contract_nm, 150)}')
 
     # 계약상대 + 지역 — 각주(1. 적용환율... 형태) 필터링
     party  = _get(kv, '계약상대', '거래상대방', '발주처', '매수인')
     region = _get(kv, '판매ㆍ공급지역', '공급지역', '수주지역', '납품지역')
     if party and not _is_footnote(party):
         party_clean = _clean_party(party)
-        region_str = f' ({_trunc(region, 30)})' if region and not _is_footnote(region) else ''
+        region_str = f' ({_trunc_clean(region, 80)})' if region and not _is_footnote(region) else ''
         lines.append(f'🏢 상대방: {party_clean}{region_str}')
 
     # 계약금액 + 매출비중 — '정정전/후' 복합값(금액 비율)에서 각각 분리
@@ -452,7 +452,7 @@ def parse_money_lending(kv: dict) -> list:
 
     purpose = _get(kv, '3. 금전대여 목적', '금전대여 목적', '대여 목적')
     if purpose:
-        lines.append(f'🎯 목적: {_trunc(purpose, 50)}')
+        lines.append(f'🎯 목적: {_trunc_clean(purpose, 150)}')
 
     total = _get(kv, '4. 금전대여 총잔액 (원)', '금전대여 총잔액 (원)', '총잔액')
     if total:
@@ -515,7 +515,7 @@ def parse_value_enhancement(kv: dict) -> list:
         lines.append(f'💰 {" / ".join(parts)}')
 
     _f(lines, kv, '📅 결정일', '4. 결정일자', '결정일자')
-    _f(lines, kv, '🔗 관련', '※ 관련공시', '관련공시', trunc=50)
+    _f(lines, kv, '🔗 관련', '※ 관련공시', '관련공시', fmt=_rel_text)
 
     return lines
 
@@ -721,7 +721,7 @@ def parse_facility_investment(kv: dict) -> list:
                      + (f' (자기자본대비 {ratio}%)' if ratio else ''))
 
     if v := _get(kv, '3. 투자목적', '투자목적'):
-        lines.append(f'🎯 목적: {_trunc_clean(v, 70)}')
+        lines.append(f'🎯 목적: {_trunc_clean(v, 150)}')
 
     s, e = _get(kv, '시작일'), _get(kv, '종료일')
     if s and s != '-':
