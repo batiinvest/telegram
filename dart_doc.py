@@ -15,6 +15,30 @@ log = logging.getLogger(__name__)
 
 _DART_API_BASE = 'https://opendart.fss.or.kr/api'
 
+# 원문 줄바꿈(<br>·</p>) 표지 — 정규식 \s·str.strip/split()에선 공백으로 취급돼 기존 매칭은 그대로,
+# 공백 접기(re.sub(r'\s+', ' '))를 거친 값에선 사라짐(=예전과 동일). 살아남은 표지는 최종 렌더
+# (_tidy_lines)에서 줄바꿈(목록·긴 문단) 또는 공백으로 바뀐다. 예전엔 '- 회사 소개<br>- 경영 실적'
+# 같은 원문 목록이 '- 회사 소개 - 경영 실적 - 질의응답' 한 줄로 붙어 나갔음(10-05 가독성 검토).
+_BR = '\x1f'
+_BR_RAW = ''      # HTML 단계 임시 표지 — 공백이 아니어야 get_text(strip=True)에 안 지워짐
+_BR_LIST = re.compile(r'(?:[-–·•▶○●□■※*]|\(?\d{1,2}[.)）](?!\d)|[가-하][.)]|[①-⑳]|\[[^\]]{1,15}\])\s*')
+
+
+def _ws(s: str) -> str:
+    '''공백 접기 — 줄바꿈 표지(_BR)는 보존(연속 표지·주변 공백은 하나로).'''
+    s = re.sub(r'[^\S\x1f]+', ' ', s or '')
+    return re.sub(r' ?\x1f[\s\x1f]*', _BR, s).strip()
+
+
+def _br_text(t: str) -> str:
+    '''셀 텍스트의 임시 표지 → 목록(하위 줄 2개+가 '-'·'1.'·'①' 등으로 시작)이거나 120자 넘는
+    문단일 때만 _BR로 보존, 아니면 공백 — 짧은 값(이름·날짜·금액)은 예전과 똑같이.'''
+    parts = [p for p in (re.sub(r'\s+', ' ', x).strip() for x in t.split(_BR_RAW)) if p]
+    flat = ' '.join(parts)
+    if len(parts) > 1 and (sum(1 for p in parts if _BR_LIST.match(p)) >= 2 or len(flat) > 120):
+        return _BR.join(parts)
+    return flat
+
 
 def _fetch_dart_list_item(rcept_no: str) -> dict:
     """
@@ -372,7 +396,7 @@ def _fetch_html(rcept_no: str) -> str | None:
 #  KV 추출
 # ══════════════════════════════════════════════
 
-def _build_kv(html: str) -> dict:
+def _build_kv(html: str, br: bool = False) -> dict:
     """
     테이블 모든 행에서 key→value 매핑 추출.
     - 2셀: (key, val)
@@ -394,6 +418,8 @@ def _build_kv(html: str) -> dict:
             .replace('&CR;',   ' ')
             .replace('&nbsp;', ' ')
             .replace('\xa0',   ' '))
+    if br:   # 원문 줄바꿈 보존(get_disclosure_detail 전용) — 값 셀의 목록·문단 구분
+        html = re.sub(r'(?i)<br\b[^>]*>|</p\s*>', lambda m: m.group(0) + _BR_RAW, html)
 
     soup = BeautifulSoup(html, 'html.parser')
     kv: dict = {}
@@ -402,6 +428,8 @@ def _build_kv(html: str) -> dict:
         """셀 텍스트 추출 + 잔여 XML 엔티티 정리."""
         t = cell.get_text(' ', strip=True)
         t = re.sub(r'&[a-zA-Z]{1,8};', ' ', t)
+        if _BR_RAW in t:
+            return _br_text(t)
         return re.sub(r'\s+', ' ', t).strip()
 
     def _fmt_aunit(aunit_val: str) -> str:
@@ -424,8 +452,17 @@ def _build_kv(html: str) -> dict:
     _in_amendment_cols = False
     _amend_table = None
 
+    _fss_tbls = set()
     for row in soup.find_all('tr'):
         tds = row.find_all(['td', 'th'])
+        if br:
+            _tb = row.find_parent('table')
+            if id(_tb) in _fss_tbls:
+                continue
+            _h = re.sub(r'\s+', '', ''.join(c.get_text() for c in tds))
+            if '정정요구' in _h and '정정전' in _h and '정정후' in _h and len(_h) < 40:
+                _fss_tbls.add(id(_tb))
+                continue
         tus = row.find_all('tu')   # DART XML 전용 값 태그
 
         tes = row.find_all('te')   # DART XML 숫자/텍스트 입력 태그
@@ -517,7 +554,21 @@ def _build_kv(html: str) -> dict:
                     if cells[i] and cells[i + 1]:
                         kv[cells[i]] = cells[i + 1]
 
+    if br:   # 키엔 줄바꿈 불필요 — _get 부분일치('계약 금액')가 예전처럼 맞도록 공백으로
+        kv = {(k.replace(_BR, ' ') if isinstance(k, str) else k): v for k, v in kv.items()}
     return kv
+
+
+def _sub_parts(k: str, v: str):
+    '''정정 접두 키가 하위 항목 여럿('정정후_… - 시작일 - 종료일 - 체결일')이고 값이 원문 줄마다
+    하나면 [(하위 항목, 값)] — 줄 머리 대시('-2026-09-30')는 뗌. 해당 없으면 None.'''
+    if not k.startswith(('정정전', '정정후')) or _BR not in (v or ''):
+        return None
+    subs = [x.strip() for x in k[4:].split(' - ')]
+    vals = [re.sub(r'^-\s*(?=\d{4}[.-]|[가-힣(])|^-\s+(?=\d)', '', x.strip()) for x in v.split(_BR)]
+    if len(subs) < 3 or len(vals) != len(subs) - 1:
+        return None
+    return list(zip(subs[1:], vals))
 
 
 def _get(kv: dict, *keys: str) -> str | None:
@@ -526,12 +577,16 @@ def _get(kv: dict, *keys: str) -> str | None:
     for key in keys:
         for k, v in kv.items():
             if key in k and '정정후' in k:
-                clean = re.sub(r'\s+', ' ', v).strip()
+                clean = _ws(v)
+                if sp := _sub_parts(k, clean):
+                    clean = next((x for lab, x in sp if key in lab), clean)
                 if clean and clean not in ('-', '—', '없음', 'N/A'):
                     return clean
         for k, v in kv.items():
             if key in k and '정정전' not in k:
-                clean = re.sub(r'\s+', ' ', v).strip()
+                clean = _ws(v)
+                if sp := _sub_parts(k, clean):
+                    clean = next((x for lab, x in sp if key in lab), clean)
                 if clean and clean not in ('-', '—', '없음', 'N/A'):
                     return clean
     return None
@@ -546,10 +601,10 @@ def _trunc_clean(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     cut = text[:limit]
-    idx = cut.rfind(' ')
+    idx = max(cut.rfind(' '), cut.rfind(_BR))
     if idx > limit * 0.5:
         cut = cut[:idx]
-    return cut.rstrip(' ,(') + '…'
+    return cut.rstrip(' ,(' + _BR) + '…'
 
 
 # ══════════════════════════════════════════════
@@ -665,7 +720,7 @@ def parse_all_fields(kv: dict) -> list:
         if k.startswith('_'):
             continue
         k = re.sub(r'\s+', ' ', k).strip()
-        v = re.sub(r'\s+', ' ', v).strip()
+        v = _ws(v)
 
         # 빈 값 / 의미없는 값 / 대시뿐인 값('- -') 제외
         if not v or v in _SKIP_VALUES or re.fullmatch(r'[\s\-—–~.]+', v):

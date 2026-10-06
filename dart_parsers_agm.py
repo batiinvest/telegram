@@ -47,7 +47,7 @@ def parse_mgmt_event(kv: dict) -> list:
             lines.extend(bullets)
         else:
             # 앞의 '- ' 또는 '· ' 제거 후 산문 전문 표시 (극단 케이스만 공백경계 절단)
-            clean = re.sub(r'^[\-·•]\s*', '', re.sub(r'\s+', ' ', stripped)).strip()
+            clean = re.sub(r'^[\-·•]\s*', '', _ws(stripped)).strip()
             lines.append(f'  {_trunc_clean(clean, 800)}')
 
     # 시험결과 (임상시험결과 공시) — '- 섹션:' 구조면 섹션별 분리, 아니면 단순 표시

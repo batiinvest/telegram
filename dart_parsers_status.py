@@ -264,6 +264,7 @@ def parse_amendment(kv: dict) -> list:
                 and not any(k in field for k in ('금액', '가격', '대금', '보증금', '대비', '비율', '%', '비중')))
 
     # ── 패턴 C: 정정전_* / 정정후_* 접두어 키 비교 (가장 신뢰도 높음) ──────
+    sub_seen = {}      # 하위 항목 정정 (head, 항목, 구, 신) → (change_lines 위치, [순번])
     before_keys = {k[4:]: v for k, v in kv.items() if k.startswith('정정전')}
     after_keys  = {k[4:]: v for k, v in kv.items() if k.startswith('정정후')}
     for field, old_v in before_keys.items():
@@ -272,6 +273,23 @@ def parse_amendment(kv: dict) -> list:
         if _clean_amendment_field(field) in _SKIP_FIELDS or re.search(r'참석|불참', field):
             continue   # 사외이사 참석 인원('🔧 참석: 3 → 4')은 정정 핵심이 아님
         new_v = after_keys.get(field, '')
+        # 하위 항목 여럿인 행 — 바뀐 하위 항목만 '🔧 순번2 (주)상상인저축은행 담보제공기간종료일: 구 → 신'
+        so, sn = _sub_parts('정정전_' + field, _ws(old_v)), _sub_parts('정정후_' + field, _ws(new_v))
+        if so and sn and [l for l, _ in so] == [l for l, _ in sn]:
+            head, seq = _clean_amendment_field(field.split(' - ')[0]), ''
+            if m_ := re.search(r'순번\s*(\d+)\.?\s*(.*)', head):
+                seq, head = m_.group(1), m_.group(2).strip()
+            for (lab, o), (_, n) in zip(so, sn):
+                if o == n:
+                    continue
+                key = (head, lab, o, n)
+                if key in sub_seen:              # 순번만 다른 같은 변경 → '순번2·3' 한 줄
+                    i_, seqs = sub_seen[key]
+                    seqs.append(seq)
+                elif len(change_lines) < _MAX_CHANGES:
+                    sub_seen[key] = (len(change_lines), [seq] if seq else [])
+                    change_lines.append(key)
+            continue
         old_c = re.sub(r'\s+', ' ', old_v).strip()
         new_c = re.sub(r'\s+', ' ', new_v).strip()
         if old_c and new_c and old_c != new_c and not _is_header_row(field, old_c, new_c):
@@ -286,6 +304,11 @@ def parse_amendment(kv: dict) -> list:
             new_fmt = _fmt_amendment_val(field, _trunc(new_c, _MAX_VAL_LEN))
             change_lines.append(f'🔧 {_clean_amendment_field(field)}: {old_fmt} → {new_fmt}')
 
+    for key, (i_, seqs) in sub_seen.items():   # 하위 항목 변경 줄 완성(순번 묶음·금액 포맷)
+        head, lab, o, n = key
+        tag = (f'순번{"·".join(dict.fromkeys(seqs))} ' if seqs else '') + head
+        change_lines[i_] = (f'🔧 {tag} {lab}'.replace('  ', ' ') + f': {_fmt_amendment_val(lab, o) if o else "-"}'
+                            f' → {_fmt_amendment_val(lab, n) if n else "-"}')
     if change_lines:
         lines.extend(change_lines)
         return lines
@@ -496,6 +519,8 @@ def _fss_amendment(kv: dict) -> list:
         if len(row) <= need:
             continue
         item = ' '.join(dict.fromkeys(x for x in (row[i] for i in it_cols) if x))
+        row = list(row)
+        row[i_b], row[i_a] = _unglue(row[i_b]), _unglue(row[i_a])   # 하위 표가 글자만 이어 붙은 셀
         if len(re.sub(r'[\s.]', '', item)) <= 2 and section:
             item = f'{section} {item}'
         b, a = row[i_b], row[i_a]
@@ -557,7 +582,7 @@ def parse_misc_mgmt(kv: dict) -> list:
         if bullets and len(bullets) >= 2:
             lines.extend(bullets)
         else:
-            clean = re.sub(r'^[\-·•]\s*', '', re.sub(r'\s+', ' ', stripped)).strip()
+            clean = re.sub(r'^[\-·•]\s*', '', _ws(stripped)).strip()
             # 주요내용이 공시 본체 → 사실상 전문 표시 (2000자 초과 극단 케이스만 절단,
             # 4000자 초과 발송은 managers._split_text가 분할 처리)
             lines.append(f'📋 {_trunc_clean(clean, 2000)}')
@@ -689,23 +714,39 @@ def parse_market_measure(kv: dict) -> list:
         if not title and not body:
             title, body = _mkt_title_body(kv)
         title = re.sub(r'\s+', ' ', title or '').strip()
-        body = re.sub(r'\s+', ' ', body or '').strip()
+        body = _ws(body)
         if title:
             lines.append(f'📋 {_trunc_clean(title, 150)}')
         # 결과 판정엔 공시명 괄호 제목도 함께 — 표형(1.제목/2.내용)은 제목에 '(상장폐지 기준 해당)'이 없음
         _nm = re.sub(r'^\[[^\]]+\]', '', kv.get('_report_nm', ''))
         lines.extend(_mkt_verdict(f'{title} {_nm}', body))
-        # 본문 문장별 분리 (통짜 → 스캔 가능)
-        for s_ in re.split(r'(?<=[다요][.)])\s+', body):
-            s_ = s_.strip()
-            if len(s_) >= 8:
-                lines.append(f'  • {_trunc_clean(s_, 400)}')
-            if len(lines) >= 12:   # 7→12: 2번째 섹션(실질심사 사유 추가 등)까지 — 이오플로우
+        # 본문 원문 줄(<br>) → 문장별 분리. 원문 목록 줄('- 경과일수 : 51일')은 앞 문장 아래 하위 줄
+        # (예전엔 '- 경과일수 : 51일 - 20억원 미만 일수 : 51일 - …'이 한 불릿으로 붙었음, 소프트센)
+        n0 = len(lines)
+        for para in body.split(_BR):
+            para = para.strip()
+            if not para:
+                continue
+            if re.fullmatch(r'\((?:주식회사\s*)?한국거래소[^()]*\)|\([^()]*시장본부\)', para):
+                continue                         # 끝 서명 '(한국거래소)'
+            if len(lines) > n0 and re.fullmatch(r'\([^()]{2,60}\)', para):
+                lines[-1] += f' {para}'          # '(코스닥시장 상장규정 제81조)'·'(해제요건 : 10일 이상)'은 앞 줄 꼬리
+            elif len(lines) > n0 and len(para) <= 200 and _MKT_SUB.match(para):
+                lines.append(f'    {para}')
+            else:
+                for s_ in re.split(r'(?<=[다요][.)])\s+', para):
+                    s_ = s_.strip()
+                    if len(s_) >= 8 or re.fullmatch(r'[\[<【].{1,15}[\]>】]', s_):   # '[신청취지]' 머리 유지
+                        lines.append(f'  • {_trunc_clean(s_, 400)}')
+                    if len(lines) >= 18:
+                        break
+            if len(lines) >= 18:   # 12→18: 원문 목록 줄을 하위 줄로 펼친 만큼 — 2번째 섹션까지 유지
                 break
 
     return lines
 
 
+_MKT_SUB = re.compile(r'[-–·▶○●□■※*]\s*\S|[①-⑳]|[가-하][.)]\s')   # 하위 줄로 내릴 원문 목록 머리
 _MKT_DATEP = r"\(\s*['‘’]?\d{2,4}\s?[.\-]\s?\d{1,2}\s?[.\-]\s?\d{1,2}\.?\s*\)"
 _MKT_Q = str.maketrans({'‘': "'", '’': "'", '“': '"', '”': '"', 'ㆍ': '·'})
 
@@ -730,7 +771,9 @@ def _mkt_title_body(kv: dict):
     if not raw:
         return None, None
     txt = re.sub(r'<(style|script)[^>]*>.*?</\1>', ' ', raw, flags=re.DOTALL | re.IGNORECASE)
+    txt = re.sub(r'(?i)<br\b[^>]*>|</p\s*>', _BR_RAW, txt)    # 원문 줄바꿈 → 본문 목록 줄 구분
     txt = _html.unescape(re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', txt))).strip()
+    txt = _ws(re.sub(r'\s*\ue000[\s\ue000]*', _BR, txt))
     m = re.search(r'제\s*목\s*[:：]\s*(.+)$', txt)
     if not m:
         return None, None

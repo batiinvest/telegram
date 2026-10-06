@@ -21,6 +21,7 @@ from dart_doc import (          # 사용 + 하위호환 재수출
 )
 from dart_parsers import *      # parse_* 전 파서 재수출 (하위호환)
 from dart_parsers import _PARSER_MAP, _SKIP_DETAIL_TYPES, parse_amendment
+from dart_parse_helpers import _tidy_lines
 
 log = logging.getLogger(__name__)
 
@@ -117,7 +118,7 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
         return ''
 
     try:
-        kv = _build_kv(html)
+        kv = _build_kv(html, br=True)   # 원문 줄바꿈 보존 → 최종 _tidy_lines가 줄로 펼침
         if not kv:
             # 표 없는 산문 문서(KRX 기타시장안내 등) — 조기 반환하지 않고
             # 카테고리 파서의 _html 폴백에 기회를 준다
@@ -175,27 +176,27 @@ def get_disclosure_detail(rcept_no: str, report_nm: str) -> str:
                     lines.extend(['', '════════════', ''])
                     lines.extend(sub)
                 PARSER_STATS['amendment'] += 1
-                return '\n'.join(lines)
+                return '\n'.join(_tidy_lines(lines))
 
         fn, lines = _run_chain()
         if lines:
             PARSER_STATS[fn.__name__] += 1
             log.debug(f'[DART 파서] 카테고리 파서 사용 ({report_nm})')
-            return '\n'.join(lines)
+            return '\n'.join(_tidy_lines(lines))
 
         # [첨부정정] 경량 요약 — 하위 파서 실패 시 정정표 노이즈 대신 정정대상·내용만
         if report_nm.startswith('[첨부정정]'):
             alines = _attach_amend_summary(kv)
             if alines:
                 PARSER_STATS['attach_amend'] += 1
-                return '\n'.join(alines)
+                return '\n'.join(_tidy_lines(alines))
 
         # 범용 파서 fallback
         lines = parse_all_fields(kv)
         PARSER_STATS['fallback' if lines else 'empty'] += 1
         if not lines:
             log.debug(f'[DART 파서] 파싱 결과 없음 ({report_nm})')
-        return '\n'.join(lines)
+        return '\n'.join(_tidy_lines(lines))
 
     except Exception as e:
         PARSER_STATS['error'] += 1

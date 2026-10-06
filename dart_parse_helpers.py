@@ -8,7 +8,7 @@ import re
 import logging
 
 from dart_doc import (
-    _get, _trunc, _trunc_clean,
+    _get, _trunc, _trunc_clean, _ws, _BR, _BR_RAW, _BR_LIST, _sub_parts,
     _fetch_dart_majorstock, _fetch_dart_reporter,
 )
 
@@ -267,7 +267,7 @@ def _get_body(kv: dict, *keys: str) -> str | None:
     for key in keys:
         for k, v in kv.items():
             if key in k and '정정전' not in k and '정정후' not in k:
-                full = re.sub(r'\s+', ' ', v or '').strip()
+                full = _ws(v)
                 if len(full) > len(frag) and nf in re.sub(r'\s+', '', full):
                     return full
     return frag
@@ -283,13 +283,15 @@ _DIFF_SPLIT = re.compile(
     # 문장 끝
     r'|(?<=[다음함됨임]\.)\s+'
     # 담보·보증 내역 '[순번 N]' — 순번이 밀려도 같은 계약은 같은 조각(번호는 비교에서 제외)
-    r'|\s*\[\s*순번\s*\d+\s*\]\s*')
+    r'|\s*\[\s*순번\s*\d+\s*\]\s*'
+    # 원문 줄바꿈(_BR)·붙은 값 사이에 _unglue가 넣은 ' · ' — 한 줄/한 값 = 한 조각
+    r'|\s*\x1f\s*|\s+·\s+')
 
 
 def _diff_segments(text: str) -> list[str]:
     """정정 비교용 분절 — 번호·순번·대시 불릿·문장끝 모두 경계(정정전/후 분절 기준 일치).
     표지·대시만 남은 빈 조각('가. - 나. -', '-', '다 음')과 중복 조각은 버림."""
-    t = re.sub(r'\s+', ' ', text or '').strip()
+    t = _ws(text)
     segs, seen = [], set()
     for p in _DIFF_SPLIT.split(t):
         s = (p or '').strip(' -')
@@ -299,6 +301,93 @@ def _diff_segments(text: str) -> list[str]:
         seen.add(k)
         segs.append(s)
     return segs
+
+
+_VAL_TOK = re.compile(
+    r'\d{4}\s?년\s?\d{1,2}\s?월(?:\s?\d{1,2}\s?일)?'          # 2026년 09월 28일 · 2026년 9월
+    r'|\d{1,2}\s?월\s?\d{1,2}\s?일'                             # 10월 21일
+    r'|\d{2,4}[.\-/]\s?\d{1,2}[.\-/]\s?\d{1,2}\.?'             # 2026.09.28 · 2026-09-28 · 26.09.30
+    r'|-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?(?![\d.)]*[.)]\s?[가-힣(])')  # 1,954,394 · 20.12
+
+
+def _value_diff(field: str, old: str, new: str, max_pairs: int = 10) -> str:
+    """표가 한 줄로 이어진 정정(합병일정·모집 요약·보유비율 등) — 글자 뼈대가 같고 값(날짜·수)만
+    바뀌었으면 바뀐 값만 '항목 구값 → 신값'으로. 예전엔 300자짜리 [전]/[후] 덤프 두 줄을 눈으로
+    대조해야 했음(IBKS제24호스팩 합병일정 2026-10-02). 뼈대가 다르면 '' → 호출부가 문장 비교.
+    항목명은 값 바로 앞 글자 — 값 사이마다 글자가 있고(번갈아 나옴) 마지막 값 뒤가 짧을 때만
+    붙임. 표 머리행 뒤에 값이 줄줄이 오는 덤프('수량 액면가 가액 … 1,954,394 500 1,535')나
+    '날짜 절차' 순 표에선 앞 글자가 그 값의 항목이 아니라서 값 쌍만 보인다(오표기 방지)."""
+    def parts(s):
+        s = re.sub(r'\s+', ' ', s or '').strip()
+        vals, gaps, pos = [], [], 0
+        for m in _VAL_TOK.finditer(s):
+            if re.fullmatch(r'\d{1,2}', m.group(0)) and s[m.end():m.end() + 1] == ')':
+                continue                     # 각주 번호('주1)')는 값 아님
+            vals.append(m.group(0))
+            gaps.append(s[pos:m.start()])
+            pos = m.end()
+        gaps.append(s[pos:])
+        return vals, gaps
+
+    vo, go = parts(old)
+    vn, gn = parts(new)
+    if len(vo) < 2 or len(vo) != len(vn):
+        return ''
+    if [re.sub(r'\s', '', g) for g in go] != [re.sub(r'\s', '', g) for g in gn]:
+        return ''
+
+    _UNIT = r'^(?:개월|년|월|일|인|명|주|원|건|회|차|시|%|배)(?![가-힣])'   # 값에 바로 붙은 단위만
+
+    def word(g):
+        return len(re.sub(r'[^가-힣A-Za-z]', '', re.sub(_UNIT, '', g))) >= 2
+    # '항목 값 항목 값…' 순서일 때만 항목명 — 첫 값 앞 글자가 항목명(':'·'…일/기간/금액/수/율/명…')으로
+    # 끝나고 값 사이마다 글자가 있을 때. '공모 주요일정 일 자 절 차 2026년 …'처럼 '값 항목' 순 표는 제외.
+    labeled = (bool(re.search(r'(?:[:：]|일|일자|기간|금액|액|수|율|명|가|가격|가액|주식|여부|기준일|만기일)\s*$', go[0]))
+               and all(word(g) for g in go[1:-1]))
+    if not labeled:
+        # 항목명 없는 값 쌍은 표가 글자만 이어진 덤프일 때만(값이 붙어 줄줄이) — 문장 속 값은 [전]/[후] 문장이 낫다
+        inner = sorted(len(re.sub(r'[\s·~\-,()/:]', '', g)) for g in go[1:-1]) or [99]
+        big = sum(1 for v in vo if re.search(r'[년.\-/]\s?\d|\d,\d{3}', v))   # 날짜·천 단위 수
+        small = any(re.fullmatch(r'\d{1,3}', a) and re.fullmatch(r'\d{1,3}', b) and a != b
+                    for a, b in zip(vo, vn))       # '외 8인'·'3개월'의 작은 수는 문장 맥락이 필요
+        if (len(vo) < 4 or inner[len(inner) // 2] > 3 or len(re.sub(r'\s+', ' ', old)) < 120
+                or big * 2 <= len(vo) or small):
+            return ''
+        o_s, n_s = _diff_segments(old), _diff_segments(new)
+        ro, an = [x for x in o_s if x not in n_s], [x for x in n_s if x not in o_s]
+        if len(ro) <= 1 and len(an) <= 1 and all(len(x) <= 100 for x in ro + an):
+            return ''                        # 바뀐 문장 하나가 짧으면 [전]/[후]가 맥락까지 보여 줌
+    pairs, seen, prev = [], set(), ''
+    for i, (a, b) in enumerate(zip(vo, vn)):
+        lab = ''
+        if labeled:
+            g_ = re.sub(_UNIT, '', go[i])
+            g_ = re.sub(r'^\s*\d{1,2}[.)]\s*', '', g_.strip(' :：,·-').lstrip(')').rstrip('(').strip())
+            ws_ = g_.split()
+            lab = ' '.join(ws_[-3:])[-24:]
+            if lab in ('시작일', '종료일', '시작', '종료') and prev:      # '주주명부폐쇄기간 시작일 … 종료일'
+                lab = f'{prev} {lab}'
+            if len(ws_) >= 2:
+                prev = ' '.join(w for w in ws_[-3:-1] if w not in ('시작일', '종료일'))[-16:]
+        if re.sub(r'\s', '', a) == re.sub(r'\s', '', b):
+            continue
+        key = (lab, a, b) if labeled else (a, b)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(f'{lab} {a} → {b}'.strip())
+    if not pairs:
+        return ''
+    head = f'🔧 {field or "변경"}:'
+    if len(pairs) == 1:
+        return f'{head} {pairs[0]}'
+    more = len(pairs) - max_pairs
+    if labeled:
+        body = [f'    {p}' for p in pairs[:max_pairs]]
+    else:                                   # 항목명 없는 값 쌍은 3개씩 한 줄
+        ps = pairs[:max_pairs]
+        body = ['    ' + ' · '.join(ps[i:i + 3]) for i in range(0, len(ps), 3)]
+    return '\n'.join([head] + body + ([f'    …외 {more}건'] if more > 0 else []))
 
 
 def _prose_diff(field: str, old: str, new: str, full: str = '', max_seg: int = 4,
@@ -311,6 +400,9 @@ def _prose_diff(field: str, old: str, new: str, full: str = '', max_seg: int = 4
     '정정전에 있고 조각엔 없는 문장이 전문에 남아 있을' 때만 전문과 비교. 정정전도 조각인
     양식(한미약품 2026-08-26)에서 전문과 비교하면 안 바뀐 항목이 [후]로 쏟아지므로 조각 유지.
     차이가 공백·마침표뿐이면 ''."""
+    if vd := _value_diff(field, old, new):
+        return vd
+
     def norm(s):
         return re.sub(r'[\s.。]', '', s)
     o, n = _diff_segments(old), _diff_segments(new)
@@ -706,4 +798,110 @@ def _parse_agm_notice_text(kv: dict) -> list:
     return lines
 
 
-__all__ = ['log', '_get', '_trunc', '_trunc_clean', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list', '_rel_text', '_numbered_with_lead']
+# 원문에서 구분자 없이 붙은 값 — 금감원 정정표 셀은 하위 표를 글자만 이어 붙여 옮긴다
+# ('…790원1,535원 (액면가액 500원)2026년 09월 22일2026년 10월 02일', '2026.10.222026.10.12…',
+#  '의결권 있는 주식4,600,000주수(주)4,600,000비율(%)20.12'), 줄바꿈이 사라진 셀('…같습니다.- 대표자명:
+#  정용환- 본점'). 경계가 확실한 곳만 띄움 — 값이 바뀌는 자리(숫자 단위 뒤 숫자·날짜 연속)는 ' · '.
+_UNGLUE = (
+    (re.compile(r'(?<=\d{4}\.\d{2}\.\d{2})(?=\d{4}\.\d{1,2}\.)'), ' · '),      # 2026.10.222026.10.12
+    (re.compile(r'(?<=\d일)(?=\d{4}\s?년)'), ' · '),                           # 22일2026년
+    (re.compile(r'(?<=\d원)(?=\d)'), ' · '),                                    # 790원1,535원
+    (re.compile(r'(?<=\d주)(?=금\s?\d)'), ' · '),                               # 1,954,394주금 2,999…
+    (re.compile(r'(?<=\))(?=\d{4}\s?년)'), ' · '),                              # 500원)2026년
+    (re.compile(r'(?<=[가-힣])(?=\d{1,3}(?:,\d{3})+(?![\d,])|\d+\.\d+(?![\d.])'
+                r'|\d{4}\s?년|\d{4}\.\d{1,2}\.\d{1,2})'), ' '),               # 주식4,600,000·비율20.12
+    (re.compile(r'(?<=[)%])(?=\d{1,3}(?:,\d{3})+(?![\d,])|\d+\.\d+(?![\d.]))'), ' '),  # (주)4,600,000
+    (re.compile(r'(?<=[가-힣)])(?=\d{1,2}\.\s?[가-힣])'), ' '),                 # 높은가액)2. 행사기간
+    (re.compile(r'(?<=\d{4})(?=(?:19|20)\d{2}\s?~)|(?<=현재)(?=(?:19|20)\d{2})'), ' · '),  # 20192019~현재
+    (re.compile(r'(?<=\((?:%|원)\))(?=[가-힣])'), ' '),                          # 보유비율(%)주식등
+    (re.compile(r'(?<=[가-힣]다\.)(?=[가-힣(\-])'), ' '),                       # 기원합니다.우리
+    (re.compile(r'(?<=[가-힣)])-(?=\s)'), ' -'),                                # 정용환- 본점(HER2- 제외)
+)
+
+
+def _unglue(s: str) -> str:
+    """원문에서 붙은 값 띄우기(_UNGLUE). URL이 든 줄은 건드리지 않음."""
+    if not s or 'http' in s:
+        return s
+    for pat, rep_ in _UNGLUE:
+        s = pat.sub(rep_, s)
+    return s
+
+
+def _split_br(ln: str) -> list:
+    """줄바꿈 표지가 든 한 줄 → 목록(하위 줄 2개+가 목록 머리)이거나 120자 넘으면 들여 쓴 여러 줄,
+    아니면 공백으로 이은 한 줄. 정정 [전]/[후]·🔧 줄은 조각 단위라 항상 한 줄."""
+    lead = ln[:len(ln) - len(ln.lstrip(' '))]
+    parts = []
+    for p in (x.strip() for x in ln.split(_BR)):
+        if p and parts and re.fullmatch(r'\([^()]{1,60}\)', p):
+            parts[-1] += f' {p}'                 # '(다수공급자계약)'은 앞 줄 꼬리
+        elif p and not re.fullmatch(r'(?:[가-하]\s?\.|\d{1,2}[.)]|※\.?)?\s*-?', p):
+            parts.append(p)                      # 값 없는 원문 줄('가. -'·'-')은 버림
+    if not parts:
+        return []
+    first, rest = parts[0], parts[1:]
+    m = re.match(r'^(.{1,40}?[:：])\s+(?=' + _BR_LIST.pattern + r')', first)
+    listy = sum(1 for p in rest if _BR_LIST.match(p)) + bool(m or _BR_LIST.match(first.lstrip('• ')))
+    if (not rest or re.match(r'\s*(?:\[[전후]\]|🔧)', ln)
+            or (len(' '.join(parts)) <= 120 and listy < 2)):
+        return [lead + ' '.join(parts)]
+    sub = lead + ('  ' if lead else '   ')
+    # '📋 내용: - 회사 소개'처럼 라벨 뒤 첫 값도 목록 머리면 라벨만 남기고 내림
+    res = [lead + m.group(1), sub + first[m.end():]] if m else [lead + first]
+    if len(rest) > 15:
+        rest = rest[:14] + [' '.join(rest[14:])]
+    return res + [sub + p for p in rest]
+
+
+_INLINE_DASH = re.compile(r'\s+-\s*(?=[가-힣A-Za-z(「"“])')
+
+
+def _split_dash(ln: str) -> list:
+    """원문 줄바꿈 없이 ' - '로 이어진 목록(3항목+, 150자+) → 하위 줄. 정정 [전]/[후]·🔧 줄 제외.
+    예: '6,300,000주 (100.0%): - 구주 1주당 … - 신주배정 기준일 : … - 구주주 청약일 : …'"""
+    if len(ln) <= 150 or re.match(r'\s*(?:\[[전후]\]|🔧)', ln):
+        return [ln]
+    lead = ln[:len(ln) - len(ln.lstrip(' '))]
+    parts = _INLINE_DASH.split(ln.strip())
+    if len(parts) < 3:
+        return [ln]
+    sub = lead + ('  ' if lead else '   ')
+    head = parts[0].rstrip(' -')
+    return ([lead + head] if head else []) + [f'{sub}- {p.strip()}' for p in parts[1:] if p.strip()]
+
+
+_LETTERS = '가나다라마바사아자차카타파하'
+
+
+def _split_letters(ln: str) -> list:
+    """줄바꿈 없이 이어진 한글 순번('철회내용 가.신주의 종류… 나.신주의 발행방법… 다.…') → 하위 줄.
+    '가'부터 차례로 3개+ 이어질 때만(문장 속 '참가.'·'다.' 오인 방지). 150자 이하·정정 줄 제외."""
+    if len(ln) <= 100 or re.match(r'\s*(?:\[[전후]\]|🔧)', ln):
+        return [ln]
+    lead = ln[:len(ln) - len(ln.lstrip(' '))]
+    t = ln.strip()
+    picked = []
+    for m in re.finditer(r'(?<![\w.(])([가-하])\s?\.(?!\d)', t):
+        if len(picked) < len(_LETTERS) and m.group(1) == _LETTERS[len(picked)]:
+            picked.append(m)
+    if len(picked) < 3:
+        return [ln]
+    head = t[:picked[0].start()].strip()
+    sub = (lead + ('  ' if lead else '   ')) if head else lead
+    items = [t[m.start():(picked[j + 1].start() if j + 1 < len(picked) else len(t))].strip()
+             for j, m in enumerate(picked)]
+    return ([lead + head] if head else []) + [sub + it for it in items if it]
+
+
+def _tidy_lines(lines: list) -> list:
+    """최종 렌더 정리 — 값 속 원문 줄바꿈을 줄로 펼치고(목록·긴 문단), 붙은 값을 띄운다."""
+    out = []
+    for ln in lines:
+        for l2 in (_split_br(ln) if _BR in ln else [ln]):
+            for l3 in _split_dash(_unglue(l2)):
+                out.extend(_split_letters(l3))
+    return [ln.replace(_BR, ' ').replace(_BR_RAW, ' ') for ln in out]
+
+
+__all__ = ['log', '_get', '_trunc', '_trunc_clean', '_sub_parts', '_ws', '_BR', '_BR_RAW', '_BR_LIST', '_unglue', '_tidy_lines', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list', '_rel_text', '_numbered_with_lead']
