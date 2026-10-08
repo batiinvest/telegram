@@ -17,7 +17,7 @@ from db_utils import fetch_all_pages as _fetch_all_pages
 
 import stock_api
 from ai_analyst import analyze_disclosure_gemini
-from dart_parser import get_disclosure_detail, get_audit_opinion
+from dart_parser import get_disclosure_detail, get_audit_opinion, strip_item_emoji
 
 from config import (
     DART_API_KEY,
@@ -376,6 +376,8 @@ class DartRoutingBot:
         # 외부 데이터(DART 파싱 detail·기업명·공시명)는 원문 XML/특수문자(<,>,&)를
         # 포함할 수 있어 HTML parse_mode를 깨뜨림(예: <?xml → 400 발송실패) → 이스케이프.
         corp_esc    = html.escape(corp_name or "", quote=False)
+        # 본문 항목마다 앞에 붙던 이모지는 빼서 읽기 쉽게(10-08 사용자 요청) — 제목·링크 줄, 등락 🔴/🔵는 유지
+        detail      = strip_item_emoji(detail) if detail else ""
         detail_esc  = html.escape(detail, quote=False) if detail else ""
         detail_block = f"\n\n{detail_esc}" if detail_esc else ""
         # DART report_nm에 과도한 공백이 포함되는 경우 정규화

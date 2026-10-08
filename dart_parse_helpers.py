@@ -904,4 +904,15 @@ def _tidy_lines(lines: list) -> list:
     return [ln.replace(_BR, ' ').replace(_BR_RAW, ' ') for ln in out]
 
 
-__all__ = ['log', '_get', '_trunc', '_trunc_clean', '_sub_parts', '_ws', '_BR', '_BR_RAW', '_BR_LIST', '_unglue', '_tidy_lines', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list', '_rel_text', '_numbered_with_lead']
+# 줄 머리 이모지(📊·👤·📦·🔧·⚠️·➖ 등, 변형 선택자·ZWJ 결합 포함) — 등락 🔴/🔵는 남김
+_ITEM_EMOJI = re.compile(
+    r'^([ \t]*)(?![🔴🔵])(?:[\U0001F000-\U0001FAFF⌀-⏿☀-➿⬀-⯿]'
+    r'[️‍\U0001F3FB-\U0001F3FF]*)+[ \t]*', re.M)
+
+
+def strip_item_emoji(text: str) -> str:
+    """알림 본문 각 줄 앞 이모지 제거('📊 증감: 🔴 +45,800주' → '증감: 🔴 +45,800주')."""
+    return _ITEM_EMOJI.sub(r'\1', text or '')
+
+
+__all__ = ['log', 'strip_item_emoji', '_get', '_trunc', '_trunc_clean', '_sub_parts', '_ws', '_BR', '_BR_RAW', '_BR_LIST', '_unglue', '_tidy_lines', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list', '_rel_text', '_numbered_with_lead']

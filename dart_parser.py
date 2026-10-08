@@ -21,7 +21,7 @@ from dart_doc import (          # 사용 + 하위호환 재수출
 )
 from dart_parsers import *      # parse_* 전 파서 재수출 (하위호환)
 from dart_parsers import _PARSER_MAP, _SKIP_DETAIL_TYPES, parse_amendment
-from dart_parse_helpers import _tidy_lines
+from dart_parse_helpers import _tidy_lines, strip_item_emoji  # noqa: F401 (main 발송 조립용 재수출)
 
 log = logging.getLogger(__name__)
 
