@@ -244,26 +244,69 @@ def parse_insider_report(kv: dict) -> list:
         _dm = re.match(r'(\d{4})\D+(\d{1,2})\D+(\d{1,2})', m_row.group(2))
         change_date = f'{_dm.group(1)}-{int(_dm.group(2)):02d}-{int(_dm.group(3)):02d}'
 
-    # 변동전 / 변동후 (합계 행 우선, 없으면 첫 데이터 행)
+    # 변동전 / 변동후 — 요약표(직전보고서·이번보고서: 특정증권등의 수·공식 비율) 우선,
+    # 없으면 세부표 합계(변동후 − 증감 — 합계 행 변동전이 틀린 원문 대비), 그것도 없으면 첫·마지막 행
     prev = after = None
-    m_sum = re.search(rf'합\s*계\s+{_N}\s+{_M}\s+{_N}', detail)
-    if m_sum:
-        prev, after = _n(m_sum.group(1)), _n(m_sum.group(2))
-    else:
-        m_d = re.search(rf'{_D}\s+\S+\s+{_N}\s+{_M}\s+{_N}', detail)
-        if m_d:
-            prev, after = _n(m_d.group(1)), _n(m_d.group(2))
+    r_prev = r_after = None
+    m_pv = re.search(rf'직전\s*보고서\s+(?:{_D}|-)\s+{_N}\s+(-|[\d.]+)', txt)
+    m_cv = re.search(rf'이번\s*보고서\s+(?:{_D}|-)\s+{_N}\s+(-|[\d.]+)', txt)
+    m_sum = re.search(rf'합\s*계\s+{_N}\s+({_M})\s+{_N}(?:\s+\(?([\d,]{{2,}})\)?)?', detail)
+    rows = list(re.finditer(rf'{_D}\s+\S+\s+{_N}\s+({_M})\s+{_N}', detail))
+    if m_pv and m_cv:
+        prev, after = _n(m_pv.group(1)), _n(m_cv.group(1))
+        r_prev = m_pv.group(2) if m_pv.group(2) != '-' else None
+        r_after = m_cv.group(2) if m_cv.group(2) != '-' else None
+    elif m_sum and m_sum.group(2) != '-':
+        after = _n(m_sum.group(3))
+        prev = after - int(m_sum.group(2).replace(',', ''))
+    elif rows:
+        prev, after = _n(rows[0].group(1)), _n(rows[-1].group(3))
+
+    def _rt(n: int, official) -> str:
+        return f' ({float(official):.2f}%)' if official else _ratio(n)
+
+    # 세부변동 행: 사유('장내매수(+)')·부호·증권 종류·단가
+    row_re = (rf'([가-힣A-Za-z][가-힣A-Za-z ]{{0,20}}?)\s*\(([+\-])\)\s+{_D}\s+(\S+)\s+{_N}\s+{_M}\s+{_N}'
+              rf'(?:\s+\(?([\d,]{{2,}})\)?)?')
+    trades = [(m_t.group(1).strip(), m_t.group(2), m_t.group(3), m_t.group(6))
+              for m_t in re.finditer(row_re, detail)]
+    # 주식 아닌 증권 — 단가 칸은 행사가라 주식 단가로 쓰지 않고, 사유에 종류 표시
+    others = list(dict.fromkeys(
+        re.sub(r'이표시된것$', '', t) for _r, _s, t, _p in trades
+        if not re.search(r'보통주|우선주|주권|종류주', t)))
+    reasons = list(dict.fromkeys(([reason] if reason else []) + [r for r, _, _, _ in trades]))
+    if reasons:
+        reason = ' · '.join(reasons[:3]) + (f' 외 {len(reasons) - 3}' if len(reasons) > 3 else '')
+    reason = re.sub(r'(^|· )주식매수선택권($| ·)', r'\1주식매수선택권 행사\2', reason)
+    if others:
+        reason += f' ({"·".join(others)})'
+    px = {'+': [], '-': []}
+    for _r, sg, _t, pr in trades:
+        if pr and int(pr.replace(',', '')) > 0:
+            px[sg].append(int(pr.replace(',', '')))
+
+    def _rng(v: list) -> str:
+        return f'{min(v):,}원' if min(v) == max(v) else f'{min(v):,}~{max(v):,}원'
 
     if prev is not None and after is not None:
         change = after - prev
         sign = '+' if change >= 0 else ''
+        icon = '🔴 ' if change > 0 else ('🔵 ' if change < 0 else '')
         reason_str = f' · {reason}' if reason else ''
-        lines.append(f'📊 증감: {sign}{change:,}주{reason_str}')
+        lines.append(f'📊 증감: {icon}{sign}{change:,}주{reason_str}')
+        lab = '행사가' if re.search(r'선택권|행사', reason) and not re.search(r'장내|장외|시간외', reason) else '단가'
+        if others:
+            pass
+        elif px['+'] and px['-']:
+            lines.append(f'💵 {lab}: 매수 {_rng(px["+"])} · 매도 {_rng(px["-"])}')
+        elif px['+'] or px['-']:
+            v = px['+'] or px['-']
+            avg = m_sum.group(4) if m_sum and len(v) > 1 else None
+            lines.append(f'💵 {lab}: ' + (f'평균 {avg}원 ({_rng(v)})' if avg else _rng(v)))
         if prev == 0:
-            lines.append(f'📦 신규취득: {after:,}주{_ratio(after)}')
+            lines.append(f'📦 신규취득: {after:,}주{_rt(after, r_after)}')
         else:
-            arrow = '🔴' if change >= 0 else '🔵'
-            lines.append(f'📦 보유: {prev:,}주{_ratio(prev)} {arrow} {after:,}주{_ratio(after)}')
+            lines.append(f'📦 보유: {prev:,}주{_rt(prev, r_prev)} → {after:,}주{_rt(after, r_after)}')
 
     if change_date:
         lines.append(f'📅 변동일: {change_date}')
