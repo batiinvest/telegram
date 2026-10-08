@@ -388,9 +388,6 @@ def save_new_high_to_db(rows: list[dict], base_date: str, sb_client=None):
     ② near-new-highlow API 결과 종목만 재설정
     순서로 처리한다.
     """
-    if not rows:
-        logging.warning("[신고가] 저장할 데이터 없음")
-        return
     # sb_client 없으면 직접 생성
     if sb_client is None:
         sb_client = get_supabase_client()
@@ -405,6 +402,10 @@ def save_new_high_to_db(rows: list[dict], base_date: str, sb_client=None):
         logging.info(f"[신고가] {base_date} hgpr_cls_code 초기화 완료")
     except Exception as e:
         logging.warning(f"[신고가] 초기화 실패 (이어서 진행): {e}")
+
+    if not rows:   # 수정주가 재확인으로 후보가 전부 빠진 날도 15:45 수집이 남긴 원주가 기준 플래그는 지운다
+        logging.info("[신고가] 오늘 신고가 없음 — 초기화만")
+        return
 
     # ② near-new-highlow API 결과만 재설정 (존재 행만 배치 upsert — 행 단위 update 제거)
     records = []
@@ -521,10 +522,79 @@ def annotate_new_high_sectors(rows: list[dict], sb_client=None):
     return rows
 
 
+def _adjusted_prior_range(code: str, today: date, weeks: int = 52) -> Optional[tuple]:
+    """KIS 수정주가 일봉으로 오늘을 뺀 직전 52주 (최고가, 최저가). 조회 실패면 None.
+
+    한 번에 최대 100행이라 130일 창 3개(390일)를 거꾸로 이어 붙인다.
+    """
+    cutoff  = (today - timedelta(weeks=weeks)).strftime('%Y%m%d')
+    today_s = today.strftime('%Y%m%d')
+    highs, lows = [], []
+    end = today
+    for _ in range(3):
+        start = end - timedelta(days=129)
+        data = kis_auth.kis_get('FHKST03010100', 'quotations/inquire-daily-itemchartprice', {
+            'FID_COND_MRKT_DIV_CODE': 'J',
+            'FID_INPUT_ISCD':         code,
+            'FID_INPUT_DATE_1':       start.strftime('%Y%m%d'),
+            'FID_INPUT_DATE_2':       end.strftime('%Y%m%d'),
+            'FID_PERIOD_DIV_CODE':    'D',
+            'FID_ORG_ADJ_PRC':        '0',   # 수정주가 (감자·병합·분할·무상증자 보정)
+        }, custtype='P')
+        if not data or data.get('rt_cd') != '0':
+            return None
+        for r in data.get('output2') or []:
+            d = r.get('stck_bsop_date') or ''
+            if not (cutoff <= d < today_s):   # 오늘 행 제외 — 저녁엔 장 마감 뒤 체결이 섞인다
+                continue
+            hi = safe_int(r.get('stck_hgpr'), zero_as_none=True)
+            lo = safe_int(r.get('stck_lwpr'), zero_as_none=True)
+            if hi:
+                highs.append(hi)
+            if lo:
+                lows.append(lo)
+        end = start - timedelta(days=1)
+    if not highs:
+        return None
+    return max(highs), (min(lows) if lows else None)
+
+
+def filter_new_high_adjusted(rows: list[dict], today: date) -> list[dict]:
+    """수정주가 기준으로 진짜 52주 신고가만 남긴다.
+
+    market_data.w52_high(KIS inquire-price w52_hgpr)는 원주가 기준이라, 1년 안에 감자·주식병합한
+    종목은 옛 가격이 작게 남아 고점 한참 아래인데도 '신고가'로 잡힌다(2026-10-08 알림 20개 중 5개:
+    HLB바이오스텝·더라미·시그네틱스 5:1, 웰킵스하이텍·MSDI 2:1). 후보마다 수정주가 일봉으로 직전 52주
+    최고가를 다시 구해 오늘 고가가 넘었는지 본다 — 네이버 수정 52주 최고가와 5/5 일치 확인.
+    오늘 고가·저가는 market_data(15:45 정규장 확정) 값을 쓴다. 조회 실패 종목은 원주가 판정대로 둔다.
+    """
+    kept, dropped, failed = [], [], []
+    for r in rows:
+        rng = _adjusted_prior_range(r['code'], today)
+        if rng is None:
+            failed.append(r['name'])
+            kept.append(r)
+            continue
+        prior_high, prior_low = rng
+        # w52_high_date == 오늘인 후보라 d52_high(w52_high) = 오늘 정규장 고가
+        if r['d52_high'] > prior_high:
+            lows = [v for v in (prior_low, r.get('day_low')) if v]
+            if lows:
+                r['d52_low'] = min(lows)   # 알림의 52주 저가도 수정주가로
+            kept.append(r)
+        else:
+            dropped.append(f"{r['name']}({r['d52_high']:,}≤{prior_high:,})")
+    if dropped:
+        logging.info(f"[신고가] 수정주가 기준 신고가 아님 {len(dropped)}개 제외: {', '.join(dropped)}")
+    if failed:
+        logging.warning(f"[신고가] 수정주가 조회 실패 {len(failed)}개 — 원주가 판정 유지: {', '.join(failed)}")
+    return kept
+
+
 def collect_new_high():
     """장 마감 확정 데이터(market_data) 기준으로 오늘 52주 신고가 갱신 종목 조회.
 
-    ⚠️ 반드시 장마감 확정 수집(job_collect_market_closing, 17:00) 이후 실행할 것.
+    ⚠️ 반드시 장마감 확정 수집(job_collect_market_closing, 15:45) 이후 실행할 것.
 
     구현 이력: 과거엔 KIS near-new-highlow 랭킹 API(FHPST01870000)를 소스로 썼으나,
     이 API는 고정 소량 페이지(코스피 ~17·코스닥 ~30행)만 반환하고 그 페이지가 거래량 0
@@ -534,14 +604,15 @@ def collect_new_high():
     → market_data 소스로 교체: 전체 상장사(≈2,658) 커버 + 장마감 확정 종가 기준.
 
     판정: base_date == 오늘 AND w52_high_date == 오늘(장중 52주 신고가 갱신)
-          AND volume > 0(실거래) AND price_change_rate > 0(상승 마감).
+          AND volume > 0(실거래) AND price_change_rate > 0(상승 마감)
+          AND 오늘 고가 > 수정주가 기준 직전 52주 최고가(filter_new_high_adjusted — 감자·병합 오탐 제거).
     ※ 장중 신고가를 찍고 급반락 마감한 종목(예: -14%)은 '신고가 갱신'으로 보지 않아 제외.
     """
     today = date.today().isoformat()
     sb_client = get_supabase_client()
 
     res = sb_client.table('market_data') \
-        .select('stock_code,corp_name,price,price_change_rate,w52_high,w52_low,volume') \
+        .select('stock_code,corp_name,price,price_change_rate,w52_high,w52_low,low_price,volume') \
         .eq('base_date', today) \
         .eq('w52_high_date', today) \
         .gt('volume', 0) \
@@ -564,9 +635,11 @@ def collect_new_high():
             'new_hgpr_code': '1',
             'd52_high':      int(r.get('w52_high') or 0),
             'd52_low':       int(r.get('w52_low') or 0),
+            'day_low':       int(r.get('low_price') or 0),
         })
 
     logging.info(f"[신고가] market_data 기준 {len(result)}개 (오늘 갱신·상승마감·실거래)")
+    result = filter_new_high_adjusted(result, date.today())   # 수정주가 재확인 — 감자·병합 오탐 제거
     annotate_new_high_streaks(result, sb_client)   # 각 종목에 연속 신고가 일수(streak) 부여
     annotate_new_high_sectors(result, sb_client)   # 각 종목에 broad 섹터(sector_group) 부여
     save_new_high_to_db(result, today, sb_client)
