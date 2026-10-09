@@ -15,14 +15,28 @@ AI_MODEL_ID = "gemini-2.5-flash"
 # (preview는 503 상습·무료 쿼터 작아 제거. throughput 더 필요하면 gemini-2.5-flash-lite)
 REPORT_MODEL_ID = "gemini-2.5-flash"
 
-# 초기화
+# 초기화 — Gemini와 DART를 따로 잡는다.
+# OpenDartReader는 생성할 때 DART에 접속해, 한 try로 묶어 두면 DART 점검(status 800) 중 봇이 뜰 때
+# Gemini까지 None이 돼 다음 재시작까지 AI 요약이 전부 꺼졌다(10-09 휴일 점검 중 재시작).
 try:
-    dart = OpenDartReader(DART_API_KEY)
     client = genai.Client(api_key=GOOGLE_API_KEY)
 except Exception as e:
-    logging.error(f"AI Init Failed: {e}")
-    dart = None
+    logging.error(f"AI Init Failed (Gemini): {e}")
     client = None
+
+dart = None   # 처음 쓸 때 _get_dart()가 연결
+
+
+def _get_dart():
+    """OpenDartReader를 처음 쓸 때 만든다. 실패(점검 등)하면 None — 다음 호출 때 다시 시도."""
+    global dart
+    if dart is None:
+        try:
+            dart = OpenDartReader(DART_API_KEY)
+        except Exception as e:
+            logging.warning(f"DART 연결 실패 — 다음 호출 때 재시도: {e}")
+    return dart
+
 
 def clean_html_text(raw_html):
     """HTML 태그 제거 및 텍스트 정제"""
@@ -75,7 +89,7 @@ def analyze_disclosure_gemini(corp_name, report_nm, rcept_no):
     """
     1차: API -> 2차: 모바일 크롤링 -> 3차: AI 분석
     """
-    if not dart or not client:
+    if not client or not _get_dart():
         return None
 
     try:
