@@ -434,6 +434,8 @@ def annotate_new_high_streaks(rows: list[dict], sb_client=None, lookback: int = 
     누락(gap)돼도 연속성을 잘못 세지 않는다. lookback일을 초과하는 streak는
     lookback으로 상한 처리하고 rows[*]['streak_capped']=True로 표시한다.
     각 row에 'streak'(int, 최소 1), 'streak_capped'(bool) 키를 추가한다.
+    row에 '_adj_bars'(filter_new_high_adjusted의 수정주가 일봉)가 있으면 그날 수정주가로도 신고가였는지
+    함께 본다 — 원주가로만 신고가인 날(감자·병합 전 옛 가격 탓)에서 연속이 끊긴다.
     """
     if not rows:
         return rows
@@ -476,12 +478,14 @@ def annotate_new_high_streaks(rows: list[dict], sb_client=None, lookback: int = 
 
     for r in rows:
         m = hist.get(str(r.get('code', '')).strip(), {})
+        bars = r.get('_adj_bars')     # 없으면(조회 실패) 원주가 판정만
         streak = 0
         for d in cal:                 # 오늘 → 과거
-            if m.get(d) == d:         # 그날 52주 신고가 경신
-                streak += 1
-            else:
+            if m.get(d) != d:         # 그날 52주 신고가 경신 아님
                 break
+            if bars and not _adj_new_high_on(bars, d):   # 원주가로만 신고가 — 수정주가로는 아님
+                break
+            streak += 1
         r['streak'] = streak if streak > 0 else 1
         r['streak_capped'] = streak >= len(cal)
     return rows
@@ -522,16 +526,18 @@ def annotate_new_high_sectors(rows: list[dict], sb_client=None):
     return rows
 
 
-def _adjusted_prior_range(code: str, today: date, weeks: int = 52) -> Optional[tuple]:
-    """KIS 수정주가 일봉으로 오늘을 뺀 직전 52주 (최고가, 최저가). 조회 실패면 None.
+def _adjusted_daily_bars(code: str, today: date, windows: int = 4) -> Optional[list]:
+    """KIS 수정주가 일봉 [(YYYY-MM-DD, 고가, 저가), ...] 오름차순, 오늘 행 제외. 조회 실패면 None.
 
-    한 번에 최대 100행이라 130일 창 3개(390일)를 거꾸로 이어 붙인다.
+    한 번에 최대 100행이라 130일 창을 거꾸로 이어 붙인다. 4창(520일) = 오늘의 직전 52주 +
+    연속 배지 lookback(40거래일) 각 날짜의 직전 52주까지.
+    ※ 오늘 행은 쓰지 않는다 — 저녁엔 장 마감 뒤 체결이 섞인다(오늘 고가는 market_data 정규장 값).
+      과거 봉에도 그날 장 마감 뒤 체결이 남아 있다(10-08 한국철강 정규장 9,410 → 일봉 12,090).
     """
-    cutoff  = (today - timedelta(weeks=weeks)).strftime('%Y%m%d')
     today_s = today.strftime('%Y%m%d')
-    highs, lows = [], []
+    bars = {}
     end = today
-    for _ in range(3):
+    for _ in range(windows):
         start = end - timedelta(days=129)
         data = kis_auth.kis_get('FHKST03010100', 'quotations/inquire-daily-itemchartprice', {
             'FID_COND_MRKT_DIV_CODE': 'J',
@@ -545,18 +551,31 @@ def _adjusted_prior_range(code: str, today: date, weeks: int = 52) -> Optional[t
             return None
         for r in data.get('output2') or []:
             d = r.get('stck_bsop_date') or ''
-            if not (cutoff <= d < today_s):   # 오늘 행 제외 — 저녁엔 장 마감 뒤 체결이 섞인다
-                continue
             hi = safe_int(r.get('stck_hgpr'), zero_as_none=True)
-            lo = safe_int(r.get('stck_lwpr'), zero_as_none=True)
-            if hi:
-                highs.append(hi)
-            if lo:
-                lows.append(lo)
+            if len(d) != 8 or d >= today_s or not hi:
+                continue
+            bars[f"{d[:4]}-{d[4:6]}-{d[6:]}"] = (hi, safe_int(r.get('stck_lwpr'), zero_as_none=True))
         end = start - timedelta(days=1)
-    if not highs:
-        return None
-    return max(highs), (min(lows) if lows else None)
+    return [(d, hi, lo) for d, (hi, lo) in sorted(bars.items())]
+
+
+def _prior_52w(bars: list, day: str, weeks: int = 52) -> tuple:
+    """day(YYYY-MM-DD) 직전 52주 수정주가 (최고가, 최저가). 그 구간 봉이 없으면 (None, None)."""
+    cutoff = (date.fromisoformat(day) - timedelta(weeks=weeks)).isoformat()
+    win = [(hi, lo) for d, hi, lo in bars if cutoff <= d < day]
+    if not win:
+        return None, None
+    lows = [lo for _, lo in win if lo]
+    return max(hi for hi, _ in win), (min(lows) if lows else None)
+
+
+def _adj_new_high_on(bars: list, day: str) -> bool:
+    """수정주가 일봉상 day 고가가 직전 52주 최고가를 넘었는지. day 봉·직전 봉이 없으면 판단 보류(True)."""
+    hi = next((h for d, h, _ in bars if d == day), None)
+    if hi is None:
+        return True
+    prior_high, _ = _prior_52w(bars, day)
+    return prior_high is None or hi > prior_high
 
 
 def filter_new_high_adjusted(rows: list[dict], today: date) -> list[dict]:
@@ -567,20 +586,23 @@ def filter_new_high_adjusted(rows: list[dict], today: date) -> list[dict]:
     HLB바이오스텝·더라미·시그네틱스 5:1, 웰킵스하이텍·MSDI 2:1). 후보마다 수정주가 일봉으로 직전 52주
     최고가를 다시 구해 오늘 고가가 넘었는지 본다 — 네이버 수정 52주 최고가와 5/5 일치 확인.
     오늘 고가·저가는 market_data(15:45 정규장 확정) 값을 쓴다. 조회 실패 종목은 원주가 판정대로 둔다.
+    통과 종목엔 일봉을 '_adj_bars'로 붙여 연속 배지(annotate_new_high_streaks)가 재사용한다.
     """
+    today_s = today.isoformat()
     kept, dropped, failed = [], [], []
     for r in rows:
-        rng = _adjusted_prior_range(r['code'], today)
-        if rng is None:
+        bars = _adjusted_daily_bars(r['code'], today)
+        prior_high, prior_low = _prior_52w(bars, today_s) if bars else (None, None)
+        if prior_high is None:
             failed.append(r['name'])
             kept.append(r)
             continue
-        prior_high, prior_low = rng
         # w52_high_date == 오늘인 후보라 d52_high(w52_high) = 오늘 정규장 고가
         if r['d52_high'] > prior_high:
             lows = [v for v in (prior_low, r.get('day_low')) if v]
             if lows:
                 r['d52_low'] = min(lows)   # 알림의 52주 저가도 수정주가로
+            r['_adj_bars'] = bars
             kept.append(r)
         else:
             dropped.append(f"{r['name']}({r['d52_high']:,}≤{prior_high:,})")
@@ -641,6 +663,8 @@ def collect_new_high():
     logging.info(f"[신고가] market_data 기준 {len(result)}개 (오늘 갱신·상승마감·실거래)")
     result = filter_new_high_adjusted(result, date.today())   # 수정주가 재확인 — 감자·병합 오탐 제거
     annotate_new_high_streaks(result, sb_client)   # 각 종목에 연속 신고가 일수(streak) 부여
+    for r in result:
+        r.pop('_adj_bars', None)                   # 연속 배지 계산용 일봉 — 알림·저장엔 불필요
     annotate_new_high_sectors(result, sb_client)   # 각 종목에 broad 섹터(sector_group) 부여
     save_new_high_to_db(result, today, sb_client)
     return result
