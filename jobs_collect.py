@@ -17,7 +17,7 @@ from db_utils import fetch_all_pages
 from format_utils import fmt_change_pct
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, CHAT_IDS_BY_CODE
-from job_infra import _job, _is_enabled, _log_notice, _bridge, _BRIDGE_OK, mark_failed, get_missing_jobs
+from job_infra import _job, _is_enabled, _log_notice, _bridge, _BRIDGE_OK, mark_failed, get_missing_jobs, is_dart_maintenance
 
 # ✅ 재무/시장 데이터 수집 + 상장사 동기화
 try:
@@ -58,8 +58,35 @@ def job_sync_listed_companies():
                 msg += f" 외 {len(gone) - 10}종목"
         _log_notice("system", msg)
     except Exception as e:
+        if is_dart_maintenance(e):
+            # 토요일 새벽 DART 점검이 잦다(08-29·10-10). 그대로 두면 상장·상폐 반영이 한 주 밀려
+            # 일요일 01:00 job_sync_listed_catchup이 한 번 더 돌린다.
+            nxt = "일요일 01:00 재시도" if datetime.date.today().weekday() == 5 else "다음 토요일 재시도"
+            e = f"DART 점검(800) — corp_code 목록 못 받음, {nxt} ({e})"
         logging.error(f"❌ [상장사동기화] 오류: {e}")
         mark_failed(e)
+
+
+@_job()
+def job_sync_listed_catchup():
+    """일요일 01:00 — 토요일 상장사 동기화가 실패했거나 안 돌았을 때만 다시 돌린다.
+    (토요일 새벽 DART 점검으로 corp_code를 못 받는 일이 있다. 동기화는 upsert라 다시 돌려도 안전.)"""
+    if not _BRIDGE_OK:
+        return
+    sat = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    try:
+        rows = (_bridge._get_client().table('job_runs').select('ok,finished_at')
+                .eq('run_date', sat).eq('job_name', 'job_sync_listed_companies')
+                .order('finished_at').execute().data or [])
+    except Exception as e:
+        logging.warning(f"[상장사동기화-보충] job_runs 조회 불가 — 스킵: {str(e)[:120]}")
+        mark_failed(e)
+        return
+    if rows and rows[-1]['ok']:
+        logging.info("🏢 [상장사동기화-보충] 토요일 동기화 정상 — 스킵")
+        return
+    logging.info(f"🏢 [상장사동기화-보충] 토요일 동기화 {'실패' if rows else '기록 없음'} → 다시 실행")
+    job_sync_listed_companies()
 
 
 @_job()
@@ -532,10 +559,19 @@ def job_collect_financials():
                 job_save_trend_flags(y, q)
 
     except Exception as e:
+        if is_dart_maintenance(e):
+            # 지금까지 DART 점검(800)은 전부 주말·공휴일에 왔고(08-29~10-10, 6건), 그런 날은
+            # 공시 자체가 없다(daily_disclosures 0건). 잃은 게 없으니 실패로 올리지 않는다.
+            # 영업일 점검은 실제로 그날 재무를 놓친 것이라 실패로 남긴다.
+            if market_timer.is_kr_holiday():
+                logging.warning("⏸ [재무수집] DART 점검(800) — 비영업일이라 공시 없음, 스킵")
+                return
+            e = f"DART 점검(800) — 오늘 공시 재무 미수집 ({e})"
         logging.error(f"❌ [재무수집] 오류: {e}")
         mark_failed(e)
 
 
+@_job()
 def job_backfill_financials():
     """실적시즌 주말 — 당일공시 잡이 놓친 재무를 전수 백필(스킵-기존, 스팩 제외)."""
     if not _is_enabled('collect_financials'):
@@ -554,6 +590,7 @@ def job_backfill_financials():
         logging.info("📊 [재무백필] 완료")
     except Exception as e:
         logging.error(f"❌ [재무백필] 실패: {e}")
+        mark_failed(e)
 
 
 def job_save_grade_history(year: str = None, quarter: str = None):

@@ -5,6 +5,7 @@ run_all.py 물리 분할 (2026-07): 잡 데코레이터(_job)·실행 결과 기
 브로드캐스트 헬퍼·Supabase 브릿지 접근을 jobs_collect / jobs_briefing /
 watchdog_flags 가 공유한다.
 """
+import os
 import time
 import logging
 import datetime
@@ -141,6 +142,30 @@ def mark_failed(reason):
     fails = getattr(_JOB_LOCAL, 'failures', None)
     if fails is not None:
         fails.append(str(reason)[:200])
+
+
+_DART_MAINT_MARKERS = ("'status': '800'", '"status": "800"', "<status>800</status>", "시스템 점검")
+
+
+def is_dart_maintenance(err=None) -> bool:
+    """DART OpenAPI가 시스템 점검(status 800) 중인지.
+
+    오류 문자열에 800 표식이 있으면 바로 True. 없으면 corpCode.xml 첫 512바이트만 받아 본다 —
+    dart_fss는 점검 응답을 'target does not exist'로 바꿔 던져 원인이 가려진다.
+    정상이면 zip(PK…)이 오므로 본문 전체(수 MB)는 받지 않는다.
+    """
+    s = str(err or '')
+    if any(m in s for m in _DART_MAINT_MARKERS):
+        return True
+    try:
+        import requests
+        with requests.get('https://opendart.fss.or.kr/api/corpCode.xml',
+                          params={'crtfc_key': os.environ.get('DART_API_KEY', '')},
+                          stream=True, timeout=10) as r:
+            head = next(r.iter_content(512), b'')
+        return b'<status>800</status>' in head
+    except Exception:
+        return False
 
 
 def set_expected_jobs(jobs):
