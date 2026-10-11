@@ -1246,6 +1246,21 @@ def job_collect_active_etf():
         mark_failed(e)
 
 
+@_job()
+def job_collect_exports():
+    """매일 10:10 — 관세청 품목·국가·시군구 월별 수출입(최근 3개월) 저장 (화면 '수출 데이터' 페이지).
+    전월 확정치가 매월 15일경 올라오고 정정이 반영되므로 날마다 최근 3개월을 다시 받는다(멱등).
+    휴장일과 무관한 통계라 매일 돈다. 키: .env DATA_GO_KR_KEY (없으면 실패 알림)."""
+    try:
+        logging.info("🚢 [수출] collect_exports 실행 시작")
+        import collect_exports
+        r = collect_exports.run()
+        logging.info(f"=== [수출] 완료: {r.get('series', 0)}계열 · {r.get('rows', 0)}행 · API {r.get('calls', 0)}회 ===")
+    except Exception as e:
+        logging.error(f"❌ [수출] 오류: {e}")
+        mark_failed(e)
+
+
 @_job(holiday=True)
 def job_collect_credit_balance():
     """평일 저녁 (19:00, +10:30 보정) — KOFIA 신용공여 잔고(신용거래융자 등) 수집.
