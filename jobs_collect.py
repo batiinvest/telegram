@@ -1261,6 +1261,21 @@ def job_collect_exports():
         mark_failed(e)
 
 
+@_job()
+def job_earnings_stage():
+    """매일 20:10·07:40 — 실적 국면(태린이아빠 「확정실적 분석」) 전 종목 재계산 → earnings_stage
+    (화면 '실적 국면' 페이지). financials를 다시 읽어 국면 사슬을 처음부터 계산하므로 멱등이다.
+    18:30 재무수집이 마감일엔 자정 넘어까지 돌고 토요일 02:00 백필도 있어 아침에 한 번 더 돈다.
+    테이블이 없으면(sql/earnings_stage.sql 실행 전) 조용히 스킵. 약 20초."""
+    try:
+        import earnings_stage
+        r = earnings_stage.run()
+        logging.info(f"=== [실적국면] 완료: {r.get('stocks', 0)}종목 · 기준분기 {r.get('period')} · {r.get('dist')} ===")
+    except Exception as e:
+        logging.error(f"❌ [실적국면] 오류: {e}")
+        mark_failed(e)
+
+
 @_job(holiday=True)
 def job_collect_credit_balance():
     """평일 저녁 (19:00, +10:30 보정) — KOFIA 신용공여 잔고(신용거래융자 등) 수집.
@@ -1355,6 +1370,7 @@ _RETRYABLE_JOBS = {
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
     'job_collect_credit_balance':   job_collect_credit_balance,
+    'job_earnings_stage':           job_earnings_stage,
 }
 
 

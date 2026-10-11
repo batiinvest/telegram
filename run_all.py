@@ -41,6 +41,7 @@ from jobs_collect import (
     job_daily_summary, job_collect_credit_balance, job_collect_wics,
     job_collect_investor_market, job_collect_fear_greed, job_retry_failed, job_collect_active_etf, job_portfolio_nav,
     job_snapshot_qtr_consensus, job_earnings_surprise_briefing, job_earnings_reconcile, job_collect_exports,
+    job_earnings_stage,
 )
 from jobs_briefing import (
     job_lunch_briefing, job_naver_report, job_daily_closing, job_kind_ir,  # noqa: F401 — kind_ir 발송 중단, 복원용
@@ -175,6 +176,8 @@ def run_scheduler():
     schedule.every().day.at("10:30").do(job_collect_credit_balance)    # 보정 실행 — 전날 발표가 19:00 이후로 밀린 경우 회수(멱등 upsert, 신규 기준일만 발송)
     schedule.every().day.at("08:20").do(job_collect_wics)              # WICS 업종 분류(네이버) — 시세 무관, 장 전 갱신
     schedule.every().day.at("10:10").do(_threaded(job_collect_exports))  # 관세청 품목·국가·시군구 수출(최근 3개월, 15일경 전월 확정) — 약 600회 호출
+    schedule.every().day.at("20:10").do(_threaded(job_earnings_stage))  # 실적 국면 전 종목 재계산 (18:30 재무수집 뒤, 약 20초)
+    schedule.every().day.at("07:40").do(_threaded(job_earnings_stage))  # 실적 국면 보정 — 마감일 재무수집이 자정 넘겨 끝난 분·토요일 02:00 백필 반영
     schedule.every().day.at("19:50").do(job_daily_ops_summary)        # 일일 운영 요약 (잡 성공/실패/소요시간) → 관리자 방
     schedule.every().saturday.at("10:00").do(job_saturday_main_ranking)
     schedule.every().saturday.at("10:30").do(job_saturday_industry_report)
