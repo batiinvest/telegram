@@ -409,6 +409,14 @@ def calc_cashflow_derived(row: dict) -> dict:
     return result
 
 
+# 매출 계정 우선순위 — 합계 계정을 세부항목(재화판매·용역·임대 등)보다 먼저 고른다.
+# collect_one(분기·연간 행)과 get_q3_cumulative(4분기 변환용 3분기 누적)가 같은 규칙이어야
+# 4분기 = 연간 − 3분기 누적이 맞는다. 2026-10-12 수정: 3분기 누적만 첫 계정을 잡아 세부항목을 빼는 바람에
+# 한국알콜(2023 4분기 4,317억, 실제 1,065억) 등 해마다 30여 종목의 4분기 매출이 연간값에 가깝게 저장됐다.
+_REVENUE_PRIORITY = ['매출액', '수익(매출액)', '영업수익', '매출', '수익',
+                    '순매출액', '매출액 및 지분법손익', '총매출액', '영업수익(매출액)']
+
+
 def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> Optional[dict]:
     """
     Q4 변환용 Q3 누적값을 DART 3분기보고서에서 직접 조회.
@@ -424,17 +432,28 @@ def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> O
         )
         if df is None:
             return None
-        result = {}
+        result, src = {}, {}
+        rank = lambda a: _REVENUE_PRIORITY.index(a) if a in _REVENUE_PRIORITY else 999
         for _, r in df.iterrows():
             acct = str(r.get("account_nm", "")).strip()
             col  = resolve_account(acct)
-            if col and col in FLOW_COLS and col not in result:
-                # thstrm_add_amount(누적) 우선, 없으면 thstrm_amount(단독) 사용
-                amt = parse_amount(str(r.get("thstrm_add_amount", "")))
-                if amt is None:
-                    amt = parse_amount(str(r.get("thstrm_amount", "")))
-                if amt is not None:
-                    result[col] = amt
+            if not col or col not in FLOW_COLS:
+                continue
+            # thstrm_add_amount(누적) 우선, 없으면 thstrm_amount(단독) 사용
+            amt = parse_amount(str(r.get("thstrm_add_amount", "")))
+            if amt is None:
+                amt = parse_amount(str(r.get("thstrm_amount", "")))
+            if amt is None:
+                continue
+            # 계정 고르기는 collect_one(연간 행)과 같게 — 매출은 _REVENUE_PRIORITY(합계 계정) 우선,
+            # 나머지는 첫 값(0이면 뒤의 실제값). 다르면 4분기 = 연간 − 엉뚱한 세부항목이 된다.
+            if col not in result:
+                result[col], src[col] = amt, acct
+            elif col == 'revenue':
+                if rank(acct) < rank(src[col]):
+                    result[col], src[col] = amt, acct
+            elif result[col] == 0 and amt != 0:
+                result[col], src[col] = amt, acct
         return result if result else None
     except Exception as e:
         log.warning(f"[Q3누적조회실패] {corp_code} {year}: {e}")
@@ -792,8 +811,7 @@ def collect_one(dart, corp_code: str, stock_code: str, corp_name: str,
         # Q4(사업보고서): thstrm_amount = 연간 누적값 → 이후 convert_to_pure_quarter에서 변환
         # revenue는 합계 계정 우선 — 세부항목(재화판매, 용역 등)이 먼저 나와도 합계로 덮어씀
         # revenue 우선순위: 정확한 계정명 순서로 선택
-        REVENUE_PRIORITY = ['매출액', '수익(매출액)', '영업수익', '매출', '수익',
-                           '순매출액', '매출액 및 지분법손익', '총매출액', '영업수익(매출액)']
+        REVENUE_PRIORITY = _REVENUE_PRIORITY   # 모듈 상수 — get_q3_cumulative와 같은 규칙
         candidate = {}
 
         for _, r in df.iterrows():
