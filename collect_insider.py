@@ -403,6 +403,38 @@ def fetch_and_parse(rcept_no: str, corp_code: str, corp_name: str,
         return []
 
 
+def _fill_stock_codes(sb, rows: list) -> list:
+    """
+    stock_code가 빈 행을 companies(corp_code→code)로 채우고, 그래도 없는 행은 버린다.
+    최대주주변동은 원문(HTML)에서 코드를 못 읽고, 임원·대량보유도 XML에 CRP_CD가 없는
+    서식이 있어 '' 로 저장되던 구멍(10-12 고아 1,430행). companies에 없는 회사는
+    상장폐지·코넥스 등 우리 종목 목록 밖이라 저장하지 않는다.
+    """
+    missing = sorted({r['corp_code'] for r in rows
+                      if not r.get('stock_code') and r.get('corp_code')})
+    code_map = {}
+    for i in range(0, len(missing), 200):
+        try:
+            res = sb.table('companies').select('corp_code,code') \
+                    .in_('corp_code', missing[i:i+200]).execute()
+        except Exception as e:
+            log.warning(f"[지분공시] 종목코드 조회 실패: {e}")
+            continue
+        for c in (res.data or []):
+            if c.get('code'):
+                code_map[c['corp_code']] = c['code']
+
+    kept, dropped = [], []
+    for r in rows:
+        if not r.get('stock_code'):
+            r['stock_code'] = code_map.get(r.get('corp_code'), '')
+        (kept if r['stock_code'] else dropped).append(r)
+    if dropped:
+        names = sorted({r.get('corp_name', '') for r in dropped})
+        log.info(f"📋 [지분공시] 종목코드 없음(비상장 등) {len(dropped)}건 저장 제외: {', '.join(names[:10])}")
+    return kept
+
+
 def collect_insider_trades(disc_all: list, api_key: str, sb,
                            base_date: date = None) -> int:
     """
@@ -536,6 +568,11 @@ def collect_insider_trades(disc_all: list, api_key: str, sb,
             seen_keys[key] = True
             deduped.append(row)
     all_rows = deduped
+
+    all_rows = _fill_stock_codes(sb, all_rows)
+    if not all_rows:
+        log.info("📋 [지분공시] 저장할 상장사 지분공시 없음")
+        return 0
 
     # upsert (10개씩 배치) — collect_utils.batch_upsert 위임 (청크별 try/except·건수반환 동일)
     saved = batch_upsert(sb, 'insider_trades', all_rows,
