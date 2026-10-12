@@ -463,9 +463,15 @@ def job_collect_financials():
                 # 스팩(SPAC) 제외 — 표준 재무 없음
                 _spac = {c['corp_code'] for c in seen.values() if '스팩' in (c.get('corp_name') or '')}
                 if _spac:
-                    for _qk in list(quarter_groups.keys()):
-                        quarter_groups[_qk] = [cc for cc in quarter_groups[_qk] if cc not in _spac]
                     logging.info(f"📊 [재무수집] 스팩 제외: {len(_spac)}개")
+                # 상장사 필터·스팩 제외를 실제 수집 목록(quarter_groups)에 적용.
+                # 예전엔 상장사 필터가 today_corps에만 걸려 비상장 법인(corp_cls E/N)까지 수집돼
+                # stock_code ''로 저장됐다(10-12 고아 229행).
+                _keep = {c['corp_code'] for c in today_corps} - _spac
+                for _qk in list(quarter_groups.keys()):
+                    quarter_groups[_qk] = [cc for cc in quarter_groups[_qk] if cc in _keep]
+                    if not quarter_groups[_qk]:
+                        del quarter_groups[_qk]
                 # 분기별로 나눠서 수집
                 total_ok, total_fail = 0, 0
                 for (y, q), codes in quarter_groups.items():

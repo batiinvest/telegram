@@ -776,6 +776,13 @@ def collect_one(dart, corp_code: str, stock_code: str, corp_name: str,
     """단일 종목 재무제표 수집"""
     report_code, report_type = QUARTER_REPORT.get(quarter, ("11011", "사업보고서"))
 
+    # 종목코드 없는 대상(비상장 법인 — DART에 stock_code 없음)은 저장하지 않는다.
+    # 모든 화면이 stock_code로 묶어 쓰므로 ''로 저장하면 아무도 못 읽는 고아 행이 된다.
+    stock_code = (stock_code or "").split(".")[0].strip()
+    if len(stock_code) != 6:
+        log.info(f"[SKIP] {corp_name} ({corp_code}): 종목코드 없음(비상장) — 저장 안 함")
+        return None
+
     try:
         # 연결재무제표 우선, 없으면 별도재무제표
         for fs_div in ["CFS", "OFS"]:
@@ -797,7 +804,7 @@ def collect_one(dart, corp_code: str, stock_code: str, corp_name: str,
 
         row = {
             "corp_code":   corp_code,
-            "stock_code":  stock_code.split(".")[0],
+            "stock_code":  stock_code,
             "corp_name":   corp_name,
             "bsns_year":   year,
             "quarter":     quarter,
