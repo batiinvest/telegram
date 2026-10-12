@@ -536,6 +536,48 @@ def _to_krw(row: dict, ccy: str, year: str, quarter: str, cumulative: bool = Fal
     return True
 
 
+# ── DART 금액 단위 오류(1,000배·100만 배) 바로잡기 ──
+# 2026-10-12: 회사가 XBRL 금액 단위를 틀리게 내 DART 값이 통째로 1,000배·100만 배인 보고서가 있다 —
+# 대산F&B 2023 사업보고서(자산총계 56.7조, 실제 567억 → 4분기 매출 128조로 저장)·에프알텍·CMG제약
+# 2024 1분기·다원넥스뷰 2024 2분기(100만 배). DART는 정정 없이 그대로라 다시 받아도 같은 값이다.
+# 저장된 이웃 분기(가까운 4개, 같은 분기 제외) 자산총계가 모두 같은 배수 근처로 어긋나면 그 배수로 나눈다.
+# 원화 보고서만 본다 — 외화 공시는 원화로 바꾼 직후라 이웃 행이 아직 외화일 수 있고(USD 환율 ~1,300배가
+# 1,000배 띠에 걸림), 이웃 중 하나라도 띠 밖이면(합병 등 실제 변화·이웃 자체 오류) 손대지 않는다.
+_SCALE_BANDS = ((1_000_000, 5e5, 2e6), (1_000, 500, 2000))
+
+
+def _unit_divisor(corp_code: str, fs_div: str, year: str, quarter: str, total_assets) -> int:
+    """이웃 분기 자산총계가 모두 total_assets의 1/1,000(1/100만) 근처면 1000(1000000), 아니면 1.
+    이웃이 2개 미만이면 판단하지 않는다(1)."""
+    if not total_assets or total_assets <= 0:
+        return 1
+    try:
+        res = _get_sb().table("financials").select("bsns_year,quarter,total_assets") \
+            .eq("corp_code", corp_code).eq("fs_div", fs_div).execute().data or []
+    except Exception as e:
+        log.debug(f"[단위검사] 이웃 조회 실패 {corp_code}: {e}")
+        return 1
+    key = (str(year), quarter)
+    pos = lambda y, q: int(y) * 4 + int(str(q)[-1])
+    me = pos(*key)
+    refs = sorted((r for r in res if (r["bsns_year"], r["quarter"]) != key and (r.get("total_assets") or 0) > 0),
+                  key=lambda r: abs(pos(r["bsns_year"], r["quarter"]) - me))[:4]
+    if len(refs) < 2:
+        return 1
+    ratios = [total_assets / r["total_assets"] for r in refs]
+    for div, lo, hi in _SCALE_BANDS:
+        if all(lo <= x <= hi for x in ratios):
+            return div
+    return 1
+
+
+def _apply_divisor(row: dict, div: int):
+    """금액 컬럼(재무상태표·손익·현금흐름)을 div로 나눈다(제자리)."""
+    for col, v in list(row.items()):
+        if (col in _FX_BS_COLS or col in _FX_FLOW_COLS) and isinstance(v, (int, float)) and not isinstance(v, bool):
+            row[col] = int(round(v / div))
+
+
 def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> Optional[dict]:
     """
     Q4 변환용 Q3 누적값을 DART 3분기보고서에서 직접 조회.
@@ -560,6 +602,13 @@ def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> O
         ccy = _df_currency(df)
         if result and ccy != "KRW" and not _to_krw(result, ccy, year, "Q3", cumulative=True, label=corp_code):
             return None
+        if result and ccy == "KRW":
+            ta = _pick_accounts(df[df["sj_div"] == "BS"], lambda r: parse_amount(str(r.get("thstrm_amount", ""))),
+                                {"total_assets"}).get("total_assets", (None,))[0] if "sj_div" in df.columns else None
+            div = _unit_divisor(corp_code, fs_div, year, "Q3", ta)
+            if div > 1:
+                log.warning(f"[단위오류] {corp_code} {year} Q3 누적 {fs_div}: DART 금액이 이웃 분기의 {div:,}배 → ÷{div:,}")
+                _apply_divisor(result, div)
         return result if result else None
     except Exception as e:
         log.warning(f"[Q3누적조회실패] {corp_code} {year}: {e}")
@@ -931,6 +980,13 @@ def collect_one(dart, corp_code: str, stock_code: str, corp_name: str,
         ccy = _df_currency(df)
         if ccy != "KRW" and not _to_krw(row, ccy, year, quarter):
             return None
+
+        # DART 금액 단위 오류(1,000배·100만 배) — 원화 보고서만, 저장된 이웃 분기 자산총계와 견줘 판정
+        if ccy == "KRW":
+            div = _unit_divisor(corp_code, fs_div, year, quarter, row.get("total_assets"))
+            if div > 1:
+                log.warning(f"[단위오류] {corp_name} {year} {quarter} {fs_div}: DART 금액이 이웃 분기의 {div:,}배 → ÷{div:,}")
+                _apply_divisor(row, div)
 
         # 파생 비율 계산
         # net_income이 없으면 pretax_income으로 fallback (제이엘케이 등 일부 기업)
