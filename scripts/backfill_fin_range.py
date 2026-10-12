@@ -15,8 +15,9 @@ backfill_financials.py의 수집·변환(_collect_and_save)을 그대로 쓰고,
 실행:
   python3 scripts/backfill_fin_range.py --from-year 2021 --to-year 2022 --max-calls 9000
   python3 scripts/backfill_fin_range.py --from-year 2021 --to-year 2022 --dry    # 남은 쌍만 세기
-  python3 scripts/backfill_fin_range.py --refetch-q4 data/q4_refetch.json --max-calls 3000
-      # 4분기 행 다시 받기(백업 → 재수집 → 다음 해 1·4분기 성장률 갱신) — refetch_q4 참고
+  python3 scripts/backfill_fin_range.py --refetch data/refetch.json --max-calls 3000
+      # 행 다시 받기(백업 → 재수집 → 이웃 행 성장률 갱신) — refetch 참고.
+      # 목록 [[종목코드, 연도, 분기], ...] — 분기를 빼면([[종목코드, 연도], ...]) 4분기 (--refetch-q4도 같음)
 """
 import argparse
 import json
@@ -84,60 +85,76 @@ def _remove_cron():
         _log(f'crontab 정리 실패: {e}')
 
 
-def refetch_q4(pairs_file, max_calls):
-    """4분기 행 다시 받기 — [[종목코드, 연도], ...] 목록. 2026-10-12 get_q3_cumulative 매출 계정 버그
-    (4분기 = 연간 − 세부항목) 수정 뒤, 원본 DataGuide 분기 매출과 5% 넘게 다른 2023~2025 4분기 행을 고친다.
-    덮어쓰기 전 원래 행을 backups/에 저장하고, 고친 4분기를 비교 기준으로 쓰는 다음 해 1분기(QoQ)·
-    4분기(YoY) 행의 저장 성장률을 다시 계산한다."""
+def _next_q(y, q):
+    n = int(q[1])
+    return (y, f"Q{n + 1}") if n < 4 else (str(int(y) + 1), 'Q1')
+
+
+def refetch(pairs_file, max_calls):
+    """행 다시 받기 — [[종목코드, 연도, 분기], ...] 또는 [[종목코드, 연도], ...](= 4분기) 목록.
+    덮어쓰기 전 원래 행을 backups/에 저장하고, 종목마다 오래된 분기부터 다시 받는다(2·3분기 현금흐름 변환과
+    성장률이 앞 분기 값을 쓰므로). 끝나면 고친 행을 비교 기준으로 쓰는 이웃 행 — 다음 분기(QoQ)·
+    다음 해 같은 분기(YoY) — 중 다시 받지 않은 행의 저장 성장률을 다시 계산한다.
+    쓰임(2026-10-12): ① get_q3_cumulative 매출 계정 버그 → 2023~25 4분기 555행
+      ② 매출 계정 미인식(ifrs-full_Revenue 태그·'Ⅰ.영업수익') 38행과 그 해 4분기 ③ 외화 공시 23곳 원화 환산."""
     from collect_financials import calculate_growth_rates
-    pairs = sorted({(c, str(y)) for c, y in json.load(open(pairs_file))}, key=lambda p: (p[1], p[0]))
+    raw = json.load(open(pairs_file))
+    trip = sorted({(str(p[0]), str(p[1]), (p[2] if len(p) > 2 else 'Q4').upper()) for p in raw})
     sb = bf._get_sb()
     _calls['max'] = 10 ** 9
     comp = {t['stock_code']: t for t in bf._load_companies(sb)}
     backup = []
-    by_year = {}
-    for c, y in pairs:
-        by_year.setdefault(y, []).append(c)
-    for y, codes in by_year.items():
+    by_yq = {}
+    for c, y, q in trip:
+        by_yq.setdefault((y, q), []).append(c)
+    for (y, q), codes in by_yq.items():
         for i in range(0, len(codes), 100):
             backup += sb.table('financials').select('*').in_('stock_code', codes[i:i + 100]) \
-                .eq('bsns_year', y).eq('quarter', 'Q4').execute().data
+                .eq('bsns_year', y).eq('quarter', q).execute().data
     os.makedirs('/home/kjhofone/backups', exist_ok=True)
-    bpath = f"/home/kjhofone/backups/financials_q4_refetch_{datetime.now():%Y%m%d_%H%M%S}.json"
+    bpath = f"/home/kjhofone/backups/financials_refetch_{datetime.now():%Y%m%d_%H%M%S}.json"
     json.dump(backup, open(bpath, 'w'), ensure_ascii=False, default=str)
-    _log(f"4분기 다시 받기 {len(pairs)}쌍 · 원래 행 {len(backup)}개 백업 → {bpath}")
+    _log(f"다시 받기 {len(trip)}행 · 원래 행 {len(backup)}개 백업 → {bpath}")
 
     dart = bf.OpenDartReader(bf.DART_API_KEY)
     fin_cache = build_fin_cache(sb)
     requests.get = _counted_get
     _calls['n'], _calls['max'] = 0, max_calls
     done, stop = [], None
-    for c, y in pairs:
+    for c, y, q in trip:                      # 종목 → 연도 → 분기 순
         t = comp.get(c)
         if not t:
+            _log(f"  건너뜀 {c} {y} {q}: companies(active)에 없음")
             continue
         try:
-            if bf._collect_and_save(dart, sb, fin_cache, t, y, 'Q4'):
-                done.append((c, y))
+            if bf._collect_and_save(dart, sb, fin_cache, t, y, q):
+                done.append((c, y, q))
+            else:
+                _log(f"  DART 없음 {t['corp_name']} {y} {q}")
         except BudgetExceeded as e:
             stop = str(e)
             break
         except Exception as e:
-            _log(f"  실패 {t['corp_name']} {y} Q4: {str(e)[:160]}")
+            _log(f"  실패 {t['corp_name']} {y} {q}: {str(e)[:160]}")
         time.sleep(0.12)
     requests.get = _orig_get
-    _log(f"다시 받음 {len(done)}/{len(pairs)} · DART {_calls['n']}건{' · 멈춘 이유: ' + stop if stop else ''}")
+    _log(f"다시 받음 {len(done)}/{len(trip)} · DART {_calls['n']}건{' · 멈춘 이유: ' + stop if stop else ''}")
 
-    # 이웃 행 성장률 — 다음 해 1분기 QoQ(직전 = 고친 4분기) · 다음 해 4분기 YoY(전년 = 고친 4분기)
+    # 이웃 행 성장률 — 다음 분기 QoQ(직전 = 고친 행) · 다음 해 같은 분기 YoY(전년 = 고친 행)
+    done_set = set(done)
+    nbrs = set()
+    for c, y, q in done:
+        for ny, nq in (_next_q(y, q), (str(int(y) + 1), q)):
+            if (c, ny, nq) not in done_set:
+                nbrs.add((c, ny, nq))
     sel = 'stock_code,bsns_year,quarter,fs_div,is_cumulative,revenue,operating_profit,net_income'
     n = 0
-    for c, y in done:
-        ny = str(int(y) + 1)
+    for c, ny, nq in sorted(nbrs):
         for r in sb.table('financials').select(sel).eq('stock_code', c).eq('bsns_year', ny) \
-                .in_('quarter', ['Q1', 'Q4']).execute().data:
+                .eq('quarter', nq).execute().data:
             g = calculate_growth_rates(fin_cache, r)
             sb.table('financials').update(g).eq('stock_code', c).eq('bsns_year', ny) \
-                .eq('quarter', r['quarter']).eq('fs_div', r['fs_div']).execute()
+                .eq('quarter', nq).eq('fs_div', r['fs_div']).execute()
             n += 1
     _log(f"이웃 행 성장률 다시 계산 {n}행")
 
@@ -148,10 +165,11 @@ def main():
     ap.add_argument('--to-year', type=int)
     ap.add_argument('--max-calls', type=int, default=9000)
     ap.add_argument('--dry', action='store_true')
-    ap.add_argument('--refetch-q4', help='[[종목코드, 연도], ...] JSON 파일 — 4분기 행 다시 받기')
+    ap.add_argument('--refetch', help='[[종목코드, 연도, 분기], ...] JSON 파일 — 행 다시 받기 (분기 빼면 4분기)')
+    ap.add_argument('--refetch-q4', help='[[종목코드, 연도], ...] JSON 파일 — 4분기 행 다시 받기 (--refetch와 같음)')
     a = ap.parse_args()
-    if a.refetch_q4:
-        refetch_q4(a.refetch_q4, a.max_calls)
+    if a.refetch or a.refetch_q4:
+        refetch(a.refetch or a.refetch_q4, a.max_calls)
         return
 
     state_path = f"{STATE_DIR}/backfill_fin_{a.from_year}_{a.to_year}.json"

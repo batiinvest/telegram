@@ -13,6 +13,7 @@ DART OpenAPI → Supabase financials 테이블 수집기
 """
 
 import os
+import re
 import sys
 import time
 from logger_config import get_logger
@@ -295,11 +296,27 @@ ACCOUNT_PATTERNS = [
 ]
 
 
+# 3단계: 번호 머리·공백만 다른 이름 — 'Ⅰ.영업수익'·'영  업  수  익'·'1.금융수익' → ACCOUNT_MAP 정확 일치.
+# 1·2단계에서 못 찾은 이름에만 쓴다(이미 해석되던 계정은 그대로). 2026-10-12: 넷마블·동아쏘시오홀딩스·
+# 한국정보인증('Ⅰ.영업수익'), 키움증권 2025 1분기('영  업  수  익') 매출이 빈칸이었다.
+_ACCT_NUM_PREFIX = re.compile(r'^(?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]+|\d+|[가나다라마바사아자차카타파하])\s*[.)]\s*')
+
+
+def _norm_acct(acct: str) -> str:
+    return re.sub(r'\s+', '', _ACCT_NUM_PREFIX.sub('', acct.strip()))
+
+
+_ACCOUNT_MAP_NORM = {}
+for _k, _v in ACCOUNT_MAP.items():
+    _ACCOUNT_MAP_NORM.setdefault(_norm_acct(_k), _v)
+
+
 def resolve_account(acct: str) -> Optional[str]:
     """
     계정명 → DB 컬럼 변환.
     1단계: ACCOUNT_MAP 정확 일치
     2단계: ACCOUNT_PATTERNS 패턴 매칭
+    3단계: 번호 머리·공백 뗀 이름으로 ACCOUNT_MAP 정확 일치
     """
     # 1단계: 정확 일치
     col = ACCOUNT_MAP.get(acct)
@@ -312,7 +329,8 @@ def resolve_account(acct: str) -> Optional[str]:
             if not any(kw in acct for kw in excludes):
                 return target_col
 
-    return None
+    # 3단계: 번호 머리·공백 정규화
+    return _ACCOUNT_MAP_NORM.get(_norm_acct(acct))
 
 # 분기별 보고서 타입
 QUARTER_REPORT = {
@@ -415,6 +433,107 @@ def calc_cashflow_derived(row: dict) -> dict:
 # 한국알콜(2023 4분기 4,317억, 실제 1,065억) 등 해마다 30여 종목의 4분기 매출이 연간값에 가깝게 저장됐다.
 _REVENUE_PRIORITY = ['매출액', '수익(매출액)', '영업수익', '매출', '수익',
                     '순매출액', '매출액 및 지분법손익', '총매출액', '영업수익(매출액)']
+_REVENUE_RANK = {}
+for _i, _a in enumerate(_REVENUE_PRIORITY):
+    _REVENUE_RANK.setdefault(_norm_acct(_a), _i)
+
+# 이름으로 매출을 못 찾을 때 쓰는 XBRL 표준 매출 계정 (손익계산서 줄만)
+_REVENUE_IDS = ('ifrs-full_Revenue', 'ifrs_Revenue')
+
+
+def _rev_rank(acct: str) -> int:
+    return _REVENUE_RANK.get(_norm_acct(acct), 999)
+
+
+def _pick_accounts(df, amount_of, cols=None) -> dict:
+    """DART 재무제표 행 → {컬럼: (금액, 계정명)}. collect_one(분기·연간 행)과 get_q3_cumulative
+    (4분기 변환용 3분기 누적)가 같이 쓴다 — 같은 계정을 골라야 4분기 = 연간 − 3분기 누적이 맞다.
+      - 매출: _REVENUE_PRIORITY(합계 계정) 우선. 이름으로 하나도 못 찾으면 손익계산서의 XBRL 표준 매출 줄
+        (account_id ifrs-full_Revenue, 금액 큰 것)을 쓴다 — 회사가 '합계'·'수익 합계'·'총 수익'·
+        '매출액 및 기타영업수익'·'고객과의 계약에서 생기는 수익' 등으로 이름 붙인 경우.
+        다른 컬럼으로 해석되는 이름(예: 현대차증권 '영업이익'에 단 매출 태그)은 쓰지 않는다.
+        2026-10-12: 이 둘로 매출 빈칸 38행(하이트진로홀딩스 2025 3분기 등) — 3분기가 비면 4분기 매출이
+        연간값으로 남았다.
+      - 나머지: 첫 값(0이면 뒤의 실제값).
+    amount_of(r) → 금액 또는 None. cols를 주면 그 컬럼만."""
+    picked, by_id = {}, []
+    for _, r in df.iterrows():
+        acct = str(r.get("account_nm", "")).strip()
+        col  = resolve_account(acct)
+        rev_id = (col in (None, 'revenue') and r.get("account_id") in _REVENUE_IDS
+                  and r.get("sj_div") in ("IS", "CIS"))
+        if not col and not rev_id:
+            continue
+        amt = amount_of(r)
+        if amt is None:
+            continue
+        if rev_id:
+            by_id.append((amt, acct))
+        if not col or (cols is not None and col not in cols):
+            continue
+        if col not in picked:
+            # 첫 등장: 0이라도 일단 저장 (DART에서 실제 0 보고한 경우)
+            picked[col] = (amt, acct)
+        elif col == 'revenue':
+            if _rev_rank(acct) < _rev_rank(picked[col][1]):
+                log.debug(f"[우선순위] revenue: {picked[col][1]} → {acct}")
+                picked[col] = (amt, acct)
+        elif picked[col][0] == 0 and amt != 0:
+            # 기존에 0이 저장됐는데 뒤에 실제값(비-0)이 나오면 교체
+            picked[col] = (amt, acct)
+    if 'revenue' not in picked and by_id and (cols is None or 'revenue' in cols):
+        picked['revenue'] = max(by_id, key=lambda t: abs(t[0]))
+        log.debug(f"[매출 표준계정] {picked['revenue'][1]}")
+    return picked
+
+
+# ── 외화 공시 → 원화 (규칙·출처는 fx_history 머리말) ──
+# 2026-10-12: 두산밥캣(2023~ USD)·엑세스바이오·중국계 9곳(CNY)·JTC(JPY) 등 23곳이 외화로 공시하는데
+# 'KRW'로 그대로 저장해 금액이 1/1,400(USD)·1/190(CNY)·1/9(JPY)로 보였다(두산밥캣 분기 매출 ~15억).
+# 재무상태표 = 기말 환율, 손익·현금흐름 = 그 금액이 덮는 기간의 평균 환율.
+_FX_BS_COLS = {"total_assets", "total_liabilities", "total_equity", "current_assets", "current_liabilities",
+               "non_current_assets", "non_current_liabilities", "capital_stock", "retained_earnings"}
+_FX_FLOW_COLS = set(FLOW_COLS) | {"finance_cost", "finance_income"}
+
+
+def _df_currency(df) -> str:
+    """DART 응답의 통화(행마다 같은 값). 칸이 없거나 비면 KRW."""
+    try:
+        v = df["currency"].dropna().astype(str).str.strip().str.upper()
+        v = v[v != ""]
+        return v.mode().iloc[0] if len(v) else "KRW"
+    except Exception:
+        return "KRW"
+
+
+def _to_krw(row: dict, ccy: str, year: str, quarter: str, cumulative: bool = False, label: str = None) -> bool:
+    """row의 금액 컬럼을 ccy → 원화로 바꾼다(제자리). 환율을 못 구하면 False — 호출부는 저장하지 않는다.
+    DART 금액이 덮는 기간: 손익 = 분기 단독(4분기 = 사업보고서 연간), 현금흐름 = 연초부터 누적, 재무상태표 = 기말.
+    cumulative=True(3분기 누적 조회)면 손익도 연초부터 누적."""
+    import fx_history
+    q_start, y_start, end = fx_history.quarter_bounds(year, quarter)
+    try:
+        r_q   = fx_history.avg_rate(ccy, q_start, end)
+        r_ytd = fx_history.avg_rate(ccy, y_start, end)
+        r_end = fx_history.close_rate(ccy, end)
+    except Exception as e:
+        log.error(f"[환산실패] {label or row.get('corp_name', '')} {year} {quarter} {ccy}: {e} — 저장 안 함")
+        return False
+    for col, v in list(row.items()):
+        if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        if col in _FX_BS_COLS:
+            rate = r_end
+        elif col in CASHFLOW_COLS or (col in _FX_FLOW_COLS and (cumulative or quarter == "Q4")):
+            rate = r_ytd
+        elif col in _FX_FLOW_COLS:
+            rate = r_q
+        else:
+            continue
+        row[col] = int(round(v * rate))
+    log.info(f"[환산] {label or row.get('corp_name', '')} {year} {quarter}{' 누적' if cumulative else ''} {ccy}→KRW "
+             f"분기평균 {r_q:,.2f} · 누적평균 {r_ytd:,.2f} · 기말 {r_end:,.2f}")
+    return True
 
 
 def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> Optional[dict]:
@@ -432,28 +551,15 @@ def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> O
         )
         if df is None:
             return None
-        result, src = {}, {}
-        rank = lambda a: _REVENUE_PRIORITY.index(a) if a in _REVENUE_PRIORITY else 999
-        for _, r in df.iterrows():
-            acct = str(r.get("account_nm", "")).strip()
-            col  = resolve_account(acct)
-            if not col or col not in FLOW_COLS:
-                continue
+        def _cum(r):
             # thstrm_add_amount(누적) 우선, 없으면 thstrm_amount(단독) 사용
             amt = parse_amount(str(r.get("thstrm_add_amount", "")))
-            if amt is None:
-                amt = parse_amount(str(r.get("thstrm_amount", "")))
-            if amt is None:
-                continue
-            # 계정 고르기는 collect_one(연간 행)과 같게 — 매출은 _REVENUE_PRIORITY(합계 계정) 우선,
-            # 나머지는 첫 값(0이면 뒤의 실제값). 다르면 4분기 = 연간 − 엉뚱한 세부항목이 된다.
-            if col not in result:
-                result[col], src[col] = amt, acct
-            elif col == 'revenue':
-                if rank(acct) < rank(src[col]):
-                    result[col], src[col] = amt, acct
-            elif result[col] == 0 and amt != 0:
-                result[col], src[col] = amt, acct
+            return amt if amt is not None else parse_amount(str(r.get("thstrm_amount", "")))
+        # 계정 고르기는 collect_one(연간 행)과 같은 _pick_accounts — 다르면 4분기 = 연간 − 엉뚱한 계정이 된다.
+        result = {col: amt for col, (amt, _) in _pick_accounts(df, _cum, FLOW_COLS).items()}
+        ccy = _df_currency(df)
+        if result and ccy != "KRW" and not _to_krw(result, ccy, year, "Q3", cumulative=True, label=corp_code):
+            return None
         return result if result else None
     except Exception as e:
         log.warning(f"[Q3누적조회실패] {corp_code} {year}: {e}")
@@ -813,43 +919,18 @@ def collect_one(dart, corp_code: str, stock_code: str, corp_name: str,
             "currency":    "KRW",
         }
 
-        # 계정과목별 금액 추출
+        # 계정과목별 금액 추출 — get_q3_cumulative와 같은 _pick_accounts (매출은 합계 계정 우선)
         # Q1/Q2/Q3: thstrm_amount = 당해 단독값 → 그대로 사용
         # Q4(사업보고서): thstrm_amount = 연간 누적값 → 이후 convert_to_pure_quarter에서 변환
-        # revenue는 합계 계정 우선 — 세부항목(재화판매, 용역 등)이 먼저 나와도 합계로 덮어씀
-        # revenue 우선순위: 정확한 계정명 순서로 선택
-        REVENUE_PRIORITY = _REVENUE_PRIORITY   # 모듈 상수 — get_q3_cumulative와 같은 규칙
-        candidate = {}
-
-        for _, r in df.iterrows():
-            acct = str(r.get("account_nm", "")).strip()
-            col  = resolve_account(acct)
-            if not col:
-                continue
-            amt = parse_amount(str(r.get("thstrm_amount", "")))
-            if amt is None:
-                continue
-
-            if col == 'revenue':
-                # revenue는 우선순위 높은 계정명으로 교체
-                if col not in candidate:
-                    candidate[col] = (amt, acct)
-                else:
-                    cur_priority  = REVENUE_PRIORITY.index(candidate[col][1]) if candidate[col][1] in REVENUE_PRIORITY else 999
-                    new_priority  = REVENUE_PRIORITY.index(acct) if acct in REVENUE_PRIORITY else 999
-                    if new_priority < cur_priority:
-                        log.debug(f"[우선순위] {corp_name} revenue: {candidate[col][1]} → {acct}")
-                        candidate[col] = (amt, acct)
-            elif col not in candidate:
-                # 첫 등장: 0이라도 일단 저장 (DART에서 실제 0 보고한 경우)
-                candidate[col] = (amt, acct)
-            elif candidate[col][0] == 0 and amt != 0:
-                # 기존에 0이 저장됐는데 뒤에 실제값(비-0)이 나오면 교체
-                log.debug(f"[0→실제값] {corp_name} {col}: 0 → {amt}")
-                candidate[col] = (amt, acct)
-
-        for col, (amt, _) in candidate.items():
+        picked = _pick_accounts(df, lambda r: parse_amount(str(r.get("thstrm_amount", ""))))
+        for col, (amt, _) in picked.items():
             row[col] = amt
+
+        # 외화 공시 → 원화 (금액 단위는 늘 원 — currency 칸은 KRW 그대로). 환율을 못 구하면 저장하지 않는다
+        # (원화·외화가 섞인 행이 남으면 성장률·4분기 변환이 다 틀어진다 — 다음 수집·백필에서 다시 시도).
+        ccy = _df_currency(df)
+        if ccy != "KRW" and not _to_krw(row, ccy, year, quarter):
+            return None
 
         # 파생 비율 계산
         # net_income이 없으면 pretax_income으로 fallback (제이엘케이 등 일부 기업)
