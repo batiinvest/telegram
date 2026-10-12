@@ -593,6 +593,10 @@ def job_backfill_financials():
         y = _dt.date.today().year - 1  # 연초(사업보고서 시즌)엔 전년도가 대상 → 최근 2년 커버
         logging.info(f"📊 [재무백필] {y}~ 누락 재무 전수 백필 시작")
         run_backfill(from_year=y)
+        if m == 11:
+            # 중단영업 재분류로 비워 둔 전년도 4분기 손익 — 올해 3분기보고서의 재작성 누적으로 다시 계산
+            from backfill_financials import refix_q4_basis
+            refix_q4_basis(y)
         logging.info("📊 [재무백필] 완료")
     except Exception as e:
         logging.error(f"❌ [재무백필] 실패: {e}")

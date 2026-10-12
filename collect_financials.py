@@ -578,6 +578,49 @@ def _apply_divisor(row: dict, div: int):
             row[col] = int(round(v / div))
 
 
+# ── 4분기 = 연간 − 3분기 누적의 기준 불일치(중단영업 재분류) ──
+# 2026-10-12: 사업보고서에서 사업 일부를 중단영업으로 재분류하면 연간 매출·영업익은 계속영업분만인데
+# 3분기보고서 누적은 그 사업까지 포함한 값이라, 빼면 4분기가 음수·과소가 된다(크리스탈신소재 2025 매출 −89억,
+# SKC 2023 −2,588억 등). 재작성된 9개월 누적은 다음 해 3분기보고서의 '전기 누적'(frmtrm_add_amount)에 나온다
+# → 있으면 그걸로 빼고, 아직 없으면(다음 해 11월 전) 기준이 다른 손익 칸은 비운다(알 수 없음 — 매년 11월
+# 재무백필 잡이 refix_q4_basis로 다시 계산). 순이익·현금흐름은 연간·분기 모두 중단영업 포함 전체 기준이라
+# 원래 3분기 누적으로 뺀다.
+_BASIS_COLS = [c for c in INCOME_COLS if c != "net_income"]
+_Q4_ANNUAL = {}   # (corp_code, 연도, fs_div) → collect_one이 읽은 사업보고서 {'disc': 중단영업 있음, 'revenue': 연간 매출}
+
+
+def _disc_ops(df, amount_of) -> bool:
+    """손익계산서에 중단영업 손익 줄이 0 아닌 값으로 있는지."""
+    try:
+        inc = df[df["sj_div"].isin(["IS", "CIS"])]
+    except Exception:
+        return False
+    for _, r in inc.iterrows():
+        if ("중단영업" in str(r.get("account_nm", ""))
+                or r.get("account_id") == "ifrs-full_ProfitLossFromDiscontinuedOperations"):
+            if amount_of(r):
+                return True
+    return False
+
+
+def _restated_9m(dart, corp_code: str, year: str, fs_div: str) -> Optional[dict]:
+    """다음 해 3분기보고서의 전기 누적 = 재작성된 그해 9개월 누적(기준 칸만). 보고서가 아직 없거나 값이 없으면 None."""
+    try:
+        df = dart.finstate_all(corp_code, bsns_year=str(int(year) + 1), reprt_code="11014", fs_div=fs_div)
+    except Exception:
+        return None
+    if df is None or df.empty or "frmtrm_add_amount" not in df.columns:
+        return None
+    res = {c: a for c, (a, _) in _pick_accounts(
+        df, lambda r: parse_amount(str(r.get("frmtrm_add_amount", ""))), set(_BASIS_COLS)).items()}
+    if res.get("revenue") is None:
+        return None
+    ccy = _df_currency(df)
+    if ccy != "KRW" and not _to_krw(res, ccy, year, "Q3", cumulative=True, label=corp_code):
+        return None
+    return res
+
+
 def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> Optional[dict]:
     """
     Q4 변환용 Q3 누적값을 DART 3분기보고서에서 직접 조회.
@@ -609,6 +652,30 @@ def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> O
             if div > 1:
                 log.warning(f"[단위오류] {corp_code} {year} Q3 누적 {fs_div}: DART 금액이 이웃 분기의 {div:,}배 → ÷{div:,}")
                 _apply_divisor(result, div)
+        # 사업보고서와 3분기 누적의 기준이 다르면(중단영업 재분류·사업보고서 재작성) 재작성 9개월 누적으로
+        ann = _Q4_ANNUAL.pop((corp_code, str(year), fs_div), None)
+        if result and ann:
+            ann_rev, q3_rev = ann.get("revenue"), result.get("revenue")
+            neg = ann_rev is not None and q3_rev is not None and ann_rev < q3_rev     # 4분기 매출이 음수가 될 판
+            # 중단영업 재분류: 사업보고서에만 있거나, 둘 다 있어도 연간 < 9개월(SKC 2023 — 4분기에 범위 확대)
+            disc = bool(ann.get("disc")) and (neg or not _disc_ops(df, _cum))
+            if disc or neg:
+                rs = _restated_9m(dart, corp_code, year, fs_div)
+                if rs and ann_rev is not None and ann_rev < rs["revenue"]:
+                    rs = None   # 다음 해 비교값도 연간보다 큼 = 재작성 안 된 값 → 못 쓴다
+                if rs:
+                    for c in _BASIS_COLS:
+                        result[c] = rs.get(c)
+                    why = "다음 해 3분기보고서의 재작성 9개월 누적으로 계산"
+                elif disc:
+                    for c in _BASIS_COLS:
+                        result[c] = None   # 4분기 단독 알 수 없음 → convert_to_pure_quarter가 비움
+                    why = "재작성 누적 없음 → 매출·영업익 등 4분기 손익 비움(순이익·현금흐름은 계산)"
+                else:
+                    # 중단영업 없이 음수 — 사업보고서 재작성(다음 해 11월에 다시 계산)이거나 투자사 평가손실 같은 실제 음수
+                    why = "재작성 근거 없음 → 그대로(투자사 평가손실 등 실제 음수일 수 있음)"
+                log.warning(f"[4분기 기준불일치] {corp_code} {year} {fs_div} "
+                            f"{'중단영업 재분류' if disc else '연간 매출 < 9개월 누적'} — {why}")
         return result if result else None
     except Exception as e:
         log.warning(f"[Q3누적조회실패] {corp_code} {year}: {e}")
@@ -692,6 +759,9 @@ def convert_to_pure_quarter(row: dict, prev_row: Optional[dict]) -> dict:
             prev = prev_row.get(col)
             if cur is not None and prev is not None:
                 converted[col] = cur - prev
+            elif cur is not None and col in prev_row:
+                # 3분기 누적이 '알 수 없음'(None — 연간과 기준이 다름, get_q3_cumulative)이면 4분기 단독도 모른다
+                converted[col] = None
     else:
         # Q2/Q3: DART thstrm_amount는 당해 단독값 → 변환 불필요
         # (일부 금융사 누적 제공 케이스는 thstrm_amount도 단독값 제공)
@@ -995,6 +1065,11 @@ def collect_one(dart, corp_code: str, stock_code: str, corp_name: str,
             log.debug(f"[net_income fallback] {corp_name}: pretax_income → net_income")
 
         row.update(calc_ratios(row))
+
+        if quarter == "Q4":
+            _Q4_ANNUAL[(corp_code, str(year), fs_div)] = {
+                "disc": _disc_ops(df, lambda r: parse_amount(str(r.get("thstrm_amount", "")))),
+                "revenue": row.get("revenue")}
 
         return row
 

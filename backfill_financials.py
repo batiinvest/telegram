@@ -255,6 +255,42 @@ def _collect_and_save(dart, sb, fin_cache: dict, t: dict,
     return True
 
 
+def refix_q4_basis(year: int) -> int:
+    """중단영업 재분류·사업보고서 재작성으로 비워 두거나 음수로 남은 year 4분기 손익 다시 계산 — 다음 해
+    3분기보고서(11월)에 재작성 9개월 누적이 나오면 채워진다(collect_financials.get_q3_cumulative 참고).
+    대상 = 4분기 매출이 비었는데 순이익·같은 해 3분기 매출은 있는 행 + 4분기 매출이 음수인 행.
+    매년 11월 재무백필 잡(job_backfill_financials)이 전년도로 부른다. 반환: 다시 받은 행 수."""
+    sb = _get_sb()
+    y = str(year)
+    sel = "stock_code,corp_name,corp_code,fs_div,net_income,revenue"
+    blank = sb.table("financials").select(sel).eq("bsns_year", y).eq("quarter", "Q4") \
+        .is_("revenue", "null").execute().data or []
+    blank = [r for r in blank if r.get("net_income") is not None and r.get("stock_code")]
+    neg = sb.table("financials").select(sel).eq("bsns_year", y).eq("quarter", "Q4") \
+        .lt("revenue", 0).execute().data or []
+    q3 = set()
+    if blank:
+        q3 = {(r["stock_code"], r["fs_div"]) for r in sb.table("financials").select("stock_code,fs_div")
+              .eq("bsns_year", y).eq("quarter", "Q3").not_.is_("revenue", "null")
+              .in_("stock_code", [r["stock_code"] for r in blank]).execute().data or []}
+    targets = [r for r in blank if (r["stock_code"], r["fs_div"]) in q3] + [r for r in neg if r.get("stock_code")]
+    if not targets:
+        return 0
+    dart = OpenDartReader(DART_API_KEY)
+    fin_cache = build_fin_cache(sb)
+    n = 0
+    for r in targets:
+        t = {"stock_code": r["stock_code"], "corp_name": r["corp_name"], "corp_code": r["corp_code"]}
+        try:
+            if _collect_and_save(dart, sb, fin_cache, t, y, "Q4"):
+                n += 1
+        except Exception as e:
+            log.warning(f"[4분기 재계산] {r['corp_name']} {y}: {e}")
+        time.sleep(0.12)
+    log.info(f"[4분기 재계산] {y} 대상 {len(targets)} · 다시 받음 {n}")
+    return n
+
+
 # ──────────────────────────────────────────────────────────────
 #  메인 백필 함수
 # ──────────────────────────────────────────────────────────────
