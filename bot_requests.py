@@ -12,6 +12,7 @@
 #   notice_single {room_id, content}              — 방 상세 모달 단건 발송 (HTML)
 #   sync_desc     {room_id?}                      — 종목방 그룹 설명(소개글) 표준양식 일괄 교체
 #   ping          {}                              — getMe 연결 테스트
+#   fill_corp_code {company_id}                   — 종목 관리 '+추가' 직후 DART 고유번호(corp_code) 채우기
 #
 # status: pending → processing → done | error   (result JSONB에 요약/오류)
 # 테이블 미생성 시(sql/bot_requests.sql 실행 전) 조용히 스킵.
@@ -230,6 +231,54 @@ def _handle_sync_desc(sb, payload):
     return {'total': len(rooms), 'ok': ok, 'skip': skip, 'fail': fail, 'fails': fails[:20]}
 
 
+_CORP_CLS_MARKET = {'Y': 'KOSPI', 'K': 'KOSDAQ', 'N': 'KONEX'}
+
+
+def _resolve_corp(code: str):
+    """종목코드 → (corp_code, market). OpenDART 고유번호 마스터에서 정확히 1건일 때만.
+    market은 corp_cls(Y/K/N)로 정하고, 조회 실패나 그 밖의 구분(E 등)이면 None."""
+    import OpenDartReader   # 마스터는 docs_cache에 하루 단위로 캐시됨
+    dart = OpenDartReader(os.environ.get('DART_API_KEY', ''))
+    m = dart.corp_codes
+    hit = m[m['stock_code'].fillna('').str.strip() == code]
+    if len(hit) != 1:
+        return None, None
+    corp_code = str(hit.iloc[0]['corp_code']).strip()
+    market = None
+    try:
+        market = _CORP_CLS_MARKET.get((dart.company(corp_code) or {}).get('corp_cls'))
+    except Exception as e:
+        logging.warning(f"[BotReq] {code} corp_cls 조회 실패(market 생략): {e}")
+    return corp_code, market
+
+
+def _handle_fill_corp_code(sb, payload):
+    """종목 관리 '+추가'로 넣은 행의 비어 있는 corp_code(와 market)를 채운다.
+    브라우저엔 DART 키가 없어 못 넣고, 주간 상장사 동기화는 KONEX를 건너뛰어
+    KONEX 종목은 끝내 비어 재무·공시 저장에서 빠졌다(10-12 엔솔바이오사이언스).
+    이미 있는 값은 덮어쓰지 않는다."""
+    cid = payload.get('company_id')
+    rows = sb.table('companies').select('id,name,code,corp_code,market') \
+             .eq('id', cid).execute().data or []
+    if not rows:
+        raise ValueError(f'companies id={cid} 없음')
+    row = rows[0]
+    code = (row.get('code') or '').strip()
+    out = {'name': row.get('name'), 'code': code,
+           'corp_code': (row.get('corp_code') or '').strip() or None,
+           'market': row.get('market') or None}
+    if out['corp_code']:
+        return {**out, 'skipped': '이미 있음'}
+    corp_code, market = _resolve_corp(code)
+    if not corp_code:
+        return {**out, 'reason': 'DART 고유번호 마스터에 이 종목코드가 없음'}
+    upd = {'corp_code': corp_code}
+    if not out['market'] and market:
+        upd['market'] = market
+    sb.table('companies').update(upd).eq('id', cid).execute()
+    return {**out, **upd}
+
+
 def _process_one(sb, req):
     rid = req['id']
     sb.table('bot_requests').update({'status': 'processing'}).eq('id', rid).execute()
@@ -247,6 +296,8 @@ def _process_one(sb, req):
             result = _handle_notice_single(sb, payload, by)
         elif rtype == 'sync_desc':
             result = _handle_sync_desc(sb, payload)
+        elif rtype == 'fill_corp_code':
+            result = _handle_fill_corp_code(sb, payload)
         elif rtype == 'ping':
             b = _tg('getMe', {})
             result = {'username': b.get('username'), 'first_name': b.get('first_name')}

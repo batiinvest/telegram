@@ -232,6 +232,17 @@ def run(dry_run: bool = False):
                 })
             to_update.append({"id": row["id"], "payload": payload})
 
+    # KONEX 등 KIS 코스피·코스닥 마스터 밖 종목은 위 갱신에서 빠져, corp_code가 비어 있으면
+    # 끝내 안 채워졌다(10-12 엔솔바이오사이언스 — 재무·공시 저장에서 빠짐). 비어 있는 것만 채운다.
+    corp_filled = 0
+    for code, row in db_map.items():
+        if code in dart_map or (row.get("corp_code") or "").strip():
+            continue
+        cc = dart_corp.get(code)
+        if cc and cc[0]:
+            to_update.append({"id": row["id"], "payload": {"corp_code": cc[0]}})
+            corp_filled += 1
+
     for code, row in db_map.items():
         if row.get("market") == "KONEX": continue
         # 이미 상폐 처리된 종목은 매주 다시 후보로 잡히지 않게 건너뛴다
@@ -248,6 +259,7 @@ def run(dry_run: bool = False):
     log.info(f"신규상장:        {len(new_listings)}개")
     log.info(f"스팩·리츠 제외:  {spac_skipped}개")
     log.info(f"사명변경:        {len(name_changes)}개")
+    log.info(f"corp_code 보충:  {corp_filled}개 (KONEX 등 코스피·코스닥 밖)")
     log.info(f"상폐후보(data):  {len(delisted_data)}개 → 시세 2차 판정 예정")
     log.info(f"상폐후보(모니터링): {len(delisted_monitored)}개 → 시세 2차 판정 예정")
 
