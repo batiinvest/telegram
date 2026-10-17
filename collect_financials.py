@@ -101,6 +101,7 @@ ACCOUNT_MAP = {
     "영업손실":                   "operating_profit",   # 적자 기업
     "III. 영업손실":              "operating_profit",   # 솔트룩스 번호 붙은 형태
     "III. 영업이익":              "operating_profit",
+    "영업순손익":                  "operating_profit",   # 원익IPS 2023 4분기~ ('영업손익' 패턴에 안 걸림)
     # 순이익
     "당기순이익":                  "net_income",
     "당기순이익(손실)":             "net_income",
@@ -439,6 +440,10 @@ for _i, _a in enumerate(_REVENUE_PRIORITY):
 
 # 이름으로 매출을 못 찾을 때 쓰는 XBRL 표준 매출 계정 (손익계산서 줄만)
 _REVENUE_IDS = ('ifrs-full_Revenue', 'ifrs_Revenue')
+# 이름으로 영업이익을 못 찾을 때 쓰는 표준 계정 (손익계산서 줄만). 2026-10-17: 원익IPS '영업순손익'·
+# 우리기술투자 '영업활동으로부터의 이익(손실)'이 이름으로 안 잡혀 영업이익이 2023년부터 대부분 빈칸이었다.
+_OP_IDS = ('dart_OperatingIncomeLoss', 'ifrs-full_ProfitLossFromOperatingActivities',
+           'ifrs_ProfitLossFromOperatingActivities')
 
 
 def _rev_rank(acct: str) -> int:
@@ -454,21 +459,25 @@ def _pick_accounts(df, amount_of, cols=None) -> dict:
         다른 컬럼으로 해석되는 이름(예: 현대차증권 '영업이익'에 단 매출 태그)은 쓰지 않는다.
         2026-10-12: 이 둘로 매출 빈칸 38행(하이트진로홀딩스 2025 3분기 등) — 3분기가 비면 4분기 매출이
         연간값으로 남았다.
+      - 영업이익: 이름으로 못 찾으면 손익계산서의 표준 영업이익 줄(_OP_IDS, 0 아닌 첫 값).
       - 나머지: 첫 값(0이면 뒤의 실제값).
     amount_of(r) → 금액 또는 None. cols를 주면 그 컬럼만."""
-    picked, by_id = {}, []
+    picked, by_id, op_by_id = {}, [], []
     for _, r in df.iterrows():
         acct = str(r.get("account_nm", "")).strip()
         col  = resolve_account(acct)
-        rev_id = (col in (None, 'revenue') and r.get("account_id") in _REVENUE_IDS
-                  and r.get("sj_div") in ("IS", "CIS"))
-        if not col and not rev_id:
+        is_pl = r.get("sj_div") in ("IS", "CIS")
+        rev_id = col in (None, 'revenue') and r.get("account_id") in _REVENUE_IDS and is_pl
+        op_id = col in (None, 'operating_profit') and r.get("account_id") in _OP_IDS and is_pl
+        if not col and not rev_id and not op_id:
             continue
         amt = amount_of(r)
         if amt is None:
             continue
         if rev_id:
             by_id.append((amt, acct))
+        if op_id:
+            op_by_id.append((amt, acct))
         if not col or (cols is not None and col not in cols):
             continue
         if col not in picked:
@@ -484,6 +493,9 @@ def _pick_accounts(df, amount_of, cols=None) -> dict:
     if 'revenue' not in picked and by_id and (cols is None or 'revenue' in cols):
         picked['revenue'] = max(by_id, key=lambda t: abs(t[0]))
         log.debug(f"[매출 표준계정] {picked['revenue'][1]}")
+    if 'operating_profit' not in picked and op_by_id and (cols is None or 'operating_profit' in cols):
+        picked['operating_profit'] = next((t for t in op_by_id if t[0] != 0), op_by_id[0])
+        log.debug(f"[영업이익 표준계정] {picked['operating_profit'][1]}")
     return picked
 
 
