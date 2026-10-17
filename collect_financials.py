@@ -774,6 +774,9 @@ def convert_to_pure_quarter(row: dict, prev_row: Optional[dict]) -> dict:
             elif cur is not None and col in prev_row:
                 # 3분기 누적이 '알 수 없음'(None — 연간과 기준이 다름, get_q3_cumulative)이면 4분기 단독도 모른다
                 converted[col] = None
+        # 손익 비율도 4분기 단독 금액으로 다시 — calc_ratios는 연간 행에서 계산돼 있다.
+        # 2026-10-17 전에는 4분기 영업이익률·순이익률·ROE 등이 연간 값으로 저장됐다(4분기 행의 ~89%).
+        converted.update(_flow_ratios(converted))
     else:
         # Q2/Q3: DART thstrm_amount는 당해 단독값 → 변환 불필요
         # (일부 금융사 누적 제공 케이스는 thstrm_amount도 단독값 제공)
@@ -911,6 +914,33 @@ def calc_ratios(row: dict) -> dict:
         if result.get(_rk) is not None:
             result[_rk] = _clamp_ratio(result[_rk])
     return result
+
+
+# 손익 금액에서 나오는 비율 — 4분기를 단독으로 바꾸면 다시 계산해야 하는 것들 (부채비율·유동비율은 재무상태표라 그대로)
+FLOW_RATIO_COLS = ('cogs_ratio', 'gross_margin', 'sga_ratio', 'net_margin', 'operating_margin', 'roe', 'roa')
+
+
+def _flow_ratios(row: dict) -> dict:
+    """calc_ratios와 같은 식으로 FLOW_RATIO_COLS 계산. 못 구하면 None — 4분기 단독 금액이 비면 비율도 비운다
+    (연간 비율이 남으면 분기 비율처럼 보인다). scripts/recalc_q4_ratios.py가 저장된 행에도 같은 식을 쓴다."""
+    rev, ni = row.get("revenue"), row.get("net_income")
+    te, ta = row.get("total_equity"), row.get("total_assets")
+    cogs, gp = row.get("cogs"), row.get("gross_profit")
+    if cogs is None and gp is not None and rev:
+        cogs = rev - gp        # calc_ratios처럼 — 매출 = 매출총이익이면 저장은 안 하지만 매출원가율 0
+
+    def pct(a, b):
+        return _clamp_ratio(round(a / b * 100, 2)) if a is not None and b else None
+
+    return {
+        "cogs_ratio":       pct(cogs, rev),
+        "gross_margin":     pct(row.get("gross_profit"), rev),
+        "sga_ratio":        pct(row.get("sga"), rev),
+        "net_margin":       pct(ni, rev),
+        "operating_margin": pct(row.get("operating_profit"), rev),
+        "roe":              pct(ni, te) if ni else None,
+        "roa":              pct(ni, ta) if ni else None,
+    }
 
 
 def calc_growth(new_val, old_val) -> Optional[float]:
