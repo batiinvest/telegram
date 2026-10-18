@@ -29,6 +29,7 @@ from format_utils import get_prev_quarter  # 공통 유틸로 이관
 from logger_config import get_logger
 from collect_utils import batch_upsert, safe_execute
 from fin_rules import is_annual_q4
+from db_utils import fetch_all_pages
 
 log = get_logger(__name__)
 
@@ -150,13 +151,14 @@ def save_grade_history(sb, year: str, quarter: str) -> dict:
         return {'saved': 0, 'new': [], 'up': [], 'down': []}
 
     # ── 직전 분기 캐시 ──
+    # 비교용 캐시는 전부 페이지로 받는다 — 2026-10-18 전에는 한 번 조회라 1,000행(분기 ~2,100종목의 절반)에서
+    # 잘려, 나머지 종목은 직전·전년 값 없이 매겨졌다(S 불가·베이스효과 제외 안 됨).
     prev_y, prev_q = get_prev_quarter(year, quarter)
     prev_cache = {}
     if prev_q and prev_y:
-        res = safe_execute(sb.table('financials')
+        for r in fetch_all_pages(sb.table('financials')
                .select('stock_code,revenue,operating_profit,operating_margin,revenue_yoy,is_cumulative')
-               .eq('bsns_year', prev_y).eq('quarter', prev_q).eq('fs_div', 'CFS'), label='grade-prev')
-        for r in (res.data or []):
+               .eq('bsns_year', prev_y).eq('quarter', prev_q).eq('fs_div', 'CFS').order('stock_code')):
             if not is_annual_q4(r, prev_q):       # 비교 기준이 연간값이면 제외
                 prev_cache[r['stock_code']] = r
 
@@ -164,29 +166,26 @@ def save_grade_history(sb, year: str, quarter: str) -> dict:
     prev2_cache = {}
     prev2_y, prev2_q = get_prev_quarter(prev_y or year, prev_q or quarter) if prev_q else (None, None)
     if prev2_q and prev2_y:
-        res = safe_execute(sb.table('financials')
+        for r in fetch_all_pages(sb.table('financials')
                .select('stock_code,revenue,operating_profit,is_cumulative')
-               .eq('bsns_year', prev2_y).eq('quarter', prev2_q).eq('fs_div', 'CFS'), label='grade-prev2')
-        for r in (res.data or []):
+               .eq('bsns_year', prev2_y).eq('quarter', prev2_q).eq('fs_div', 'CFS').order('stock_code')):
             if not is_annual_q4(r, prev2_q):
                 prev2_cache[r['stock_code']] = r
 
     # ── 전년동기 캐시 ──
     prev_year_cache = {}
-    res = safe_execute(sb.table('financials')
+    for r in fetch_all_pages(sb.table('financials')
            .select('stock_code,revenue,operating_profit,operating_margin,is_cumulative')
-           .eq('bsns_year', str(int(year) - 1)).eq('quarter', quarter).eq('fs_div', 'CFS'), label='grade-prevyear')
-    for r in (res.data or []):
+           .eq('bsns_year', str(int(year) - 1)).eq('quarter', quarter).eq('fs_div', 'CFS').order('stock_code')):
         if not is_annual_q4(r, quarter):
             prev_year_cache[r['stock_code']] = r
 
     # ── 이전 분기 등급 이력 (grade_change 계산용) ──
     prev_grade_cache = {}  # stock_code → 이전 분기 grade
     if prev_y and prev_q:
-        res = safe_execute(sb.table('earnings_grade_history')
+        for r in fetch_all_pages(sb.table('earnings_grade_history')
                .select('stock_code,grade')
-               .eq('bsns_year', prev_y).eq('quarter', prev_q), label='grade-prevgrade')
-        for r in (res.data or []):
+               .eq('bsns_year', prev_y).eq('quarter', prev_q).order('stock_code')):
             prev_grade_cache[r['stock_code']] = r['grade']
 
     # ── 등급 계산 + grade_change 결정 ──
@@ -324,17 +323,20 @@ def save_trend_flags(sb, year: str, quarter: str) -> int:
     years_set    = list({yy for yy, _ in quarters_needed})
     quarters_set = list({qq for _, qq in quarters_needed})
 
+    # 연도×분기 조합이라 최대 8분기 × 200종목 = 1,600행 → 페이지로 받고 필요한 5분기만 남긴다
+    # (2026-10-18 전에는 한 번 조회라 1,000행에서 잘렸고, 지난 분기를 다시 계산하면 그 뒤 분기가 '최근'으로 잡혔다)
+    need = set(quarters_needed)
     all_hist = []
     for i in range(0, len(codes), 200):
         batch = codes[i:i + 200]
-        res = safe_execute(sb.table('financials')
+        rows = fetch_all_pages(sb.table('financials')
                .select('stock_code,bsns_year,quarter,revenue,operating_profit,'
                        'revenue_yoy,op_profit_yoy,revenue_qoq,total_liabilities,total_equity')
                .in_('bsns_year', years_set)
                .in_('quarter',   quarters_set)
                .eq('fs_div', 'CFS')
-               .in_('stock_code', batch), label='trend-hist')
-        all_hist.extend(res.data or [])
+               .in_('stock_code', batch).order('stock_code').order('bsns_year').order('quarter'))
+        all_hist.extend(r for r in rows if (r['bsns_year'], r['quarter']) in need)
 
     by_code = {}
     for r in all_hist:
