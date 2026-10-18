@@ -160,6 +160,15 @@ def job_cleanup_market_data():
         mark_failed(e)
 
 
+def bulk_report_summary(row: dict) -> dict:
+    """대량보유 보고 한 건의 요약 — insider_trades bulk 행 → 배지용 dict(보고자·증감·비율 전후)."""
+    out = {'type': 'bulk', 'change': row.get('shares_change') or 0,
+           'ratio_before': row.get('hold_ratio_before'), 'ratio_after': row.get('hold_ratio_after')}
+    if row.get('reporter'):
+        out['who'] = row['reporter']
+    return out
+
+
 def insider_report_summary(rows: list) -> dict:
     """지분공시(임원·주요주주 소유보고) 한 건의 매매 요약 — insider_trades 행(같은 rcept_no) → 배지용 dict.
     scope='report' = 보고서 한 건 기준(프론트가 행마다 더해도 됨). who = 보고자가 한 명이면 이름."""
@@ -318,13 +327,7 @@ def _preprocess_disclosures(all_disc_records: list, sb) -> list:
                 # 똑같이 붙여, 목록 배지가 행마다 같은 큰 값으로 보이고 합치면 몇백 배가 됐다(삼성전자 07-21 761건). 2026-10-18
                 summary = insider_report_summary(ins_map[rno])
             elif cat == '대량보유' and rno and rno in ins_map:
-                row = ins_map[rno][0]
-                chg = row.get('shares_change') or 0
-                summary = {
-                    'type': 'bulk', 'change': chg,
-                    'ratio_before': row.get('hold_ratio_before'),
-                    'ratio_after':  row.get('hold_ratio_after'),
-                }
+                summary = bulk_report_summary(ins_map[rno][0])
             elif cat == '최대주주변동' and rno and rno in ins_map:
                 summary = {'type': 'major'}
             elif cat == '거래계획(예고)' and rno and rno in ins_map:

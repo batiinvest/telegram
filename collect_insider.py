@@ -435,6 +435,78 @@ def _fill_stock_codes(sb, rows: list) -> list:
     return kept
 
 
+# ── DART 목록 API 폴백 ─────────────────────────────────────────────────────────
+# 보고서 본문(document.xml)을 못 읽을 때(대량보유 '일반' 보고서 — 원익홀딩스 05-15 등, 임원 소유보고 일부)와
+# 과거분 채우기(scripts/backfill_ownership_history.py)에 쓴다. 2026-10-18.
+#   majorstock = 대량보유 상황보고(보고자·보고구분 약식/일반·보유 주식·증감·비율·사유)
+#   elestock   = 임원·주요주주 소유보고(보고자·직위·보유·증감, 특정증권등 합계)
+# 둘 다 사유(장내매수 등)·단가·실제 매매일이 없다 → trade_date = 접수일, reason_code로 출처 표시.
+_API_CACHE: dict = {}
+
+
+def dart_list_api(kind: str, corp_code: str, api_key: str) -> list:
+    """kind = 'majorstock' | 'elestock' — 회사 하나의 보고 목록(최근 약 2년). 실행 중 회사별로 한 번만 부른다."""
+    key = (kind, corp_code)
+    if key not in _API_CACHE:
+        try:
+            j = requests.get(f'https://opendart.fss.or.kr/api/{kind}.json',
+                             params={'crtfc_key': api_key, 'corp_code': corp_code}, timeout=20).json()
+            _API_CACHE[key] = j.get('list', []) if j.get('status') == '000' else []
+        except Exception as e:
+            log.warning(f"[지분] {kind} {corp_code} 목록 조회 실패: {e}")
+            _API_CACHE[key] = []
+    return _API_CACHE[key]
+
+
+def _api_float(s) -> Optional[float]:
+    if s is None or str(s).strip() in ('-', ''):
+        return None
+    try:
+        return float(str(s).replace(',', ''))
+    except ValueError:
+        return None
+
+
+def row_from_majorstock(it: dict, stock_code: str = '') -> dict:
+    after, chg = _parse_int(it.get('stkqy')), _parse_int(it.get('stkqy_irds'))
+    rt, rti = _api_float(it.get('stkrt')), _api_float(it.get('stkrt_irds'))
+    d = (it.get('rcept_dt') or '')[:10]
+    return {
+        'rcept_no': it['rcept_no'], 'corp_code': it.get('corp_code', ''), 'corp_name': it.get('corp_name', ''),
+        'stock_code': stock_code, 'reporter': (it.get('repror') or '').strip(),
+        'relation': (it.get('report_tp') or '').strip(),          # 약식(단순투자) / 일반
+        'trade_date': d, 'reason': ' '.join((it.get('report_resn') or '').split())[:100],
+        'reason_code': 'majorstock', 'stock_type': '보통주',
+        'shares_before': after - chg if after is not None and chg is not None else None,
+        'shares_change': chg, 'shares_after': after, 'price': None,
+        'hold_ratio_before': round(rt - rti, 2) if rt is not None and rti is not None else None,
+        'hold_ratio_after': rt, 'base_date': d, 'report_type': 'bulk',
+    }
+
+
+def row_from_elestock(it: dict, stock_code: str = '') -> dict:
+    after, chg = _parse_int(it.get('sp_stock_lmp_cnt')), _parse_int(it.get('sp_stock_lmp_irds_cnt'))
+    rt, rti = _api_float(it.get('sp_stock_lmp_rate')), _api_float(it.get('sp_stock_lmp_irds_rate'))
+    rel = next((str(v).strip() for v in (it.get('isu_exctv_ofcps'), it.get('isu_main_shrholdr'), it.get('isu_exctv_rgist_at'))
+                if v and str(v).strip() not in ('-', '')), '')
+    d = (it.get('rcept_dt') or '')[:10]
+    return {
+        'rcept_no': it['rcept_no'], 'corp_code': it.get('corp_code', ''), 'corp_name': it.get('corp_name', ''),
+        'stock_code': stock_code, 'reporter': (it.get('repror') or '').strip(), 'relation': rel,
+        'trade_date': d, 'reason': '', 'reason_code': 'elestock', 'stock_type': '특정증권등',
+        'shares_before': after - chg if after is not None and chg is not None else None,
+        'shares_change': chg, 'shares_after': after, 'price': None,
+        'hold_ratio_before': round(rt - rti, 2) if rt is not None and rti is not None else None,
+        'hold_ratio_after': rt, 'base_date': d, 'report_type': 'insider',
+    }
+
+
+def api_fallback_rows(kind: str, rcept_no: str, corp_code: str, api_key: str) -> list:
+    """보고서 한 건을 목록 API에서 찾아 insider_trades 행으로(못 찾으면 [])."""
+    conv = row_from_majorstock if kind == 'majorstock' else row_from_elestock
+    return [conv(it) for it in dart_list_api(kind, corp_code, api_key) if it.get('rcept_no') == rcept_no]
+
+
 def collect_insider_trades(disc_all: list, api_key: str, sb,
                            base_date: date = None) -> int:
     """
@@ -507,6 +579,8 @@ def collect_insider_trades(disc_all: list, api_key: str, sb,
     # ── 임원 지분공시 파싱 ──
     for i, d in enumerate(insider_targets, 1):
         rows = fetch_and_parse(d['rcept_no'], d.get('corp_code',''), d.get('corp_name',''), base_date, api_key)
+        if not rows:   # 본문을 못 읽으면 목록 API(elestock) — 사유·단가 없이 보유·증감만
+            rows = api_fallback_rows('elestock', d['rcept_no'], d.get('corp_code', ''), api_key)
         for r in rows:
             r['report_type'] = 'insider'
         all_rows.extend(rows)
@@ -547,12 +621,19 @@ def collect_insider_trades(disc_all: list, api_key: str, sb,
                 continue
             content = _decode_xml(z.read(xml_files[0]))
             row = parse_bulk_holder_xml(content, rcept_no, corp_code, corp_name, base_date)
-            if row:
-                all_rows.append(row)
         except zipfile.BadZipFile:
-            log.debug(f"[대량보유] {corp_name} HTML 응답 — 스킵")
+            log.debug(f"[대량보유] {corp_name} HTML 응답 — 목록 API로")
+            row = None
         except Exception as e:
-            log.warning(f"[대량보유] {corp_name} 파싱 오류: {e}")
+            log.warning(f"[대량보유] {corp_name} 파싱 오류: {e} — 목록 API로")
+            row = None
+        # 본문을 못 읽었거나 보유 비율이 없으면(대량보유 '일반' 보고서 등) 목록 API(majorstock)
+        if not row or row.get('hold_ratio_after') is None:
+            api_rows = api_fallback_rows('majorstock', rcept_no, corp_code, api_key)
+            if api_rows:
+                row = api_rows[0]
+        if row:
+            all_rows.append(row)
         time.sleep(0.3)
 
     if not all_rows:
