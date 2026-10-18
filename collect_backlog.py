@@ -163,6 +163,20 @@ def _read_table(grid, end_col=False):
     col = amt[-1]
     data = grid[hdr_n:]
     tot = [r for r in data if any(_TOTAL.match((x or '').replace(' ', '')) for x in r[:3])]
+    if not tot and len(data) >= 3:
+        # 이름 없는 합계 행 — 품목·수주일자·납기 칸이 빈 마지막 행(다른 행엔 날짜 등이 있음)이고 잔고가 위 행 합 이상이면
+        # 합계. 3S는 '합계' 글자 없이 맨 아래에 합계를 두고, 비밀유지로 금액을 숨긴 계약(주1)까지 그 합계에 넣는다 —
+        # 예전엔 품목 행과 함께 더해 2배 가까이 저장했음(2024Q4 원문 209억 → 395억, 2025Q2 30억 → 60억). 2026-10-19
+        lab_cols = [j for j, lab in enumerate(labels)
+                    if not any(k in lab.replace(' ', '') for k in ('수주총액', '기납품', '잔고', '수량', '금액'))]
+        cell = lambda r, j: (r[j] if j < len(r) else '') or ''
+        last = data[-1]
+        lv = _num(cell(last, col))
+        others = [v for v in (_num(cell(r, col)) for r in data[:-1]) if v is not None]
+        if (lab_cols and lv is not None and not any(cell(last, j).strip() for j in lab_cols)
+                and any(cell(r, j).strip() for r in data[:-1] for j in lab_cols)
+                and lv >= sum(others) - 1):
+            tot = [last]
     if tot:
         v = _num(tot[-1][col]) if col < len(tot[-1]) else None
         if v is not None:
@@ -313,10 +327,10 @@ def parse_backlog(xml, near=None, period=None):
     if not ok:
         return None, (found[0][1] if found else '잔고 표 없음')
     if len(ok) > 1:
-        # 잔고 표가 여럿이면 회사·부문별로 나눈 것 → 합(연결). 에스티아이(본사 + 자회사)·원익홀딩스(본사 + 원익IPS).
-        # 같은 값이 되풀이되면(요약·상세) 하나로 센다.
-        vals = list(dict.fromkeys(x[0] for x in ok))
-        return sum(vals), ok[0][1] + f' (잔고 표 {len(ok)}개 합: {vals})'
+        # 잔고 표가 여럿이면 '수주상황'의 첫 표가 회사 잔고. 뒤 표는 더하지 않는다 — 원문 대조(10-19)에서 뒤 표는
+        # 지분법 자회사 참고 정보(원익홀딩스: [주요 자회사] 원익IPS 6,346억 등 — 연결 대상 아님)거나 첫 표에 이미 든
+        # 큰 계약 세부(에스티아이: '계약수익금액이 전기 매출액의 5% 이상인 계약별 정보')였음. 예전엔 합쳐 2.6배·1.24배
+        return ok[0][0], ok[0][1] + f' (잔고 표 {len(ok)}개 중 첫 표 — 뒤 표 {[x[0] for x in ok[1:]]}는 자회사·계약 세부)'
     return ok[0]
 
 
