@@ -115,8 +115,10 @@ def _grid(table_xml):
     return [g for g in grid if any(x for x in g)]
 
 
-def _read_table(grid):
-    """→ (값, 설명) 또는 (None, 이유). 값은 표 단위 그대로."""
+def _read_table(grid, end_col=False):
+    """→ (값, 설명) 또는 (None, 이유). 값은 표 단위 그대로.
+    end_col: 표 앞 문구가 '계약잔액·잔고'인 표 — 머리글에 '잔고'가 없고 '기초 | 신규계약 | 수익인식 | 기말'로
+    적는 회사(유진테크)는 '기말'(또는 '잔액') 열이 잔고다."""
     hdr_n = 0
     for row in grid:
         if any(_num(x) is not None for x in row[1:]):
@@ -132,14 +134,23 @@ def _read_table(grid):
             if j < len(h) and h[j] and h[j] not in parts:
                 parts.append(h[j])
         labels.append(' '.join(parts))
-    cands = [j for j, lab in enumerate(labels) if '잔고' in lab and not any(x in lab for x in _EXCL)]
+    cands = [j for j, lab in enumerate(labels)
+             if ('잔고' in lab or (end_col and ('기말' in lab or '잔액' in lab))) and not any(x in lab for x in _EXCL)]
     amt = [j for j in cands if '수량' not in labels[j]]
     if not amt:
-        # 행으로 적은 표 — '수주잔고 | 금액' (한빛레이저 등): 첫 칸에 '잔고'가 든 행의 마지막 숫자
-        rows = [r for r in grid[hdr_n:] if r and '잔고' in r[0] and not any(x in r[0] for x in _EXCL)]
-        nums = [v for v in (_num(x) for x in (rows[-1][1:] if rows else [])) if v is not None]
-        if nums:
-            return nums[-1], f'행 "{rows[-1][0]}"'
+        # 행으로 적은 표 — '수주잔고 | 금액'(한빛레이저), '기말공사계약잔액 | 당반기 | 전기'(케이씨텍):
+        # 첫 칸에 '잔고'(계약잔액 표면 '기말')가 든 행 — 기간 열이 있으면 '당…' 열, 없으면 마지막 숫자
+        def is_bl(c0):
+            return ('잔고' in c0 or (end_col and '기말' in c0)) and not any(x in c0 for x in _EXCL)
+        rows = [r for r in grid[hdr_n:] if r and is_bl(r[0])]
+        if rows:
+            r = rows[-1]
+            cur = [j for j, lab in enumerate(labels) if j > 0 and lab.replace(' ', '').startswith('당') and j < len(r)]
+            if cur and _num(r[cur[0]]) is not None:
+                return _num(r[cur[0]]), f'행 "{r[0]}" · 열 "{labels[cur[0]]}"'
+            nums = [v for v in (_num(x) for x in r[1:]) if v is not None]
+            if nums:
+                return nums[-1], f'행 "{r[0]}"'
         return None, f'잔고 금액 열 없음 {labels}'
     col = amt[-1]
     data = grid[hdr_n:]
@@ -174,11 +185,19 @@ def parse_backlog(xml):
     found = []
     for m in re.finditer(r'<TABLE.*?</TABLE>', sec, re.S | re.I):
         tx = m.group(0)
-        if '잔고' not in _txt(tx):
+        head, before = _txt(tx)[:300], _txt(sec[max(0, m.start() - 600):m.start()])
+        # 표 앞 문구가 '…계약잔액·잔고' + 머리글에 '기말' — 유진테크 '(1) 당반기말 장비수주 계약잔액 | 기초 신규계약 수익인식 기말'
+        end_col = '잔고' not in _txt(tx) and '기말' in head and ('잔액' in before[-200:] or '잔고' in before[-200:])
+        if '잔고' not in _txt(tx) and not end_col:
+            continue
+        # 전기말 표 건너뜀 — 바로 앞 문구에서 '전기·전년'이 '당기·당반기…'보다 뒤에 나오면 지난 기간 표
+        # (유진테크는 '(2) 전기말 장비수주 계약잔액'을 같은 모양으로 한 번 더 싣는다 — 합치면 두 배)
+        last = lambda ws: max((before.rfind(w) for w in ws), default=-1)
+        if last(('전기말', '전기 말', '전년말', '전반기말', '전분기말')) > last(('당기', '당반기', '당분기', '당기말')):
             continue
         # 단위: 표 안 머리 → 없으면 표 바로 앞에서 가장 가까운 것(단위 줄이 따로 작은 표로 붙는 일이 많다)
-        units = _UNIT.findall(_txt(tx)[:300]) or _UNIT.findall(_txt(sec[max(0, m.start() - 1500):m.start()]))[-1:]
-        v, how = _read_table(_grid(tx))
+        units = _UNIT.findall(head) or _UNIT.findall(_txt(sec[max(0, m.start() - 1500):m.start()]))[-1:]
+        v, how = _read_table(_grid(tx), end_col)
         if v is None:
             found.append((None, how))
             continue
