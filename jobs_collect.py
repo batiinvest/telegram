@@ -1299,6 +1299,22 @@ def job_earnings_stage():
         mark_failed(e)
 
 
+@_job()
+def job_collect_backlog():
+    """매일 20:20 — 반도체 장비(전공정·후공정) 수주잔고. 최근 7일 정기보고서 중 아직 없는 분기·정정 보고서만
+    본문 '매출 및 수주상황' 표에서 기말 잔고 합계를 읽어 dart_segment_revenue('backlog_total')에 저장
+    (collect_backlog.py). 종목리포트 '동종비교' 탭·기업 비교 '수주잔고' 지표가 읽는다.
+    보고서 본문이 한 건 ~15초(4MB 안팎)라 마감일(대상 수십 곳)엔 10분 남짓 — 스레드로 돈다."""
+    try:
+        import collect_backlog
+        res = collect_backlog.run_recent(7)
+        n = sum(1 for r in res if r[3] is not None)
+        logging.info(f"=== [수주잔고] 보고서 {len(res)}건 읽음 · 잔고 {n}건 저장 ===")
+    except Exception as e:
+        logging.error(f"❌ [수주잔고] 오류: {e}")
+        mark_failed(e)
+
+
 @_job(holiday=True)
 def job_collect_credit_balance():
     """평일 저녁 (19:00, +10:30 보정) — KOFIA 신용공여 잔고(신용거래융자 등) 수집.
