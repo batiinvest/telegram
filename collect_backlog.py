@@ -115,17 +115,15 @@ def _grid(table_xml):
     return [g for g in grid if any(x for x in g)]
 
 
-def _read_table(grid, end_col=False):
-    """→ (값, 설명) 또는 (None, 이유). 값은 표 단위 그대로.
-    end_col: 표 앞 문구가 '계약잔액·잔고'인 표 — 머리글에 '잔고'가 없고 '기초 | 신규계약 | 수익인식 | 기말'로
-    적는 회사(유진테크)는 '기말'(또는 '잔액') 열이 잔고다."""
+def _layout(grid, end_col=False):
+    """→ (머리글 행 수, 열 이름들, 잔고 금액 열 후보) 또는 None(머리글과 값을 못 가름)."""
     hdr_n = 0
     for row in grid:
         if any(_num(x) is not None for x in row[1:]):
             break
         hdr_n += 1
     if hdr_n == 0 or hdr_n >= len(grid):
-        return None, '머리글/값 구분 안 됨'
+        return None
     ncol = max(len(r) for r in grid)
     labels = []
     for j in range(ncol):
@@ -136,7 +134,17 @@ def _read_table(grid, end_col=False):
         labels.append(' '.join(parts))
     cands = [j for j, lab in enumerate(labels)
              if ('잔고' in lab or (end_col and ('기말' in lab or '잔액' in lab))) and not any(x in lab for x in _EXCL)]
-    amt = [j for j in cands if '수량' not in labels[j]]
+    return hdr_n, labels, [j for j in cands if '수량' not in labels[j]]
+
+
+def _read_table(grid, end_col=False):
+    """→ (값, 설명) 또는 (None, 이유). 값은 표 단위 그대로.
+    end_col: 표 앞 문구가 '계약잔액·잔고'인 표 — 머리글에 '잔고'가 없고 '기초 | 신규계약 | 수익인식 | 기말'로
+    적는 회사(유진테크)는 '기말'(또는 '잔액') 열이 잔고다."""
+    lay = _layout(grid, end_col)
+    if not lay:
+        return None, '머리글/값 구분 안 됨'
+    hdr_n, labels, amt = lay
     if not amt:
         # 행으로 적은 표 — '수주잔고 | 금액'(한빛레이저), '기말공사계약잔액 | 당반기 | 전기'(케이씨텍):
         # 첫 칸에 '잔고'(계약잔액 표면 '기말')가 든 행 — 기간 열이 있으면 '당…' 열, 없으면 마지막 숫자
@@ -177,6 +185,78 @@ def _read_table(grid, end_col=False):
     return None, '값 없음'
 
 
+# 단위 문구 조각 → (통화, 배수). 'K$, 백만원'(네오셈) = 달러는 천 달러, 원화는 백만원
+_UNIT_TOKENS = [
+    (r'^(K\$|천USD|USD천|천달러|천불)$', 'USD', 1e3),
+    (r'^(백만USD|USD백만|백만달러|M\$)$', 'USD', 1e6),
+    (r'^(USD|US\$|\$|달러|미화|불)$',    'USD', 1.0),
+    (r'^백만원$', 'KRW', 1e6), (r'^억원$', 'KRW', 1e8), (r'^천원$', 'KRW', 1e3), (r'^원$', 'KRW', 1.0),
+]
+
+
+def _unit_tokens(u):
+    out = {}
+    for tok in re.split(r'[,/·]', (u or '').replace(' ', '')):
+        for pat, ccy, mult in _UNIT_TOKENS:
+            if re.match(pat, tok, re.I):
+                out.setdefault(ccy, mult)
+                break
+    return out
+
+
+def _read_fx(grid, unit_txt, period, end_col=False):
+    """외화로 적은 잔고 표 → (백만원, 설명) 또는 (None, 이유). 잔고는 기말 잔액이라 기말 환율
+    (fx_history.close_rate — 재무 외화 환산과 같은 출처, 재무상태표 규칙).
+      - 코세스: 표 전체가 USD → 합계 × 환율
+      - 네오셈: '통화' 열(USD·KRW) + 단위 'K$, 백만원' → 통화별 품목 합을 각각 원화로 바꿔 더함"""
+    toks = _unit_tokens(unit_txt)
+    fx = [c for c in toks if c != 'KRW']
+    if len(fx) != 1 or not period:
+        return None, f'외화 단위 모름 ({unit_txt})'
+    ccy = fx[0]
+    try:
+        import fx_history
+        rate = fx_history.close_rate(ccy, fx_history.quarter_bounds(*period)[2])
+    except Exception as e:
+        return None, f'{ccy} 기말 환율 없음 ({str(e)[:40]})'
+    lay = _layout(grid, end_col)
+    if not lay or not lay[2]:
+        return None, '외화 표 잔고 열 없음'
+    hdr_n, labels, amt = lay
+    col = amt[-1]
+    j_cur = next((j for j, lab in enumerate(labels) if '통화' in lab), None)
+    if j_cur is None:                                    # 표 전체가 한 외화
+        if 'KRW' in toks:
+            return None, f'외화·원화 섞인 단위인데 통화 열 없음 ({unit_txt})'
+        v, how = _read_table(grid, end_col)
+        if v is None:
+            return None, how
+        return v * toks[ccy] * rate / 1e6, f'{how} · 단위 {unit_txt} · 기말 환율 {rate:,.1f}원'
+    sums = {}
+    for r in grid[hdr_n:]:
+        lab0 = ' '.join(r[:3])
+        if '합계' in lab0 or '소계' in lab0 or any(_TOTAL.match(re.sub(r'\(.*?\)', '', x or '').replace(' ', '')) for x in r[:3]):
+            continue
+        cur = (r[j_cur] if j_cur < len(r) else '').upper().strip()
+        v = _num(r[col]) if col < len(r) else None
+        if cur and v is not None:
+            sums[cur] = sums.get(cur, 0) + v
+    if not sums:
+        return None, '외화 표 값 없음'
+    total, parts = 0.0, []
+    for cur, s in sums.items():
+        if cur in ('KRW', '원'):
+            if 'KRW' not in toks:
+                return None, f'원화 행 단위 모름 ({unit_txt})'
+            total += s * toks['KRW'] / 1e6
+        elif cur == ccy:
+            total += s * toks[ccy] * rate / 1e6
+        else:
+            return None, f'통화 {cur} 환산 안 함'
+        parts.append(f'{cur} {s:,.0f}')
+    return total, f'통화별 품목 합({", ".join(parts)}) · 단위 {unit_txt} · 기말 환율 {rate:,.1f}원'
+
+
 def _guess_factor(v, near):
     """'(단위 : )'처럼 단위를 비워 둔 보고서(테스 2025 반기·유니테스트 등) — 같은 회사 저장값(백만원) 크기에
     가장 가까운 단위. 10배 넘게 어긋나면 모른다(None)."""
@@ -188,9 +268,10 @@ def _guess_factor(v, near):
     return f if abs(math.log10(abs(v * f)) - ref) < 1 else None
 
 
-def parse_backlog(xml, near=None):
+def parse_backlog(xml, near=None, period=None):
     """보고서 본문 → (백만원, 설명) 또는 (None, 이유).
-    near: 단위가 빈칸일 때 부를 함수 → 같은 회사 저장 잔고의 중앙값(백만원) 또는 None."""
+    near: 단위가 빈칸일 때 부를 함수 → 같은 회사 저장 잔고의 중앙값(백만원) 또는 None.
+    period: (연도, 'Qn') — 외화 잔고를 기말 환율로 바꿀 때."""
     sec = _section(xml)
     if not sec:
         return None, '수주상황 절 없음'
@@ -209,6 +290,10 @@ def parse_backlog(xml, near=None):
             continue
         # 단위: 표 안 머리 → 없으면 표 바로 앞에서 가장 가까운 것(단위 줄이 따로 작은 표로 붙는 일이 많다)
         units = _UNIT.findall(head) or _UNIT.findall(_txt(sec[max(0, m.start() - 1500):m.start()]))[-1:]
+        if units and set(_unit_tokens(units[-1])) - {'KRW'}:      # 외화 단위(코세스 USD, 네오셈 K$·백만원)
+            v, how = _read_fx(_grid(tx), units[-1].strip(), period, end_col)
+            found.append((round(v) if v is not None else None, how))
+            continue
         v, how = _read_table(_grid(tx), end_col)
         if v is None:
             found.append((None, how))
@@ -297,7 +382,7 @@ def _collect(sb, t, reports, have, force, save, out):
         except Exception as e:
             out.append((t['name'], y, q, None, f'본문 실패 {str(e)[:60]}'))
             continue
-        v, how = parse_backlog(xml or '', near=lambda: _near(sb, t['code']))
+        v, how = parse_backlog(xml or '', near=lambda: _near(sb, t['code']), period=(y, q))
         out.append((t['name'], y, q, v, how))
         if VERBOSE:
             print(t['name'], y, q, v, how, sep=' | ', flush=True)
@@ -368,7 +453,7 @@ def probe(codes=None):
             out.append((t['name'], t['sub_industry'], '', None, '보고서 없음'))
             continue
         rno, nm = reps[-1]
-        v, how = parse_backlog(_get_dart().document(rno) or '')
+        v, how = parse_backlog(_get_dart().document(rno) or '', period=_period(nm))
         out.append((t['name'], t['sub_industry'], nm, v, how))
         time.sleep(0.2)
     return out
