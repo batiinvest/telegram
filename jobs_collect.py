@@ -160,6 +160,18 @@ def job_cleanup_market_data():
         mark_failed(e)
 
 
+def insider_report_summary(rows: list) -> dict:
+    """지분공시(임원·주요주주 소유보고) 한 건의 매매 요약 — insider_trades 행(같은 rcept_no) → 배지용 dict.
+    scope='report' = 보고서 한 건 기준(프론트가 행마다 더해도 됨). who = 보고자가 한 명이면 이름."""
+    buy  = sum(r['shares_change'] for r in rows if (r.get('shares_change') or 0) > 0)
+    sell = sum(abs(r['shares_change']) for r in rows if (r.get('shares_change') or 0) < 0)
+    who  = {r.get('reporter') for r in rows if r.get('reporter')}
+    out = {'type': 'insider', 'scope': 'report', 'buy': buy, 'sell': sell, 'count': len(rows)}
+    if len(who) == 1:
+        out['who'] = next(iter(who))
+    return out
+
+
 def _preprocess_disclosures(all_disc_records: list, sb) -> list:
     """
     app_config 저장 전 전처리:
@@ -283,18 +295,17 @@ def _preprocess_disclosures(all_disc_records: list, sb) -> list:
     # ── 5. insider 요약 첨부 (insider_trades DB에서 오늘 데이터 조회) ──
     try:
         today_str = datetime.date.today().isoformat()
-        ins_res = sb.table('insider_trades') \
-                    .select('rcept_no,corp_code,reporter,shares_change,hold_ratio_before,hold_ratio_after,plan_period,report_type') \
-                    .eq('base_date', today_str).execute()
-        ins_rows = ins_res.data or []
+        # 페이지로 다 받음 — 소유보고가 몰리는 날(삼성전자 07-21 하루 761건)은 1,000행을 넘어 뒤쪽 보고서 요약이 빠졌다
+        ins_rows = fetch_all_pages(
+            sb.table('insider_trades')
+              .select('rcept_no,corp_code,reporter,shares_change,hold_ratio_before,hold_ratio_after,plan_period,report_type')
+              .eq('base_date', today_str).order('id')
+        )
 
-        ins_map      = {}  # rcept_no → [rows]
-        corp_ins_map = {}  # corp_code → [rows]
+        ins_map = {}  # rcept_no → [rows]
         for r in ins_rows:
             if r.get('rcept_no'):
                 ins_map.setdefault(r['rcept_no'], []).append(r)
-            if r.get('corp_code'):
-                corp_ins_map.setdefault(r['corp_code'], []).append(r)
 
         for d in filtered:
             rno = d.get('rcept_no')
@@ -302,11 +313,10 @@ def _preprocess_disclosures(all_disc_records: list, sb) -> list:
             cat = d.get('category', '')
             summary = None
 
-            if cat == '지분공시' and cc and cc in corp_ins_map:
-                rows = corp_ins_map[cc]
-                buy  = sum(r['shares_change'] for r in rows if (r.get('shares_change') or 0) > 0)
-                sell = sum(abs(r['shares_change']) for r in rows if (r.get('shares_change') or 0) < 0)
-                summary = {'type': 'insider', 'buy': buy, 'sell': sell, 'count': len(rows)}
+            if cat == '지분공시' and rno and rno in ins_map:
+                # 그 보고서(rcept_no)의 매매만 — 예전엔 회사의 그날 전체(corp_ins_map) 합계를 그날 지분공시 행마다
+                # 똑같이 붙여, 목록 배지가 행마다 같은 큰 값으로 보이고 합치면 몇백 배가 됐다(삼성전자 07-21 761건). 2026-10-18
+                summary = insider_report_summary(ins_map[rno])
             elif cat == '대량보유' and rno and rno in ins_map:
                 row = ins_map[rno][0]
                 chg = row.get('shares_change') or 0
