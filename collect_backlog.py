@@ -177,8 +177,20 @@ def _read_table(grid, end_col=False):
     return None, '값 없음'
 
 
-def parse_backlog(xml):
-    """보고서 본문 → (백만원, 설명) 또는 (None, 이유)."""
+def _guess_factor(v, near):
+    """'(단위 : )'처럼 단위를 비워 둔 보고서(테스 2025 반기·유니테스트 등) — 같은 회사 저장값(백만원) 크기에
+    가장 가까운 단위. 10배 넘게 어긋나면 모른다(None)."""
+    import math
+    if not near or not v:
+        return None
+    ref = math.log10(near)
+    f = min((1.0, 1e-3, 1e-6, 100.0), key=lambda f: abs(math.log10(abs(v * f)) - ref))
+    return f if abs(math.log10(abs(v * f)) - ref) < 1 else None
+
+
+def parse_backlog(xml, near=None):
+    """보고서 본문 → (백만원, 설명) 또는 (None, 이유).
+    near: 단위가 빈칸일 때 부를 함수 → 같은 회사 저장 잔고의 중앙값(백만원) 또는 None."""
     sec = _section(xml)
     if not sec:
         return None, '수주상황 절 없음'
@@ -202,10 +214,14 @@ def parse_backlog(xml):
             found.append((None, how))
             continue
         f = _unit_factor(units[-1]) if units else None
+        unit_note = f'단위 {units[-1].strip()}' if units else ''
+        if f is None and units and not units[-1].strip() and near:
+            f = _guess_factor(v, near())
+            unit_note = '단위 빈칸 → 저장된 잔고 크기로 추정'
         if f is None:
             found.append((None, f'단위 못 읽음/외화 ({units[-1] if units else "없음"})'))
             continue
-        found.append((round(v * f), f'{how} · 단위 {units[-1].strip()}'))
+        found.append((round(v * f), f'{how} · {unit_note}'))
     ok = [x for x in found if x[0] is not None]
     if not ok:
         return None, (found[0][1] if found else '잔고 표 없음')
@@ -254,6 +270,13 @@ def _existing(sb, codes):
     return have
 
 
+def _near(sb, code):
+    """같은 회사 저장 잔고(0 제외)의 중앙값 — 단위 빈칸 보고서의 단위 추정용."""
+    vs = sorted(r['revenue'] for r in sb.table('dart_segment_revenue').select('revenue')
+                .eq('segment_type', SEG).eq('stock_code', code).execute().data or [] if r['revenue'])
+    return vs[len(vs) // 2] if vs else None
+
+
 def _save(sb, code, y, q, mil):
     sb.table('dart_segment_revenue').upsert({
         'stock_code': code, 'bsns_year': int(y), 'quarter': q, 'segment_type': SEG,
@@ -274,7 +297,7 @@ def _collect(sb, t, reports, have, force, save, out):
         except Exception as e:
             out.append((t['name'], y, q, None, f'본문 실패 {str(e)[:60]}'))
             continue
-        v, how = parse_backlog(xml or '')
+        v, how = parse_backlog(xml or '', near=lambda: _near(sb, t['code']))
         out.append((t['name'], y, q, v, how))
         if VERBOSE:
             print(t['name'], y, q, v, how, sep=' | ', flush=True)
