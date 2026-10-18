@@ -300,6 +300,8 @@ def parse_backlog(xml, near=None, period=None):
             continue
         f = _unit_factor(units[-1]) if units else None
         unit_note = f'단위 {units[-1].strip()}' if units else ''
+        if f is None and units and not units[-1].strip() and v == 0:
+            f, unit_note = 1.0, '단위 빈칸이지만 잔고 0'   # 유니테스트 2024 3·4분기 — 총액 = 기납품
         if f is None and units and not units[-1].strip() and near:
             f = _guess_factor(v, near())
             unit_note = '단위 빈칸 → 저장된 잔고 크기로 추정'
