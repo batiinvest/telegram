@@ -977,6 +977,7 @@ def build_fin_cache(sb) -> dict:
     while True:
         res = sb.table("financials") \
             .select(select_cols) \
+            .order("id") \
             .range(page * 1000, (page + 1) * 1000 - 1) \
             .execute()
         if not res.data:
@@ -1223,17 +1224,20 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
 
         fin_cache = {}  # {stock_code: {(year, quarter, fs_div): row}}
         try:
-            # 전년동기 + 직전 분기 한번에 조회
+            # 전년동기 + 직전 분기 — 100종목씩·페이지로. 2026-10-18 전에는 그날 종목 전부를 한 번에 조회해
+            # 1,000행에서 잘렸다 → 마감일(08-14 등) 수백 종목 중 잘린 종목의 YoY·QoQ가 빈칸으로 저장됨
+            # (2026Q2 매출 YoY 271행·QoQ 434행, 2026Q1 93·135행).
+            from db_utils import fetch_all_pages
             quarters_to_fetch = [(prev_year, quarter)]
             if prev_y_q and prev_q_val:
                 quarters_to_fetch.append((prev_y_q, prev_q_val))
 
-            for fy, fq in quarters_to_fetch:
-                res = sb.table('financials') \
-                    .select('stock_code,bsns_year,quarter,fs_div,is_cumulative,revenue,operating_profit,net_income') \
-                    .in_('stock_code', stock_codes) \
-                    .eq('bsns_year', fy).eq('quarter', fq).execute()
-                for r in (res.data or []):
+            uniq = sorted(set(stock_codes))
+            for (fy, fq), ci in [(f, c) for f in quarters_to_fetch for c in range(0, len(uniq), 100)]:
+                for r in fetch_all_pages(sb.table('financials')
+                        .select('stock_code,bsns_year,quarter,fs_div,is_cumulative,revenue,operating_profit,net_income')
+                        .in_('stock_code', uniq[ci:ci + 100])
+                        .eq('bsns_year', fy).eq('quarter', fq).order('id')):
                     sc = r['stock_code']
                     if sc not in fin_cache:
                         fin_cache[sc] = {}
