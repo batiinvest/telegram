@@ -56,7 +56,9 @@ def _fetch(sb, quarter):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry', action='store_true')
+    ap.add_argument('--quarters', default='Q4', help='Q1,Q2,Q3,Q4 — 1~3분기도 저장 금액과 어긋난 비율만 고침(2026-10-19)')
     a = ap.parse_args()
+    quarters = [q.strip().upper() for q in a.quarters.split(',') if q.strip()]
     sb = _get_sb()
 
     # 1~3분기는 원래 맞아야 한다 — 같은 식이 저장값을 재현하는지 먼저 확인(식이 틀렸으면 멈춤)
@@ -66,7 +68,7 @@ def main():
     if off > len(chk) * 0.01:
         sys.exit('3분기 저장값을 재현하지 못함 — 식 확인 필요, 중단')
 
-    rows = _fetch(sb, 'Q4')
+    rows = [r for q in quarters for r in _fetch(sb, q)]
     targets, annual, by_year, by_col = [], 0, {}, {}
     for r in rows:
         if is_annual_q4(r):
@@ -79,7 +81,7 @@ def main():
             by_year[r['bsns_year']] = by_year.get(r['bsns_year'], 0) + 1
             for k in diff:
                 by_col[k] = by_col.get(k, 0) + 1
-    print(f"4분기 {len(rows)}행 · 연간 행(제외) {annual} · 바뀔 행 {len(targets)}")
+    print(f"{','.join(quarters)} {len(rows)}행 · 연간 4분기 행(제외) {annual} · 바뀔 행 {len(targets)}")
     print('  연도별', dict(sorted(by_year.items())))
     print('  칸별', by_col)
     for r, d in targets[:5]:

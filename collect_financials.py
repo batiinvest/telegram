@@ -633,6 +633,40 @@ def _restated_9m(dart, corp_code: str, year: str, fs_div: str) -> Optional[dict]
     return res
 
 
+# 비용 계정 — 회사에 따라 손익계산서에 음수(괄호)로 적는다(솔브레인 2023 3분기 매출원가·판관비). 늘 양수로 둔다:
+# 음수 그대로면 그 분기 판관비가 음수로 보이고, 4분기 = 연간 − (음수 3분기 누적)이 '연간 + 9개월'이 된다
+# (솔브레인 2023 4분기 매출원가 1조1,403억, 매출 1,950억). 2026-10-19.
+_EXPENSE_COLS = ("cogs", "sga", "rd_expense", "other_operating_expense")
+
+
+def _abs_expenses(d: dict) -> None:
+    for c in _EXPENSE_COLS:
+        v = d.get(c)
+        if v is not None and v < 0:
+            d[c] = -v
+
+
+def _q13_income_sum(corp_code: str, year, fs_div: str, cols: list) -> dict:
+    """저장된 1~3분기 단독 손익의 합 — 3분기보고서 누적 칸에 계정이 빠졌을 때(오리온 2023 판관비) 4분기 변환용.
+    손익은 1~3분기가 늘 단독값(fin_rules). 세 분기 모두 값이 있는 칸만."""
+    try:
+        rows = _get_sb().table("financials").select("quarter," + ",".join(cols)).eq("corp_code", corp_code) \
+            .eq("bsns_year", str(year)).eq("fs_div", fs_div).in_("quarter", ["Q1", "Q2", "Q3"]).execute().data or []
+    except Exception as e:
+        log.warning(f"[Q3누적 보충 실패] {corp_code} {year}: {e}")
+        return {}
+    if len({r["quarter"] for r in rows}) < 3:
+        return {}
+    out = {}
+    for c in cols:
+        vs = [r.get(c) for r in rows]
+        if all(v is not None for v in vs):
+            out[c] = sum(abs(v) if c in _EXPENSE_COLS else v for v in vs)
+    if out:
+        log.info(f"[Q3누적 보충] {corp_code} {year} {fs_div}: {sorted(out)} = 저장된 1~3분기 합")
+    return out
+
+
 def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> Optional[dict]:
     """
     Q4 변환용 Q3 누적값을 DART 3분기보고서에서 직접 조회.
@@ -654,6 +688,7 @@ def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> O
             return amt if amt is not None else parse_amount(str(r.get("thstrm_amount", "")))
         # 계정 고르기는 collect_one(연간 행)과 같은 _pick_accounts — 다르면 4분기 = 연간 − 엉뚱한 계정이 된다.
         result = {col: amt for col, (amt, _) in _pick_accounts(df, _cum, FLOW_COLS).items()}
+        _abs_expenses(result)
         ccy = _df_currency(df)
         if result and ccy != "KRW" and not _to_krw(result, ccy, year, "Q3", cumulative=True, label=corp_code):
             return None
@@ -688,6 +723,13 @@ def get_q3_cumulative(dart, corp_code: str, year: str, fs_div: str = "CFS") -> O
                     why = "재작성 근거 없음 → 그대로(투자사 평가손실 등 실제 음수일 수 있음)"
                 log.warning(f"[4분기 기준불일치] {corp_code} {year} {fs_div} "
                             f"{'중단영업 재분류' if disc else '연간 매출 < 9개월 누적'} — {why}")
+        # 3분기 누적에 손익 계정이 아예 없으면 convert_to_pure_quarter가 4분기에 연간 값을 그대로 둔다
+        # (오리온 2023 판관비 6,350억 = 연간) → 저장된 1~3분기 합으로. 1~3분기에도 없는 계정(연간에만 적는
+        # 연구개발비 등)은 그대로 — 그때는 4분기 = 연간이 맞다.
+        if result:
+            miss = [c for c in INCOME_COLS if c not in result]
+            if miss:
+                result.update(_q13_income_sum(corp_code, year, fs_div, miss))
         return result if result else None
     except Exception as e:
         log.warning(f"[Q3누적조회실패] {corp_code} {year}: {e}")
@@ -1087,6 +1129,7 @@ def collect_one(dart, corp_code: str, stock_code: str, corp_name: str,
         picked = _pick_accounts(df, lambda r: parse_amount(str(r.get("thstrm_amount", ""))))
         for col, (amt, _) in picked.items():
             row[col] = amt
+        _abs_expenses(row)
 
         # 외화 공시 → 원화 (금액 단위는 늘 원 — currency 칸은 KRW 그대로). 환율을 못 구하면 저장하지 않는다
         # (원화·외화가 섞인 행이 남으면 성장률·4분기 변환이 다 틀어진다 — 다음 수집·백필에서 다시 시도).
