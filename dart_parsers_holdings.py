@@ -379,7 +379,8 @@ def parse_trade_plan(kv: dict) -> list:
 
     if withdraw:
         if m := re.search(r'철회사유\s*발생일\s*(' + _TP_DATE + r')\s*철회사유\s*(.+?)\s*2\.\s*철회하는', txt):
-            lines.append(f'📋 사유: {_trunc(re.sub(r"^[0-9]+[.]\s*", "", m.group(2)), 80)} ({_tp_date(m.group(1))} 발생)')
+            reason = re.sub(r'^[0-9]+[.]\s*', '', m.group(2))   # f-string 밖에서 — 서버 Python 3.10은 식 안 백슬래시 불가
+            lines.append(f'📋 사유: {_trunc(reason, 80)} ({_tp_date(m.group(1))} 발생)')
         if m := re.search(r'거래계획보고서\s*제출일\s*(' + _TP_DATE + ')', txt):
             lines.append(f'📄 철회 대상: {_tp_date(m.group(1))} 제출 계획')
         body = txt[txt.find('철회대상 거래계획'):] if '철회대상 거래계획' in txt else ''
