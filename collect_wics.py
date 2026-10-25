@@ -15,6 +15,12 @@ collect_wics.py
 [API] (비공식 — 앱 내부용. 실패해도 기존 값이 남아 화면은 비지 않는다)
   GET m.stock.naver.com/api/stocks/industry/{no}?page=&pageSize=100
     → groupInfo{no,name,totalCount} + stocks[{itemCode,...}]
+  빈 번호는 200 + groupInfo{no:0,totalCount:0}(이름 없음)로 온다 — 오류가 아니라 건너뛴다.
+
+[언제 돌리나 — 장 끝난 밤]
+  영업일 08:20 실행은 9-23~10-23 매번 '업종 0종'이었고, 휴장일 08:20과 9-22(화) 밤 실행은
+  전부 성공했다. 시세 목록 API라 장 시작 전후(NXT 프리마켓 08:00~)엔 쓸 수 없는 응답이 온다.
+  → 정규장·NXT 애프터마켓(~20:00)이 끝난 22:00에 돌린다. 분류라 하루 중 언제 받아도 같다.
 
 [쓰기 방식 — 중요]
   companies.code에는 UNIQUE 제약이 없어 on_conflict=code upsert가 42P10으로 실패한다.
@@ -27,6 +33,7 @@ collect_wics.py
 
 import sys
 import time
+from collections import Counter
 from typing import Dict, List, Optional
 
 import requests
@@ -135,6 +142,10 @@ if _orphan_sec or _orphan_mid:
 MIN_GROUPS = 60      # 실측 78종
 MIN_CODES  = 2000    # 실측 2,869종(기타 제외)
 
+# 불완전하면 이만큼 기다렸다 다시 받는다(초). 같은 시각에 곧바로 다시 부르면 같은 응답이
+# 오므로 간격을 둔다. 장 끝난 뒤로 옮긴 지금 남는 건 일시 장애뿐이라 두 번이면 충분하다.
+RETRY_WAITS = (300, 900)
+
 PATCH_CHUNK = 150    # code=in.(...) URL 길이 안전선 (171개=1,277자 실측)
 
 
@@ -153,23 +164,51 @@ def _session() -> requests.Session:
     return s
 
 
+def _get_page(s: requests.Session, no: int, page: int):
+    """한 페이지 조회 → (json, None) 또는 (None, (유형, 원문 앞부분)). 진단 로그용."""
+    try:
+        r = s.get(NAVER_URL.format(no=no), params={"page": page, "pageSize": 100}, timeout=15)
+    except Exception as e:
+        return None, (f"요청 오류 {type(e).__name__}", str(e)[:120])
+    if r.status_code != 200:
+        return None, (f"HTTP {r.status_code}", r.text[:120])
+    try:
+        return r.json(), None
+    except ValueError:
+        return None, ("JSON 아님", r.text[:120])
+
+
 def fetch_industry_map() -> Dict[str, str]:
     """전 종목 code → 업종명. 실패한 그룹은 건너뛰고 계속한다."""
     s = _session()
     mapping: Dict[str, str] = {}
     groups = 0
+    # 응답 유형별 집계 — 예전엔 예외·빈 응답을 말없이 넘겨 '0종'만 남고 원인을 알 수 없었다
+    kinds: Counter = Counter()
+    status: Counter = Counter()     # 응답의 marketStatus(CLOSE 등) — 시각 의존 실패의 단서
+    sample = None                   # 첫 이상 응답 원형
 
     for no in range(SCAN_FROM, SCAN_TO + 1):
-        try:
-            j = s.get(NAVER_URL.format(no=no), params={"page": 1, "pageSize": 100}, timeout=15).json()
-        except Exception:
+        j, err = _get_page(s, no, 1)
+        if j is None:
+            kinds[err[0]] += 1
+            sample = sample or f"no={no} {err[0]} {err[1]!r}"
             continue
+        status[j.get("marketStatus")] += 1
         gi = j.get("groupInfo") or {}
         name, total = gi.get("name"), gi.get("totalCount") or 0
-        if not name or not total or name in SKIP_GROUPS:
+        if not name:
+            kinds["빈 번호"] += 1        # 정상 회차에도 33개쯤 있다
+            continue
+        if name in SKIP_GROUPS:
+            continue
+        if not total or not (j.get("stocks") or []):
+            kinds["이름만 있고 종목 0"] += 1
+            sample = sample or f"no={no} {str(j)[:300]}"
             continue
 
         groups += 1
+        kinds["정상"] += 1
         got = 0
         page = 1
         while True:
@@ -181,13 +220,17 @@ def fetch_industry_map() -> Dict[str, str]:
             if got >= total or not (j.get("stocks") or []) or page > 30:
                 break
             page += 1
-            try:
-                j = s.get(NAVER_URL.format(no=no), params={"page": page, "pageSize": 100}, timeout=15).json()
-            except Exception:
+            j, err = _get_page(s, no, page)
+            if j is None:
+                kinds["다음 페이지 " + err[0]] += 1
+                sample = sample or f"no={no} page={page} {err[0]} {err[1]!r}"
                 break
         time.sleep(0.05)
 
     log.info(f"[WICS] 네이버 수집: 업종 {groups}종 / 종목 {len(mapping)}개")
+    if groups < MIN_GROUPS or len(mapping) < MIN_CODES:
+        log.warning(f"[WICS] 응답 유형 {dict(kinds)} / marketStatus {dict(status)}"
+                    + (f"\n  첫 이상 응답: {sample}" if sample else ""))
     return mapping
 
 
@@ -274,11 +317,18 @@ def apply_map(sb, mapping: Dict[str, str], dry: bool = False,
         }
         for i in range(0, len(codes), PATCH_CHUNK):
             chunk = codes[i:i + PATCH_CHUNK]
-            try:
-                sb.table("companies").update(payload).in_("code", chunk).execute()
-                updated += len(chunk)
-            except Exception as e:
-                log.error(f"[WICS] 갱신 실패 ({ind} {i}~): {e}")
+            for attempt in (1, 2):
+                try:
+                    sb.table("companies").update(payload).in_("code", chunk).execute()
+                    updated += len(chunk)
+                    break
+                except Exception as e:
+                    # HTTP/2 연결이 도중에 끊기는 일이 있다(10-24 ConnectionTerminated로
+                    # 화장품 업종만 빠짐). 같은 값을 다시 쓰는 PATCH라 한 번 더 보내도 안전하다.
+                    if attempt == 2:
+                        log.error(f"[WICS] 갱신 실패 ({ind} {i}~): {e}")
+                    else:
+                        time.sleep(2)
     log.info(f"[WICS] 상위 분류 출처 — FnGuide {src_fn}업종 / 표 대입 {src_tb}업종")
     return updated
 
@@ -343,14 +393,21 @@ def fetch_fnguide_map(sess: requests.Session) -> Dict[str, tuple]:
     return out
 
 
-def run(dry: bool = False) -> int:
-    mapping = fetch_industry_map()
-
-    groups = len(set(mapping.values()))
-    if groups < MIN_GROUPS or len(mapping) < MIN_CODES:
-        # 절반만 받은 상태로 쓰면 나머지가 옛 값으로 남아 기준이 섞인다 → 통째로 포기
-        log.error(f"[WICS] 수집 불완전(업종 {groups}<{MIN_GROUPS} 또는 종목 {len(mapping)}<{MIN_CODES}) — 반영 중단")
-        return 0
+def run(dry: bool = False, retry_waits=RETRY_WAITS) -> int:
+    for n_try, wait in enumerate((0,) + tuple(retry_waits)):
+        if wait:
+            log.warning(f"[WICS] 수집 불완전 — {wait // 60}분 뒤 다시 받는다 ({n_try}/{len(retry_waits)})")
+            time.sleep(wait)
+        mapping = fetch_industry_map()
+        groups = len(set(mapping.values()))
+        if groups >= MIN_GROUPS and len(mapping) >= MIN_CODES:
+            break
+    else:
+        # 절반만 받은 상태로 쓰면 나머지가 옛 값으로 남아 기준이 섞인다 → 통째로 포기.
+        # 예외로 올려 잡 실패로 기록·알림한다 — 0을 돌려주던 때는 운영요약에 '정상'으로
+        # 찍혀 영업일마다 실패하는 걸 한 달 동안 몰랐다(9-23~10-23).
+        raise RuntimeError(f"[WICS] 수집 불완전(업종 {groups}<{MIN_GROUPS} 또는 "
+                           f"종목 {len(mapping)}<{MIN_CODES}) — 반영 중단")
 
     # 섹터·중분류는 분류를 만든 곳에서 직접 받는다. 실패하면 표 대입으로 계속 간다
     # — 상위 분류를 못 받았다고 소분류까지 버릴 이유는 없다.
@@ -362,4 +419,4 @@ def run(dry: bool = False) -> int:
 
 
 if __name__ == "__main__":
-    print(f"완료: {run(dry='--dry' in sys.argv)}개")
+    print(f"완료: {run(dry='--dry' in sys.argv, retry_waits=())}개")   # 손으로 돌릴 땐 기다리지 않는다

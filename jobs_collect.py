@@ -1336,9 +1336,11 @@ def job_collect_credit_balance():
 
 @_job()
 def job_collect_wics():
-    """매일 08:20 — 네이버 증권 WICS 업종 분류 수집(companies.wics_*).
+    """매일 22:00 — 네이버 증권 WICS 업종 분류 수집(companies.wics_*).
     휴장일에도 돌린다 — 시세가 아니라 분류라 거래일과 무관하고,
-    신규 상장 종목이 빨리 칄질수록 좋다."""
+    신규 상장 종목이 빨리 칄질수록 좋다.
+    장 끝난 밤에 돈다 — 영업일 08:20엔 네이버가 업종을 0종으로 줬다(collect_wics 머리말).
+    불완전 수집은 collect_wics가 예외로 올리므로 여기서 실패로 기록·알림된다."""
     try:
         logging.info("🏷 [업종] collect_wics 실행 시작")
         import collect_wics

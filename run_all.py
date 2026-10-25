@@ -174,7 +174,7 @@ def run_scheduler():
     schedule.every().day.at("19:10").do(_threaded(job_earnings_surprise_briefing))  # 어닝 서프라이즈 리스트 → 메인채널
     schedule.every().day.at("19:00").do(job_collect_credit_balance)    # KOFIA 신용공여 잔고 — 직전 영업일분이 당일 오후 발표(2026-07-22 실측: 10:30엔 없고 18:18엔 있음)
     schedule.every().day.at("10:30").do(job_collect_credit_balance)    # 보정 실행 — 전날 발표가 19:00 이후로 밀린 경우 회수(멱등 upsert, 신규 기준일만 발송)
-    schedule.every().day.at("08:20").do(job_collect_wics)              # WICS 업종 분류(네이버) — 시세 무관, 장 전 갱신
+    schedule.every().day.at("22:00").do(_threaded(job_collect_wics))  # WICS 업종 분류(네이버) — 장 끝난 뒤(영업일 08:20엔 0종), 재시도 대기가 있어 스레드
     schedule.every().day.at("10:10").do(_threaded(job_collect_exports))  # 관세청 품목·국가·시군구 수출(최근 3개월, 15일경 전월 확정) — 약 600회 호출
     schedule.every().day.at("20:10").do(_threaded(job_earnings_stage))  # 실적 국면 전 종목 재계산 (18:30 재무수집 뒤, 약 20초)
     schedule.every().day.at("20:20").do(_threaded(job_collect_backlog))  # 반도체 장비 수주잔고(최근 7일 정기보고서, 없는 분기·정정만)
