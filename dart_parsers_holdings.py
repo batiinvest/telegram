@@ -15,6 +15,11 @@ def parse_equity_acquisition(kv: dict) -> list:
     if sub:
         lines.append(f'🏢 종속회사: {sub}')
 
+    # 처분결정 — 같은 서식이지만 키가 '처분…'이라 아래 취득 키로는 지분비율만 걸려 '취득 후 지분: 0%'
+    # 한 줄로 나갔다(한화에어로스페이스 2026-10-19: 한화오션 1조 3,834억원 처분이 종속회사명만 발송).
+    if '처분' in re.sub(r'^\[[^\]]+\]', '', kv.get('_report_nm', '')):
+        return lines + _equity_disposal_lines(kv)
+
     # 발행회사 (취득 대상)
     for k, v in kv.items():
         if k not in ('종속회사인',) and v in ('대표이사', '대표자') and k not in ('-', ''):
@@ -37,6 +42,27 @@ def parse_equity_acquisition(kv: dict) -> list:
     _f(lines, kv, '📅 취득예정', '6. 취득예정일자', '취득예정일자')
     _f(lines, kv, '🔗 관련', '※ 관련공시', '관련공시', fmt=_rel_text)
 
+    return lines
+
+
+def _equity_disposal_lines(kv: dict) -> list:
+    """타법인주식 및 출자증권 처분결정 — 발행회사·처분주식수·처분금액(대비 비율)·처분 후 지분·목적·예정일."""
+    lines = []
+    _f(lines, kv, '🏭 발행회사', '회사명')
+    shares = _get(kv, '처분주식수(주)')
+    if shares and re.match(r'^[\d,]+$', shares):
+        lines.append(f'🔢 처분주식수: {shares}주')
+    if amount := _get(kv, '처분금액(원)'):
+        # 대비 기준은 서식마다 다르다 — 자산총액(대규모법인)·자기자본
+        ratio, base = _get(kv, '자산총액대비(%)'), '자산총액'
+        if not ratio:
+            ratio, base = _get(kv, '자기자본대비(%)'), '자기자본'
+        ratio_str = f' ({base} 대비 {ratio}%)' if ratio and ratio != '-' else ''
+        lines.append(f'💰 처분금액: {_fmt_amount(amount)}원{ratio_str}')
+    _f(lines, kv, '📊 처분 후 지분', '지분비율(%)', suffix='%')
+    _f(lines, kv, '📋 목적', '4. 처분목적', '처분목적', trunc=60)
+    _f(lines, kv, '📅 처분예정', '5. 처분예정일자', '처분예정일자')
+    _f(lines, kv, '🔗 관련', '※ 관련공시', '관련공시', fmt=_rel_text)
     return lines
 
 
@@ -148,8 +174,15 @@ def parse_major_shareholder_change(kv: dict) -> list:
     # 변경후 최대주주(리드)를 관계라벨로 못 찾으면 요약 키로 대체 — 컨소시엄('외 N인'),
     # 관계셀이 국적/요약으로 밀리는 서식('최대주주' 요약이 신규 최대주주명)에서도 표시.
     if not after_name:
-        summ = _get(kv, '정정후_변경후', '변경후 최대주주등', '변경후최대주주등', '최대주주')
-        if summ and summ not in ('최대주주등', '변경후', '-', '') and '?' not in summ:
+        # 요약표 '변경후' 행 — 표가 [변경전|최대주주등|이름] 두 줄이라 KV에 '변경후' → '최대주주등 이름'으로
+        # 들어온다. 이걸 건너뛰면 아래 '최대주주' 부분일치가 변경전 행('최대주주등')에 걸려
+        # 변경전 이름이 변경후로 나갔다(케이엔더블유 2026-10-12: ㈜비지에프 → ㈜비지에프에코머티리얼즈).
+        raw = kv.get('변경후') or ''
+        summ = re.sub(r'^\s*최대주주\s*등\s*', '', raw).strip() if re.match(r'\s*최대주주\s*등', raw) else ''
+        if not summ or summ == '-':
+            summ = _get(kv, '정정후_변경후', '변경후 최대주주등', '변경후최대주주등', '최대주주')
+        if (summ and summ not in ('최대주주등', '변경후', '-', '') and '?' not in summ
+                and summ != before_name):
             after_name = summ  # 요약이라 단일 지분율은 없음
 
     if before_name or after_name:

@@ -8,7 +8,7 @@ import re
 import logging
 
 from dart_doc import (
-    _get, _trunc, _trunc_clean, _ws, _BR, _BR_RAW, _BR_LIST, _sub_parts,
+    _get, _trunc, _trunc_clean, _ws, _BR, _BR_RAW, _BR_LIST, _sub_parts, _sub_split,
     _fetch_dart_majorstock, _fetch_dart_reporter,
 )
 
@@ -915,4 +915,4 @@ def strip_item_emoji(text: str) -> str:
     return _ITEM_EMOJI.sub(r'\1', text or '')
 
 
-__all__ = ['log', 'strip_item_emoji', '_get', '_trunc', '_trunc_clean', '_sub_parts', '_ws', '_BR', '_BR_RAW', '_BR_LIST', '_unglue', '_tidy_lines', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list', '_rel_text', '_numbered_with_lead']
+__all__ = ['log', 'strip_item_emoji', '_get', '_trunc', '_trunc_clean', '_sub_parts', '_sub_split', '_ws', '_BR', '_BR_RAW', '_BR_LIST', '_unglue', '_tidy_lines', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list', '_rel_text', '_numbered_with_lead']

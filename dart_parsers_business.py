@@ -45,8 +45,9 @@ def parse_contract(kv: dict) -> list:
         if m_amt:
             amt_clean = m_amt.group(1)
         else:
-            # 선행 숫자(콤마 포함) 추출 — 뒤의 소수 비율 제거
-            m_num = re.match(r'^([\d,]+)', amount.replace(' ', ''))
+            # 선행 숫자(콤마 포함) 추출 — 뒤의 소수 비율 제거. 공백을 지우고 읽으면 복합값의 금액
+            # 둘이 한 숫자로 붙는다('134501532981조 3,450억원', 2026-10 정정 공시) → 첫 조각만.
+            m_num = re.match(r'^([\d,]+)', amount.strip())
             amt_clean = m_num.group(1) if m_num else amount
         # 비율: 독립 키 우선, 없으면 복합값 끝부분에서 추출
         # 복합값 "523,270,000,000 6.02" 대응: 큰 숫자 포함 시 끝 소수만 추출

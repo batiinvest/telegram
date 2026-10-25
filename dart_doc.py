@@ -559,16 +559,45 @@ def _build_kv(html: str, br: bool = False) -> dict:
     return kv
 
 
+# ' - ' 구분 없이 하위 항목명이 이어 붙은 정정 키용 — 거래소 공급계약 서식의 계약내역 하위 항목
+# (에이직랜드 2026-10-13: '정정후_2. 계약내역 확정 계약금액 계약금액 총액(원) 매출액 대비(%)')
+_SUB_LABELS = re.compile(r'확정\s*계약금액(?:\(원\))?|조건부\s*계약금액(?:\(원\))?|계약금액\s*총액(?:\(원\))?'
+                         r'|최근\s*매출액(?:\(원\))?|매출액\s*대비(?:\(%\))?')
+# 공백으로만 이어진 값 조각 — 숫자·날짜·'-'만 나눈다(서술형 값은 공백이 의미라 나누면 안 된다)
+_VAL_TOKEN = re.compile(r'-|\d[\d,]*(?:\.\d+)?|\d{4}[-.]\d{2}[-.]\d{2}')
+
+
+def _sub_split(k: str):
+    '''정정 접두 키 → (머리, [하위 항목]). ' - '로 나뉘면 그대로, 아니면 알려진 하위 항목명으로.'''
+    body = k[4:]
+    subs = [x.strip() for x in body.split(' - ')]
+    if len(subs) >= 3:
+        return subs[0], subs[1:]
+    labs = list(_SUB_LABELS.finditer(body))
+    if len(labs) >= 2:
+        return body[:labs[0].start()].strip(), [m.group(0) for m in labs]
+    return body.strip(), []
+
+
 def _sub_parts(k: str, v: str):
     '''정정 접두 키가 하위 항목 여럿('정정후_… - 시작일 - 종료일 - 체결일')이고 값이 원문 줄마다
-    하나면 [(하위 항목, 값)] — 줄 머리 대시('-2026-09-30')는 뗌. 해당 없으면 None.'''
-    if not k.startswith(('정정전', '정정후')) or _BR not in (v or ''):
+    하나면 [(하위 항목, 값)] — 줄 머리 대시('-2026-09-30')는 뗌. 해당 없으면 None.
+
+    값이 줄 표지 없이 공백으로만 이어진 표('13,450,153,298 13,450,153,298 14.3')도 조각이
+    전부 숫자·날짜일 때 나눈다 — 통째로 쓰면 공급계약 금액 둘이 붙어 '134501532981조
+    3,450억원'으로 발송됐다(2026-10 에이직랜드·에이치브이엠·스피어).'''
+    if not k.startswith(('정정전', '정정후')) or not v:
         return None
-    subs = [x.strip() for x in k[4:].split(' - ')]
-    vals = [re.sub(r'^-\s*(?=\d{4}[.-]|[가-힣(])|^-\s+(?=\d)', '', x.strip()) for x in v.split(_BR)]
-    if len(subs) < 3 or len(vals) != len(subs) - 1:
+    _, labs = _sub_split(k)
+    if _BR in v:
+        vals = [re.sub(r'^-\s*(?=\d{4}[.-]|[가-힣(])|^-\s+(?=\d)', '', x.strip()) for x in v.split(_BR)]
+    else:
+        vals = v.split()
+        if not all(_VAL_TOKEN.fullmatch(t) for t in vals):
+            return None
+    if len(labs) < 2 or len(vals) != len(labs):
         return None
-    return list(zip(subs[1:], vals))
+    return list(zip(labs, vals))
 
 
 def _get(kv: dict, *keys: str) -> str | None:

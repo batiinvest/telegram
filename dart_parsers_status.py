@@ -276,11 +276,15 @@ def parse_amendment(kv: dict) -> list:
         # 하위 항목 여럿인 행 — 바뀐 하위 항목만 '🔧 순번2 (주)상상인저축은행 담보제공기간종료일: 구 → 신'
         so, sn = _sub_parts('정정전_' + field, _ws(old_v)), _sub_parts('정정후_' + field, _ws(new_v))
         if so and sn and [l for l, _ in so] == [l for l, _ in sn]:
-            head, seq = _clean_amendment_field(field.split(' - ')[0]), ''
+            head, seq = _clean_amendment_field(_sub_split('정정전_' + field)[0]), ''
             if m_ := re.search(r'순번\s*(\d+)\.?\s*(.*)', head):
                 seq, head = m_.group(1), m_.group(2).strip()
-            for (lab, o), (_, n) in zip(so, sn):
+            pairs = list(zip(so, sn))
+            for i_p, ((lab, o), (_, n)) in enumerate(pairs):
                 if o == n:
+                    continue
+                # 같은 변경이 뒤 하위 항목에 또 있으면 뒤쪽만(확정 계약금액 = 계약금액 총액인 흔한 경우)
+                if any((o2, n2) == (o, n) for (_, o2), (_, n2) in pairs[i_p + 1:]):
                     continue
                 key = (head, lab, o, n)
                 if key in sub_seen:              # 순번만 다른 같은 변경 → '순번2·3' 한 줄
@@ -307,7 +311,8 @@ def parse_amendment(kv: dict) -> list:
     for key, (i_, seqs) in sub_seen.items():   # 하위 항목 변경 줄 완성(순번 묶음·금액 포맷)
         head, lab, o, n = key
         tag = (f'순번{"·".join(dict.fromkeys(seqs))} ' if seqs else '') + head
-        change_lines[i_] = (f'🔧 {tag} {lab}'.replace('  ', ' ') + f': {_fmt_amendment_val(lab, o) if o else "-"}'
+        lab_disp = re.sub(r'\s*\((?:원|%|주)\)$', '', lab)   # 단위는 값 포맷이 붙인다
+        change_lines[i_] = (f'🔧 {tag} {lab_disp}'.replace('  ', ' ') + f': {_fmt_amendment_val(lab, o) if o else "-"}'
                             f' → {_fmt_amendment_val(lab, n) if n else "-"}')
     if change_lines:
         lines.extend(change_lines)

@@ -484,14 +484,21 @@ def parse_share_cancellation(kv: dict) -> list:
     """주식소각결정 — 소각주식수·소각금액·취득방법·소각예정일"""
     lines = []
 
-    # 소각 주식수: 헤더 짝밀림('1. 소각할…' → '보통주식(주)' → 수량) 구조 대응
-    cnt = None
-    for k, v in kv.items():
-        if k.startswith('_') or '정정' in k:
-            continue
-        if '보통주' in k and re.match(r'^[\d,]+$', (v or '').strip()):
-            cnt = v.strip()
-            break
+    # 소각 주식수 — 원문 '1. 소각할 주식의 종류와 수' 행에서 먼저 읽는다. KV는 같은 '보통주식(주)'
+    # 키가 '2. 발행주식총수' 행에도 있어 뒤 값이 덮어써, 소각 수량 대신 발행주식총수가 나갔다
+    # (감성코퍼레이션 2026-10-22: 630,904주 → 89,862,944주로 발송). 정정 공시는 정정표 뒤의
+    # 본문이 정정 후 값이라 마지막 것을 쓴다.
+    txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', kv.get('_html', '')))
+    found = re.findall(r'소각할\s*주식의\s*종류와\s*수\s*보통주식?\s*\(\s*주\s*\)\s*([\d,]+)', txt)
+    cnt = found[-1] if found else None
+    # 원문에서 못 찾으면 KV — 헤더 짝밀림('1. 소각할…' → '보통주식(주)' → 수량) 구조 대응
+    if not cnt:
+        for k, v in kv.items():
+            if k.startswith('_') or '정정' in k:
+                continue
+            if '보통주' in k and re.match(r'^[\d,]+$', (v or '').strip()):
+                cnt = v.strip()
+                break
     if not cnt:
         v = _get(kv, '소각할 주식의 종류와 수')
         m = re.search(r'([\d,]{4,})', v or '')
