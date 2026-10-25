@@ -567,12 +567,21 @@ _SUB_LABELS = re.compile(r'확정\s*계약금액(?:\(원\))?|조건부\s*계약�
 _VAL_TOKEN = re.compile(r'-|\d[\d,]*(?:\.\d+)?|\d{4}[-.]\d{2}[-.]\d{2}')
 
 
+def _expand_sub_label(lab: str) -> list:
+    '''괄호 여럿이 하위 칸인 항목('담보제공기간 (시작일) (종료일)') → 칸마다 하나씩.
+    한 이름에 값이 둘이라 개수가 안 맞아 통째로 금액 하나만 나가던 것(서진시스템 2026-10-12).'''
+    m = re.match(r'^(.*?)\s*((?:\([^()]+\)\s*){2,})$', lab)
+    if not m:
+        return [lab]
+    return [f'{m.group(1).strip()} {x}'.strip() for x in re.findall(r'\(([^()]+)\)', m.group(2))]
+
+
 def _sub_split(k: str):
     '''정정 접두 키 → (머리, [하위 항목]). ' - '로 나뉘면 그대로, 아니면 알려진 하위 항목명으로.'''
     body = k[4:]
     subs = [x.strip() for x in body.split(' - ')]
     if len(subs) >= 3:
-        return subs[0], subs[1:]
+        return subs[0], [x for s in subs[1:] for x in _expand_sub_label(s)]
     labs = list(_SUB_LABELS.finditer(body))
     if len(labs) >= 2:
         return body[:labs[0].start()].strip(), [m.group(0) for m in labs]

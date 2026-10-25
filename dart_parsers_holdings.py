@@ -347,6 +347,61 @@ def parse_insider_report(kv: dict) -> list:
     return lines
 
 
+_TP_DATE = r'\d{4}(?:년\s*\d{1,2}월\s*\d{1,2}일|[.-]\d{1,2}[.-]\d{1,2})'
+# 거래 행: 개시일 종료일 [거래기간] 방법(±) 종류 수량 단가 금액 — 철회보고서는 거래기간 칸이 없다
+_TP_ROW = re.compile(rf'({_TP_DATE})\s+({_TP_DATE})\s+(?:\d+\s+)?(\S+\([+-]\))\s+(\S+)\s+'
+                     r'(-?[\d,]+)\s+([\d,]+|-)\s+(-?[\d,]+|-)')   # 숫자 먼저 — '-'가 앞이면 '-24,872…'의 '-'만 먹는다
+
+
+def _tp_date(s: str) -> str:
+    """'2026년 11월 12일'·'2026.11.23' → '2026-11-12'."""
+    y, m, d = re.findall(r'\d+', s)[:3]
+    return f'{y}-{int(m):02d}-{int(d):02d}'
+
+
+def parse_trade_plan(kv: dict) -> list:
+    """임원ㆍ주요주주 특정증권등 거래계획보고서 / 거래계획 철회보고서.
+
+    소유상황보고서 파서(parse_insider_report)로 가면 변동표가 없어 '보고자' 한 줄만 나갔다
+    (이재용 회장 '증여로 인한 수증' 1,115만주 계획 등). 표가 국·영문 이중이라 원문 텍스트에서
+    목적·거래 행(개시일·종료일·방법·종류·수량·단가·금액)을 읽는다."""
+    txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', kv.get('_html', '')))
+    withdraw = '철회' in kv.get('_report_nm', '')
+    lines = ['🚫 거래계획 철회'] if withdraw else []
+
+    m = (re.search(r'보\s*고\s*자\s*:\s*(?:\(\s*성\s*명\s*\)\s*)?(.+?)\s*(?:\(\s*주\s*소|1\.\s*발행회사)', txt))
+    if m:
+        name = m.group(1).strip()
+        if re.fullmatch(r'(?:[가-힣] )+[가-힣]', name):     # '이 재 용' → '이재용'
+            name = name.replace(' ', '')
+        pos = re.search(r'직위명\s+([가-힣A-Za-z·]{2,15})', txt)
+        lines.append(f'👤 보고자: {_trunc(name, 40)}' + (f' ({pos.group(1)})' if pos else ''))
+
+    if withdraw:
+        if m := re.search(r'철회사유\s*발생일\s*(' + _TP_DATE + r')\s*철회사유\s*(.+?)\s*2\.\s*철회하는', txt):
+            lines.append(f'📋 사유: {_trunc(re.sub(r"^[0-9]+[.]\s*", "", m.group(2)), 80)} ({_tp_date(m.group(1))} 발생)')
+        if m := re.search(r'거래계획보고서\s*제출일\s*(' + _TP_DATE + ')', txt):
+            lines.append(f'📄 철회 대상: {_tp_date(m.group(1))} 제출 계획')
+        body = txt[txt.find('철회대상 거래계획'):] if '철회대상 거래계획' in txt else ''
+    else:
+        if m := re.search(r'\(1\)\s*거래목적\s*거래목적\s*(.+?)\s*(?:주\)|\(2\))', txt):
+            lines.append(f'📋 목적: {_trunc(m.group(1), 80)}')
+        body = txt[txt.find('(2) 거래수량'):] if '(2) 거래수량' in txt else ''
+
+    m_tot = re.search(r'발행주식\s*총수\s+([\d,]+)', txt)
+    total = int(m_tot.group(1).replace(',', '')) if m_tot else 0
+    # 표 아래 각주('① 특정증권등의 수 : …')에서 끊는다 — 머리글 칸 이름에도 '①'이 있어 그걸로는 못 자른다
+    for st, en, how, kind, qty, price, amt in _TP_ROW.findall(re.split(r'①\s*특정증권등의\s*수\s*:', body)[0])[:3]:
+        n = abs(int(qty.replace(',', '')))
+        pct = f' (발행주식의 {n / total * 100:.2f}%)' if total and kind.startswith('보통') else ''
+        lines.append(f'🔢 {how} {kind} {n:,}주{pct}')
+        if price != '-' and amt != '-':
+            lines.append(f'💰 예상 단가 {price}원 · 금액 {_fmt_amount(amt.lstrip("-"))}원')
+        s, e = _tp_date(st), _tp_date(en)
+        lines.append(f'📅 거래기간: {s}' + (f' ~ {e}' if e != s else ''))
+    return lines
+
+
 def parse_tender_opinion(kv: dict) -> list:
     """공개매수에관한의견표명서 — 대상회사가 공개매수에 밝히는 찬반 의견.
 
@@ -363,10 +418,23 @@ def parse_tender_opinion(kv: dict) -> list:
         lines.append(f'🎯 대상: {_trunc(v, 30)}')
 
     txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', kv.get('_html', '')))
-    if m := re.search(r'공개매수에 대하여\s*(찬성|반대|중립|유보)', txt):
+    # 의견 — '공개매수에 대하여 찬성' 외에 '본 공개매수에 찬성한다는'·'응할지 여부에 대해서는 주주
+    # 분들의 자율적인 판단에 맡긴다는 중립적인'처럼 풀어 쓴 서식(에스원 2026-10-15)도 있다.
+    # 회사 의견은 '당사의 의견' 절 안에서만 찾는다(근거 문단의 '반대하는 주주' 등 오인 방지).
+    seg = txt[txt.find('당사의 의견'):][:600] if '당사의 의견' in txt else txt
+    if m := re.search(r'공개매수에\s*(?:대하여\s*|대해\s*)?(찬성|반대|중립|유보)', seg):
         lines.append(f'📋 회사 의견: {_OP.get(m.group(1), m.group(1))}')
-    if m := re.search(r'응할지\s*여부에\s*대해서는\s*(찬성|반대|중립|유보)', txt):
+    if m := re.search(r'응할지\s*여부에\s*대(?:해서는|하여는|하여)[^.]{0,80}?(찬성|반대|중립|유보)', txt):
         lines.append(f'👥 주주 응모 권고: {_OP.get(m.group(1), m.group(1))}')
+
+    # 공개매수 개요 — '(4) 공개매수 가격: 1주당 99,000원' 식 번호 목록(신고서를 안 본 사람도 조건을 알게)
+    _next = r'(?=\s*\(\d+\)|\s*\d+\.\s|$)'
+    for label, pat in (('📋 목적', r'공개매수\s*목적\s*[:：]\s*(.{2,80}?)' + _next),
+                       ('💵 매수가격', r'공개매수\s*가격\s*[:：]\s*(.{2,40}?원)'),
+                       ('🔢 매수예정', r'공개매수\s*(?:예정\s*)?수량\s*[:：]\s*([\d,]+\s*주(?:\s*\([^)]{0,30}\))?)'),
+                       ('📅 기간', r'공개매수\s*기간\s*[:：]\s*(.{5,60}?)' + _next)):
+        if m := re.search(pat, txt):
+            lines.append(f'{label}: {m.group(1).strip()}')
 
     return lines
 

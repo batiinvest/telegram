@@ -181,6 +181,18 @@ def parse_trust_termination(kv: dict) -> list:
     return lines
 
 
+_LABEL_PAIR = re.compile(r'([가-힣A-Za-z]+(?:\([^)]*\))?)\s*:\s*')
+
+
+def _label_pairs(s: str):
+    """'채무자:텍슨유동화(유) 채무보증잔액(원):13,600,000,111' → [(항목, 값)…]. 두 쌍 미만이면 None."""
+    parts = _LABEL_PAIR.split(s.strip())
+    if len(parts) < 5 or parts[0].strip():
+        return None
+    pairs = [(k.strip(), v.strip()) for k, v in zip(parts[1::2], parts[2::2])]
+    return pairs if all(v for _, v in pairs) else None
+
+
 def parse_amendment(kv: dict) -> list:
     """
     [기재정정] 공시 전용 파서 — 변경된 항목만 추출.
@@ -276,9 +288,11 @@ def parse_amendment(kv: dict) -> list:
         # 하위 항목 여럿인 행 — 바뀐 하위 항목만 '🔧 순번2 (주)상상인저축은행 담보제공기간종료일: 구 → 신'
         so, sn = _sub_parts('정정전_' + field, _ws(old_v)), _sub_parts('정정후_' + field, _ws(new_v))
         if so and sn and [l for l, _ in so] == [l for l, _ in sn]:
-            head, seq = _clean_amendment_field(_sub_split('정정전_' + field)[0]), ''
-            if m_ := re.search(r'순번\s*(\d+)\.?\s*(.*)', head):
+            # 순번은 이름 정리 전에 뗀다 — 정리가 마지막 단어만 남겨 '순번2. KB증권'의 순번이 사라졌다
+            head, seq = _sub_split('정정전_' + field)[0], ''
+            if m_ := re.match(r'\s*순번\s*(\d+)\.?\s*(.*)', head):
                 seq, head = m_.group(1), m_.group(2).strip()
+            head = _clean_amendment_field(head) if head else ''
             pairs = list(zip(so, sn))
             for i_p, ((lab, o), (_, n)) in enumerate(pairs):
                 if o == n:
@@ -297,6 +311,20 @@ def parse_amendment(kv: dict) -> list:
         old_c = re.sub(r'\s+', ' ', old_v).strip()
         new_c = re.sub(r'\s+', ' ', new_v).strip()
         if old_c and new_c and old_c != new_c and not _is_header_row(field, old_c, new_c):
+            # '항목:값' 여럿이 한 칸에 이어진 값('채무자:A 채무보증잔액(원):136억') — 같은 항목은
+            # 맥락으로 앞에, 바뀐 항목만 '구 → 신'(통째로 비교하면 같은 채무자명이 양쪽에 반복됐다)
+            po, pn = _label_pairs(old_c), _label_pairs(new_c)
+            if po and pn and [k for k, _ in po] == [k for k, _ in pn]:
+                name = _clean_amendment_field(field)
+                ctx = [o for (_, o), (_, n) in zip(po, pn) if o == n]
+                chg = []
+                for (k, o), (_, n) in zip(po, pn):
+                    if o != n:
+                        k_disp = re.sub(r'[(][^)]*[)]$', '', k)
+                        k_disp = '' if k_disp.replace(' ', '') == name.replace(' ', '') else k_disp + ' '
+                        chg.append(f'{k_disp}{_fmt_amendment_val(k, o)} → {_fmt_amendment_val(k, n)}')
+                change_lines.append(f'🔧 {name}: ' + ' · '.join(ctx + chg))
+                continue
             # 긴 서술형(주요내용 등) — 양쪽 60자 절단 한 줄로는 무엇이 바뀌었는지 안 보임.
             # 바뀐 항목/문장만 [전]/[후] 줄로(정정후가 조각일 때의 전문 비교는 _prose_diff).
             if _long(field, old_c, new_c):

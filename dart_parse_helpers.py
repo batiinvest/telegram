@@ -705,21 +705,35 @@ def _clean_amendment_field(field: str) -> str:
     f = field.strip()
     # 'N. 섹션명' 앞 번호 제거
     f = re.sub(r'^\d+\.\s*', '', f)
-    # '[섹션명]' 대괄호 제거
-    f = re.sub(r'^\[.+?\]\s*', '', f)
+    # '[섹션명]' 대괄호 제거 — 대괄호뿐인 이름('[채무자별 채무보증잔액]')은 안쪽을 쓴다
+    if m := re.match(r'^\[(.+?)\]\s*(.*)$', f):
+        f = m.group(2) or m.group(1)
     # ' -' 구분자로 분리 (뒤 공백 유무 관계없이)
     parts = [p.strip() for p in re.split(r'\s+-\s*', f) if p.strip()]
     f = parts[-1] if parts else f
     # 괄호 단위 제거: '체결일(당해건)', '지분율(%)' → 핵심어만
     f = re.sub(r'\s*\([^)]{1,10}\)\s*$', '', f).strip()
-    # 마지막 의미있는 한글 단어 추출 (공백 분리 후 뒤에서 탐색)
+    # 마지막 의미있는 한글 단어 추출 (공백 분리 후 뒤에서 탐색).
+    # 괄호뿐인 단어('(시작일)')는 괄호를 지우면 빈 이름이라 안쪽 글자를 쓴다('🔧 : 140억원' 사례).
+    # '총액'·'잔액'처럼 홀로는 무엇인지 모를 단어는 앞 단어를 붙인다('담보설정금액 총액').
     words = f.split()
-    for w in reversed(words):
+    for i, w in reversed(list(enumerate(words))):
         w_core = re.sub(r'[()%주건원,.]', '', w)
         if re.search(r'[가-힣]{2,}', w_core):
-            f = re.sub(r'\s*\([^)]{1,10}\)\s*$', '', w).strip()
+            f = re.sub(r'\s*\([^)]{1,10}\)\s*$', '', w).strip() or w.strip('()')
+            if f in _VAGUE_FIELD_WORDS:
+                # 한 글자('총')·같은 막연한 단어('금액')는 건너 첫 의미 단어까지 — '채무(차입) 금액 총액' → '채무 금액 총액'
+                j = i - 1
+                while j >= 0 and (not re.search(r'[가-힣]{2,}', words[j])
+                                  or re.sub(r'\([^)]*\)', '', words[j]) in _VAGUE_FIELD_WORDS):
+                    j -= 1
+                if j >= 0:
+                    f = ' '.join([re.sub(r'\([^)]*\)', '', x) for x in words[j:i]] + [f])
             break
     return _trunc(f, 15)
+
+
+_VAGUE_FIELD_WORDS = {'총액', '잔액', '합계', '금액'}
 
 
 def _fmt_amendment_val(field_name: str, val: str) -> str:
@@ -735,17 +749,20 @@ def _fmt_amendment_val(field_name: str, val: str) -> str:
         if nums:
             return nums[-1] + '%'
     # 금액 필드 — '- 계약금액: 141987535126' 복합값에서 숫자만 추출
-    if any(kw in field_name for kw in ('금액', '가격', '대금', '보증금')):
+    if any(kw in field_name for kw in ('금액', '가격', '대금', '보증금', '잔액')):
         m = re.search(r'([\d,]{5,})', val)
         if m:
             try:
                 return _fmt_amount(m.group(1)) + '원'
             except Exception:
                 pass
-        try:
-            return _fmt_amount(val) + '원'
-        except Exception:
-            pass
+        # 숫자일 때만 '원' — '주요 계약조건(대금지급 조건 등)'처럼 이름에 '대금'이 든 글자 값에
+        # 붙어 '제품공급 후 30일원'으로 나갔다(에이치브이엠 2026-10-15)
+        if re.fullmatch(r'[\d,]+', val.strip()):
+            try:
+                return _fmt_amount(val) + '원'
+            except Exception:
+                pass
     # 날짜 필드
     if any(kw in field_name for kw in ('일', '기간', '시작', '종료')):
         cleaned = _clean_date(val)

@@ -367,7 +367,63 @@ def parse_preliminary_earnings(kv: dict) -> list:
             _q, _y = _ytd['계']
             lines.append('  누적' + (('(' + _ysl + ')') if _ysl else '') + ': ' + _q + '대' + _yoy(_y))
 
+    # 손익 칸이 전부 '-'인 월별 실적 — 값이 표 아래 추가 행(조선사 수주)이나 비고란 표(오리온 국가별
+    # 매출)에만 있어 제목 한 줄로 나갔다(HD현대중공업·오리온 2026-10)
+    if len(lines) == 1:
+        lines.extend(_monthly_extra_lines(kv.get('_html', '')))
+
     return lines
+
+
+_ME_N = r'(-|-?[\d,]+(?:\.\d+)?)'
+# 실적표 추가 행: 이름 당기 전기 전기대비% 전환여부 전년동기 전년동기대비% 전환여부
+_ME_ROW = re.compile(r'([가-힣A-Za-z·]+(?: [가-힣A-Za-z·]+)*(?:\([^)]*\))?)'
+                     rf'\s+{_ME_N}\s+{_ME_N}\s+{_ME_N}\s+(\S+)\s+{_ME_N}\s+{_ME_N}\s+(\S+)')
+
+
+def _monthly_extra_lines(html: str) -> list:
+    """월별 잠정실적의 손익 외 값 — ①실적표 추가 행 ②비고란 '…당월/누계 국가… 합계' 표."""
+    txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html or ''))
+    out = []
+    i, j = txt.find('실적내용'), txt.find('정보제공내역')
+    tbl = txt[i:j] if 0 <= i < j else ''
+    m_u = re.search(r'구분\s*\(\s*(억원|백만원|천원)|단위\s*:\s*(억원|백만원|천원)', tbl)
+    tbl_unit = (m_u.group(1) or m_u.group(2)) if m_u else ''
+    group, in_group = None, False   # 값 없는 소제목 행('국가별 매출액') — 다음 값 행 앞에 한 번 붙인다
+    for name, cur, prev, _qoq, _t1, base, yoy, _t2 in _ME_ROW.findall(tbl):
+        name = re.split(r'여부\s+', name)[-1]     # 머리글 끝('…흑자전환여부')이 첫 행 이름에 붙는다
+        if '당해실적' in name or '누계실적' in name:
+            continue
+        if cur == '-' and prev == '-' and base == '-':
+            group = name
+            continue
+        if cur == '-':
+            continue
+        if group:
+            out.append(f'  {group}' + (f' ({tbl_unit})' if tbl_unit and '(' not in group else ''))
+            group, in_group = None, True
+        indent = '    ' if in_group else '  '
+        extra = [f'전기 {prev}'] if prev != '-' else []
+        if base != '-':
+            extra.append(f'전년동기 {base}' + (f' (YoY {"" if yoy.startswith("-") else "+"}{yoy}%)' if yoy != '-' else ''))
+        out.append(f'{indent}{name}: {cur}' + (f' / {" / ".join(extra)}' if extra else ''))
+
+    # 비고란 표 — 실적표에 행이 있으면 합계만(국가별 값이 겹친다)
+    seg = txt[txt.find('기타 투자판단'):] if '기타 투자판단' in txt else ''
+    unit = (re.search(r'\(\s*단위\s*:\s*(억원|백만원|천원|원)\s*\)', seg) or [None, ''])[1]
+    blocks = list(re.finditer(r'(\d{4}년\s*\d{1,2}월\s*(?:당월|누계))\s+((?:[가-힣]+\s+){1,8}?합계)\s+', seg))
+    detail = not out
+    for b, nb in zip(blocks, blocks[1:] + [None]):
+        cols = b.group(2).split()
+        rest = seg[b.end(): nb.start() if nb else None]
+        rows = re.findall(r'([가-힣]+)\*{0,2}\s+((?:-?[\d,]+\s+){%d}-?[\d,]+)' % (len(cols) - 1), rest)
+        if not rows:
+            continue
+        rname, vals = next((r for r in rows if r[0] == '순매출'), rows[0])
+        vals = vals.split()
+        out.append(f'  {b.group(1)} {rname} 합계: {vals[-1]}{unit}' + (
+            ' (' + ' · '.join(f'{c} {v}' for c, v in zip(cols[:-1], vals[:-1])) + ')' if detail else ''))
+    return out
 
 
 def extract_preliminary_current(kv: dict) -> dict | None:
