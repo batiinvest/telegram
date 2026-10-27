@@ -14,13 +14,15 @@ collect_wics.py
 
 [API] (비공식 — 앱 내부용. 실패해도 기존 값이 남아 화면은 비지 않는다)
   GET m.stock.naver.com/api/stocks/industry/{no}?page=&pageSize=100
-    → groupInfo{no,name,totalCount} + stocks[{itemCode,...}]
+    → groupInfo{no,name,totalCount} + totalCount + marketStatus + stocks[{itemCode,...}]
   빈 번호는 200 + groupInfo{no:0,totalCount:0}(이름 없음)로 온다 — 오류가 아니라 건너뛴다.
 
-[언제 돌리나 — 장 끝난 밤]
-  영업일 08:20 실행은 9-23~10-23 매번 '업종 0종'이었고, 휴장일 08:20과 9-22(화) 밤 실행은
-  전부 성공했다. 시세 목록 API라 장 시작 전후(NXT 프리마켓 08:00~)엔 쓸 수 없는 응답이 온다.
-  → 정규장·NXT 애프터마켓(~20:00)이 끝난 22:00에 돌린다. 분류라 하루 중 언제 받아도 같다.
+[종목 수는 최상위 totalCount로 폴백 — 장 시작 전엔 groupInfo 쪽이 0]
+  영업일 08:20 실행이 9-23~10-23 매번 '업종 0종'이었다. 10-26(월) 시각별 실측(07:50·08:20·
+  09:30·16:00·20:30): marketStatus=PREOPEN(장 시작 전)일 때만 groupInfo.totalCount가 0이고,
+  같은 응답의 최상위 totalCount(174)와 stocks(100개)는 정상이었다. CLOSE·OPEN(장중)은 둘 다 정상.
+  데이터는 있었는데 groupInfo.totalCount만 보고 건너뛴 것 → 0이면 최상위 값을 쓴다.
+  실행은 22:00 그대로 — 분류라 언제 받아도 같고, 장 끝난 뒤라 그날 신규 상장까지 반영된다.
 
 [쓰기 방식 — 중요]
   companies.code에는 UNIQUE 제약이 없어 on_conflict=code upsert가 42P10으로 실패한다.
@@ -196,7 +198,8 @@ def fetch_industry_map() -> Dict[str, str]:
             continue
         status[j.get("marketStatus")] += 1
         gi = j.get("groupInfo") or {}
-        name, total = gi.get("name"), gi.get("totalCount") or 0
+        # 장 시작 전(PREOPEN)엔 groupInfo.totalCount만 0으로 온다 — 최상위 totalCount는 정상(10-26 실측)
+        name, total = gi.get("name"), gi.get("totalCount") or j.get("totalCount") or 0
         if not name:
             kinds["빈 번호"] += 1        # 정상 회차에도 33개쯤 있다
             continue
