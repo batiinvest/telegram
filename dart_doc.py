@@ -423,6 +423,9 @@ def _build_kv(html: str, br: bool = False) -> dict:
 
     soup = BeautifulSoup(html, 'html.parser')
     kv: dict = {}
+    # 영문 키(TD ENG 속성) → 같은 칸의 한글 이름. 전용 파서는 영문 키로 찾고, 범용 파서는
+    # 이걸로 한글 이름을 쓴다 — 'Type of asset: 1'처럼 영어로 발송되던 것(2026-10 주요사항보고서)
+    ko_labels: dict = {}
 
     def _cell_text(cell) -> str:
         """셀 텍스트 추출 + 잔여 XML 엔티티 정리."""
@@ -493,6 +496,8 @@ def _build_kv(html: str, br: bool = False) -> dict:
                     label = eng if eng else _cell_text(td)
                     if not label:
                         continue
+                    if eng and (ko := _cell_text(td)) and ko != eng:
+                        ko_labels[eng] = ko
 
                     # 1순위: TU (날짜·선택값, AUNITVALUE)
                     val = ''
@@ -556,7 +561,16 @@ def _build_kv(html: str, br: bool = False) -> dict:
 
     if br:   # 키엔 줄바꿈 불필요 — _get 부분일치('계약 금액')가 예전처럼 맞도록 공백으로
         kv = {(k.replace(_BR, ' ') if isinstance(k, str) else k): v for k, v in kv.items()}
+    kv = _KvDict(kv)
+    kv.ko_labels = ko_labels
     return kv
+
+
+class _KvDict(dict):
+    """_build_kv 결과 — 영문 키의 한글 이름표(ko_labels)를 항목이 아닌 속성으로 든다.
+    kv 전체를 훑는 파서가 많아(값을 문자열로 가정) 딕셔너리를 항목으로 넣으면 깨진다
+    (parse_stock_option이 TypeError로 범용 파서로 새던 것)."""
+    ko_labels: dict = {}
 
 
 # ' - ' 구분 없이 하위 항목명이 이어 붙은 정정 키용 — 거래소 공급계약 서식의 계약내역 하위 항목
@@ -657,7 +671,7 @@ _SKIP_KEY_PATTERNS = [
     '작성책임자', '공시담당자', '담당부서', '대표이사',
     '주민등록번호', '주소',
     # 투자정보 가치 없는 절차성 항목 (2026-07-17 가독성 감사)
-    '참석여부', '불참', '공정거래위원회', '공시유보', '유보사유', '대규모법인여부',
+    '참석여부', '참석(명)', '불참', '공정거래위원회', '공시유보', '유보사유', '대규모법인여부',
     # 기재정정 헤더 필드 — parse_amendment가 📄/📋로 이미 표시 (sub 출력 중복 방지)
     '정정관련', '정정사유', '정정일자',
     # 서식 머리말 — '금융위원회 / 한국거래소 귀중', '회 사 명 :', '(직 책) 상 무: (성 명) …'
@@ -738,6 +752,20 @@ def _doc_unit(kv: dict):
 _UNIT_MUL = {'백만원': 1_000_000, '억원': 100_000_000, '천원': 1_000}
 
 
+def _unit_amount(num: str, unit: str) -> str:
+    """문서 단위 숫자 → 원 환산 표기: '24,273' + 백만원 → '243억원', 1조 넘으면 '6조 2,650억원'."""
+    n = int(num.replace(',', '')) * _UNIT_MUL[unit]
+    if n < 100_000_000:
+        return f'{n:,}원'
+    jo, eok = divmod(round(n / 100_000_000), 10_000)
+    return f'{jo}조 {eok:,}억원' if jo else f'{eok:,}억원'
+
+
+def _with_unit(num: str, unit: str) -> str:
+    """'24,273' + 백만원 → '24,273백만원 (243억원)'."""
+    return f'{num}{unit} ({_unit_amount(num, unit)})'
+
+
 def parse_all_fields(kv: dict) -> list:
     """
     범용 파서: DART HTML 테이블에서 추출한 전체 KV를 정리해 반환.
@@ -752,13 +780,17 @@ def parse_all_fields(kv: dict) -> list:
     # 정규화 키 집합 — "값이 다른 행의 키와 동일" = 컬럼 헤더 짝밀림 판정용
     key_set = {re.sub(r'\s+', ' ', k).strip() for k in kv if not k.startswith('_')}
     unit = _doc_unit(kv)
+    ko = getattr(kv, 'ko_labels', None) or {}
 
     for k, v in kv.items():
         # 내부 키(_html·_rcept_no 등) 노출 방지
         if k.startswith('_'):
             continue
-        k = re.sub(r'\s+', ' ', k).strip()
+        k = re.sub(r'\s+', ' ', ko.get(k, k)).strip()   # 영문 키는 원문 한글 이름으로
         v = _ws(v)
+        # 선택형 칸의 코드값('자산구분: 1', '사채발행방법: 2', '회사와의 관계: 4') — 뜻을 알 수 없어 뺀다
+        if re.fullmatch(r'\d', v) and re.search(r'구분|종류|방법|관계|Type|type', k):
+            continue
 
         # 빈 값 / 의미없는 값 / 대시뿐인 값('- -') 제외
         if not v or v in _SKIP_VALUES or re.fullmatch(r'[\s\-—–~.]+', v):
@@ -799,17 +831,22 @@ def parse_all_fields(kv: dict) -> list:
             continue
         seen_vals.add(v_norm)
 
-        # 기업집단 공시 금액 — 단위 없는 숫자('양도가액: 14,135')에 문서 단위·억 환산 부기
-        if unit and re.search(r'금액|가액', k) and re.fullmatch(r'[\d,]+', v):
-            n = int(v.replace(',', '')) * _UNIT_MUL[unit]
-            eok = f'{n / 100_000_000:,.0f}억원' if n >= 100_000_000 else f'{n:,}원'
-            v = f'{v}{unit} ({eok})'
+        # 기업집단 공시 금액 — 단위 없는 숫자('양도가액: 14,135')에 문서 단위·억 환산 부기.
+        # 값 안에 항목명이 붙은 경우('가. 출자금액 24,273')와 한도·출자액·총액도 — 단위 없이
+        # '출자금액 24,273'(=243억원)으로 나가던 것(한솔아이원스·한화솔루션 2026-10)
+        if unit:
+            m_v = re.fullmatch(r'(.*?(?:금액|가액|한도|출자액|총액|잔액))\s*:?\s*([\d,]+)', v)
+            if re.search(r'금액|가액|한도|출자액|총액|잔액', k) and re.fullmatch(r'[\d,]+', v):
+                v = _with_unit(v, unit)
+            elif m_v:
+                v = f'{m_v.group(1)} {_with_unit(m_v.group(2), unit)}'
 
         # 너무 긴 값 — 문장경계 절단(숫자·괄호 중간 절단 방지)
         if len(v) > _MAX_VAL_LEN:
             v = _trunc_clean(v, _MAX_VAL_LEN)
 
-        lines.append(f'{k}: {v}')
+        # 끝 콜론은 출력에서만 뗀다('모집 또는 매출총액 :: …') — 필터('회사명:' 등)는 원래 키로 본다
+        lines.append(f'{k.rstrip(" :：")}: {v}')
 
         if len(lines) >= _MAX_FIELDS:
             break

@@ -12,11 +12,13 @@ def parse_rights_offering(kv: dict) -> list:
 
     _f(lines, kv, '🔢 신주식수', '1. Class and number of new shares', suffix='주')
 
-    # 발행가액 + 할인율 (두 필드 조합 — 직접 처리)
+    # 발행가액 + 할인율 (두 필드 조합 — 직접 처리). 확정/예정은 원문 '6. 신주 발행가액' 행에서
     price    = _get(kv, '6. Issuing price of new shares', 'Issuing price')
     discount = _get(kv, '7-2. Discount or premium ratio', 'Discount or premium ratio (%)')
-    if price:
-        disc_str = f' (할인율 {discount}%)' if discount else ''
+    disc_str = f' (할인율 {discount}%)' if discount else ''
+    if pl := _issue_price_line(kv):
+        lines.append(pl + disc_str)
+    elif price:
         lines.append(f'💵 발행가액: {price}원{disc_str}')
 
     _f(lines, kv, '📊 기준주가', '7. Base stock price', 'Base stock price: Lower', suffix='원')

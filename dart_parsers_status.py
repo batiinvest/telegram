@@ -507,6 +507,7 @@ def _fss_amendment(kv: dict) -> list:
     칸을 정렬하고 참조는 본문에서 찾아 바뀐 문장만 [전]/[후]로."""
     from bs4 import BeautifulSoup
     lines = []
+    unit = _doc_unit(kv)     # 기업집단 공시의 금액 단위(백만원 등) — 정정 전후 숫자에 붙인다
     doc = next((v for k, v in kv.items() if '정정대상 공시서류' in k and '최초' not in k and v), None)
     date = next((v for k, v in kv.items() if '최초제출일' in k and v), None)
     if date and (md := re.search(r'(\d{4})\s*[년.\-]\s*(\d{1,2})\s*[월.\-]\s*(\d{1,2})', date)):
@@ -584,6 +585,11 @@ def _fss_amendment(kv: dict) -> list:
         elif aa in ('-', '') and bb not in ('-', ''):
             lines.append(f'🔧 {it}: 삭제 — {_trunc_clean(bb, 150)}')
         elif max(len(bb), len(aa)) <= 60:
+            # 기업집단 공시 정정표는 금액이 문서 단위(백만원) 숫자뿐 — '출자금액: 529,175 → 390,769'
+            # (실제 5,292억원 → 3,908억원)로 나가던 것(에코프로비엠 2026-10-15)
+            if (unit and re.search(r'금액|가액|한도|출자액|총액|잔액', it) and '(원)' not in it
+                    and re.fullmatch(r'[\d,]+', bb) and re.fullmatch(r'[\d,]+', aa)):
+                bb, aa = _unit_amount(bb, unit), _unit_amount(aa, unit)
             lines.append(f'🔧 {it}: {bb} → {aa}')
         else:
             lines.append(_prose_diff(it, bb, aa, max_seg=3, seg_len=200)

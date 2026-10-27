@@ -12,7 +12,9 @@ from dart_parsers import (
     parse_contract, parse_major_shareholder_change, parse_equity_acquisition,
     parse_amendment, parse_tender_opinion, parse_trade_plan, parse_preliminary_earnings,
 )
-from dart_doc import _sub_parts
+from dart_doc import _sub_parts, _build_kv, parse_all_fields
+from dart_parse_helpers import _issue_price_line
+from dart_parsers import parse_combined_ci
 
 
 def test_parse_dividend_full():
@@ -278,3 +280,33 @@ def test_parse_preliminary_earnings_monthly_extra_rows():
         "  수주(백만불, 누계기준): 18,485 / 전기 17,478 / 전년동기 9,320 (YoY +98.34%)",
         "  조선: 14,184 / 전기 13,515 / 전년동기 6,224 (YoY +127.89%)",
     ]
+
+
+def test_parse_all_fields_korean_label_and_unit():
+    """범용 파서 — 영문 키(TD ENG)는 같은 칸 한글 이름으로, 기업집단 공시 숫자엔 문서 단위."""
+    html = ('<table><tr><TD ENG="Acquisition price (KRW)">양수금액(원)</TD><TE>61,125,000,000</TE></tr>'
+            '<tr><TD ENG="1. Type of asset">1. 자산구분</TD><TE>1</TE></tr></table>')
+    kv = _build_kv(html)
+    assert parse_all_fields(kv) == ["양수금액(원): 61,125,000,000"]     # 코드값 '자산구분: 1'은 뺀다
+    kv = {"기업집단명": "한솔", "_html": "(단위 : 백만원)",
+          "2. 출자참여내역": "가. 출자금액 24,273", "마. 담보한도": "6,264,960"}
+    out = parse_all_fields(kv)
+    assert "2. 출자참여내역: 가. 출자금액 24,273백만원 (243억원)" in out
+    assert "마. 담보한도: 6,264,960백만원 (6조 2,650억원)" in out
+
+
+def test_issue_price_line():
+    """유상증자 발행가 — 확정/예정 구분, 정정 공시는 마지막(정정 후) 값."""
+    pre = ("6. 신주 발행가액 확정발행가 보통주식 (원) - 기타주식 (원) - 예정발행가 보통주식 (원) 9,120 "
+           "확정예정일 2027년 01월 18일 기타주식 (원) - 확정예정일 - 7. 발행가 산정방법")
+    assert _issue_price_line({"_html": pre}) == "💵 예정 발행가: 9,120원 (2027-01-18 확정)"
+    fixed = pre + (" 6. 신주 발행가액 확정발행가 보통주식 (원) 39,100 기타주식 (원) - "
+                   "예정발행가 보통주식 (원) - 확정예정일 -")
+    assert _issue_price_line({"_html": fixed}) == "💵 확정 발행가: 39,100원"
+    assert _issue_price_line({"_html": "발행가 없음"}) is None
+
+
+def test_combined_ci_bonus_wording():
+    """무상증자 1:1 — '(100주→100주)'는 보유가 그대로인 것처럼 읽혔다."""
+    out = parse_combined_ci({"5. Number of new stocks allocated per share": "1"})
+    assert "📊 1주당 1주 배정 (100주 보유 시 100주 받음)" in out

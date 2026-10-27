@@ -121,6 +121,8 @@ def parse_combined_ci(kv: dict) -> list:
     if paid_count:
         lines.append('【유상증자】')
         lines.append(f'🔢 신주식수: {paid_count}주')
+        if pl := _issue_price_line(kv):     # 발행가가 빠져 정정(발행가 확정) 공시의 핵심이 안 보였다
+            lines.append(pl)
 
     # 조달금액 전체 합산 (중복 방지: 이미 집계한 값 skip)
     _SUM_FUND_KEYS = [
@@ -162,7 +164,8 @@ def parse_combined_ci(kv: dict) -> list:
         try:
             ratio = float(bonus_ratio)
             pct = int(ratio * 100)
-            lines.append(f'📊 1주당 {bonus_ratio}주 배정 (100주→{pct}주)')
+            # '(100주→100주)'는 보유가 그대로인 것처럼 읽혔다 — 받는 주식 수로
+            lines.append(f'📊 1주당 {bonus_ratio}주 배정 (100주 보유 시 {pct:,}주 받음)')
         except (ValueError, TypeError):
             lines.append(f'📊 1주당 배정: {bonus_ratio}주')
         if bonus_record:

@@ -9,6 +9,7 @@ import logging
 
 from dart_doc import (
     _get, _trunc, _trunc_clean, _ws, _BR, _BR_RAW, _BR_LIST, _sub_parts, _sub_split,
+    _doc_unit, _unit_amount,
     _fetch_dart_majorstock, _fetch_dart_reporter,
 )
 
@@ -700,6 +701,31 @@ def _parse_etc_field(text: str) -> list[str]:
     return lines
 
 
+_ISSUE_PRICE = re.compile(
+    r'6\.\s*신주\s*발행가액.{0,40}?확정발행가\s*보통주식\s*\(원\)\s*(-|[\d,]+).{0,40}?'
+    r'예정발행가\s*보통주식\s*\(원\)\s*(-|[\d,]+)(?:\s*확정예정일\s*(\d{4}년\s*\d{1,2}월\s*\d{1,2}일))?')
+
+
+def _issue_price_line(kv: dict):
+    """유상증자 '6. 신주 발행가액' 행 → '💵 확정 발행가: 39,100원' / '💵 예정 발행가: 9,120원 (2027-01-18 확정)'.
+
+    영문 키(Issuing price)만으로는 확정·예정을 구분 못 하고, 예정가 서식은 그 키에 확정예정일이
+    들어가 발행가가 아예 빠졌다(한솔아이원스·뷰노·큐리언트 2026-10). 정정 공시는 정정표 뒤 본문이
+    정정 후 값이라 마지막 것을 쓴다."""
+    txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', kv.get('_html', '')))
+    found = _ISSUE_PRICE.findall(txt)
+    if not found:
+        return None
+    fixed, expected, due = found[-1]
+    if fixed != '-':
+        return f'💵 확정 발행가: {fixed}원'
+    if expected != '-':
+        d = re.findall(r'\d+', due)
+        when = f' ({d[0]}-{int(d[1]):02d}-{int(d[2]):02d} 확정)' if len(d) == 3 else ''
+        return f'💵 예정 발행가: {expected}원{when}'
+    return None
+
+
 def _clean_amendment_field(field: str) -> str:
     """기재정정 필드명 정리 — 섹션경로 제거 후 핵심 필드명만 반환."""
     f = field.strip()
@@ -932,4 +958,5 @@ def strip_item_emoji(text: str) -> str:
     return _ITEM_EMOJI.sub(r'\1', text or '')
 
 
-__all__ = ['log', 'strip_item_emoji', '_get', '_trunc', '_trunc_clean', '_sub_parts', '_sub_split', '_ws', '_BR', '_BR_RAW', '_BR_LIST', '_unglue', '_tidy_lines', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list', '_rel_text', '_numbered_with_lead']
+__all__ = ['log', 'strip_item_emoji', '_get', '_trunc', '_trunc_clean', '_sub_parts', '_sub_split',
+           '_doc_unit', '_unit_amount', '_issue_price_line', '_ws', '_BR', '_BR_RAW', '_BR_LIST', '_unglue', '_tidy_lines', '_fetch_dart_majorstock', '_fetch_dart_reporter', '_fmt_amount', '_f', '_CI_METHOD', '_FUND_KEYS', '_is_footnote', '_clean_party', '_clean_date', '_clean_ratio', '_fmt_payment_terms', '_strip_disclaimer', '_parse_numbered_body', '_clinical_bullet', '_parse_clinical_result', '_BOND_METHOD', '_parse_etc_field', '_clean_amendment_field', '_fmt_amendment_val', '_parse_agm_notice_text', '_get_body', '_prose_diff', '_REL_MARK', '_ETC_BOILER', '_etc_segments', '_related_list', '_rel_text', '_numbered_with_lead']
