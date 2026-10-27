@@ -11,6 +11,7 @@ import datetime
 import time
 import logging
 import html
+import json
 import urllib.parse
 import re
 import hashlib
@@ -40,6 +41,17 @@ DUP_SIM_THRESHOLD = 0.45
 # 0.30(구)은 대형 단일 이벤트(예: 기술수출 계약)에서 언론사별 표현차로 게이트에 다 걸려 flood를 못 막았다.
 # 0.20 = 보수적 완화(실측 오탐 0). app_config 'news_dup_event_gate'로 런타임 조정 가능.
 DUP_EVENT_GATE = 0.20
+
+# 몰리면 묶음 — 같은 방(종목방·산업방 각각)에 최근 60분 안 3건이 이미 개별로 나갔으면, 이후 기사는
+# 모아 두었다가 첫 기사 1시간 뒤 제목·링크 목록 1통으로 보낸다(기사는 버리지 않는다).
+# 같은 사건 기사가 언론사마다 표현이 달라 중복 필터로는 못 막아, 큰 소식 하나에 한 방으로 50건씩
+# 나갔다(한화오션 3분기 실적·SK하이닉스 솔리다임 상장 중단 2026-10). 2주(10-14~27) 재생:
+# 10,416통 → 7,008통(67%), 반도체 산업방 179 → 55통/일, SK하이닉스 방 105 → 36통/일.
+BURST_N = 3
+BURST_WINDOW = datetime.timedelta(minutes=60)
+BUNDLE_FLUSH = datetime.timedelta(minutes=60)
+BUNDLE_FILE = "news_bundle_pending.json"   # 재시작해도 모아 둔 기사를 잃지 않게
+BUNDLE_MAX_CHARS = 3500                    # 텔레그램 4,096자(태그 제외 글자 수) 아래로 나눠 보낸다
 
 _KST = datetime.timezone(datetime.timedelta(hours=9))
 
@@ -298,6 +310,10 @@ class NaverNewsBot:
 
         self._send_retry: Dict[str, int] = {}  # link → 전채널 발송 실패 재시도 횟수
 
+        # 몰리면 묶음 — {방: [개별 발송 시각]} / {방: {'chat_id','first','items':[[종목, HH:MM, 제목, 링크]],'tries'}}
+        self._room_sends: Dict[str, list] = {}
+        self._bundles: Dict[str, dict] = self._load_bundles()
+
         self.session     = get_session()
         self.key_index   = 0
         self.api_keys    = NAVER_KEYS  # config에서 미설정 슬롯 필터링됨 — 빈 리스트 가능
@@ -477,6 +493,102 @@ class NaverNewsBot:
         if event_key:
             self._event_cache[event_key] = (now, sig)
 
+    # ──────────────────────────────────────────
+    #  몰리면 묶음
+    # ──────────────────────────────────────────
+    @staticmethod
+    def _load_bundles() -> Dict[str, dict]:
+        try:
+            with open(BUNDLE_FILE, encoding='utf-8') as f:
+                data = json.load(f)
+            n = sum(len(b.get('items') or []) for b in data.values())
+            if n:
+                logging.info(f"♻️ [뉴스봇] 묶음 대기 복원: {len(data)}개 방 · {n}건")
+            return data
+        except FileNotFoundError:
+            return {}
+        except Exception as e:
+            logging.warning(f"⚠️ [뉴스봇] 묶음 대기 복원 실패(빈 상태로 시작): {e}")
+            return {}
+
+    def _save_bundles(self):
+        try:
+            with open(BUNDLE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self._bundles, f, ensure_ascii=False)
+        except Exception as e:
+            logging.warning(f"⚠️ [뉴스봇] 묶음 대기 저장 실패: {e}")
+
+    def _route(self, chat_id, msg: str, item: list) -> bool:
+        """한 방으로 개별 발송하거나, 그 방이 몰리는 중이면 묶음에 넣는다. 발송 성공·묶음 대기면 True."""
+        now = datetime.datetime.now()
+        key = str(chat_id)
+        sends = [t for t in self._room_sends.get(key, []) if now - t < BURST_WINDOW]
+        self._room_sends[key] = sends
+        if key in self._bundles or len(sends) >= BURST_N:
+            b = self._bundles.setdefault(key, {'chat_id': chat_id, 'first': now.isoformat(), 'items': []})
+            b['items'].append(item)
+            self._save_bundles()
+            return True
+        ok = stock_api.send_telegram(chat_id, msg, preview=True, keyboard=COMMON_BUTTON)
+        if ok:
+            sends.append(now)
+        return ok
+
+    @staticmethod
+    def _bundle_messages(items: list) -> list:
+        """묶음 → 메시지 목록. 여러 종목이 섞인 방(산업방)만 줄마다 종목명을 붙인다."""
+        multi = len({it[0] for it in items}) > 1
+        head = (f"📰 <b>[뉴스 묶음]</b> 최근 1시간 {len(items)}건"
+                + ('' if multi else f" · {html.escape(items[0][0], quote=False)}"))
+        lines = []
+        for corp, hhmm, title, link in items:
+            who = f"[{html.escape(corp, quote=False)}] " if multi else ''
+            lines.append(f"• {hhmm} {who}<a href='{html.escape(link, quote=True)}'>"
+                         f"{html.escape(title, quote=False)}</a>")
+        visible = lambda s: len(html.unescape(re.sub(r'<[^>]+>', '', s)))
+        msgs, cur = [], [head]
+        for ln in lines:
+            if visible('\n'.join(cur + [ln])) > BUNDLE_MAX_CHARS:
+                msgs.append('\n'.join(cur))
+                cur = ['📰 <b>[뉴스 묶음]</b> (이어서)']
+            cur.append(ln)
+        msgs.append('\n'.join(cur))
+        return msgs
+
+    def _flush_bundles(self, force: bool = False):
+        """첫 기사가 들어온 지 1시간 지난 묶음을 보낸다. 실패하면 다음 사이클에 한 번 더."""
+        if not self._bundles:
+            return
+        now = datetime.datetime.now()
+        changed = False
+        for key in list(self._bundles):
+            b = self._bundles[key]
+            try:
+                due = now - datetime.datetime.fromisoformat(b['first']) >= BUNDLE_FLUSH
+            except Exception:
+                due = True
+            if not (due or force):
+                continue
+            items = b.get('items') or []
+            ok = all([stock_api.send_telegram(b['chat_id'], m, preview=False, keyboard=COMMON_BUTTON)
+                      for m in self._bundle_messages(items)]) if items else True
+            if not ok and b.get('tries', 0) < 1:
+                b['tries'] = b.get('tries', 0) + 1
+                logging.warning(f"⚠️ [뉴스 묶음] 발송 실패 — 다음 사이클 재시도 ({key}, {len(items)}건)")
+                continue
+            logging.info(f"📰 [뉴스 묶음] {'발송' if ok else '발송 포기'}: {key} · {len(items)}건")
+            if _BRIDGE_OK and items:
+                try:
+                    corps = sorted({it[0] for it in items})
+                    _bridge.log_notice(target=corps[0] if len(corps) == 1 else f"묶음:{key}",
+                                       content=f"[뉴스묶음] {len(items)}건", sent_count=1, ok_count=int(ok))
+                except Exception:
+                    pass
+            del self._bundles[key]
+            changed = True
+        if changed:
+            self._save_bundles()
+
     def _rehydrate_cache(self):
         """
         봇 재시작 시 중복 캐시 소실 방지 — 최근 24h '뉴스' 발송이력을
@@ -607,6 +719,7 @@ class NaverNewsBot:
                 # 필터 갱신은 config.on_reload(_load_news_filters) 콜백으로 수신
 
             for company_info in COMPANY_KEYWORDS:
+                self._flush_bundles()          # 한 바퀴(300여 종목)가 길어 종목마다 확인
                 company_name = company_info["name"]
                 # 정식 종목명 + 뉴스 별칭(companies.keywords). 기사 제목이 약칭만 쓰면
                 # (예: '큐리옥스바이오시스템즈' → '큐리옥스') 검색·제목 매칭 양쪽에서 놓쳤다.
@@ -693,20 +806,16 @@ class NaverNewsBot:
                     )
 
                     industry = COMPANY_TO_INDUSTRY.get(company_name)
+                    _item = [company_name, time_str, title, link]
                     _results = []
+                    # 방마다 몰리는 중이면 묶음으로(_route) — 산업방과 종목방은 따로 센다
                     if industry and industry in INDUSTRY_CHAT_IDS:
-                        _results.append(stock_api.send_telegram(
-                            INDUSTRY_CHAT_IDS[industry], msg,
-                            preview=True, keyboard=COMMON_BUTTON
-                        ))
+                        _results.append(self._route(INDUSTRY_CHAT_IDS[industry], msg, _item))
                     # stock_api.get_company_chat_id()로 통일
                     # — 종목명 변경 시 stock_code fallback 포함
                     _cid = stock_api.get_company_chat_id(company_name)
                     if _cid:
-                        _results.append(stock_api.send_telegram(
-                            _cid, msg,
-                            preview=True, keyboard=COMMON_BUTTON
-                        ))
+                        _results.append(self._route(_cid, msg, _item))
 
                     # 전 채널 발송 실패 → 링크 미기록으로 다음 사이클 재시도 (최대 2회)
                     if _results and not any(_results):
@@ -736,6 +845,7 @@ class NaverNewsBot:
 
                 time.sleep(0.1)
 
+            self._flush_bundles()
             time.sleep(cycle_sleep)
 
 

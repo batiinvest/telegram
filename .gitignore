@@ -42,3 +42,6 @@ kis_token.dat.lock
 *.dat
 sent_*.txt
 heartbeat.txt
+
+# 뉴스봇 묶음 대기(실행 상태)
+news_bundle_pending.json
