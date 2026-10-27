@@ -16,7 +16,8 @@ def parse_rights_offering(kv: dict) -> list:
     price    = _get(kv, '6. Issuing price of new shares', 'Issuing price')
     discount = _get(kv, '7-2. Discount or premium ratio', 'Discount or premium ratio (%)')
     disc_str = f' (할인율 {discount}%)' if discount else ''
-    if pl := _issue_price_line(kv):
+    pl = _issue_price_line(kv)
+    if pl:
         lines.append(pl + disc_str)
     elif price:
         lines.append(f'💵 발행가액: {price}원{disc_str}')
@@ -56,17 +57,27 @@ def parse_rights_offering(kv: dict) -> list:
     # ── 한글 번호 키 서식 폴백 (종속회사의 주요경영사항 유상증자 등) ──
     # 이 서식은 '5. 증자방식'처럼 번호 접두 한글 키라 위 영문 _f가 전부 실패 →
     # 범용 폴백이 raw KV(번호 키 그대로)를 덤프하던 문제. 핵심 필드만 구조화.
-    if not lines:
+    # 발행가 줄(_issue_price_line)은 이 서식에서도 나오므로 '발행가만 찾은 경우'도 여기로 —
+    # 'not lines'로만 보면 발행가 줄이 폴백을 막아 발행가 한 줄로 나갔다(하이브 종속회사 2026-10-27).
+    if len(lines) <= (1 if pl else 0):
+        price_lines, lines = lines, []
         if sub := _get(kv, '종속회사인', '종속회사명'):
             lines.append(f'🏢 종속회사: {_trunc(sub, 50)}')
-        if v := _get(kv, '보통주식(주)'):
+        # 신주 수는 원문 행에서 — '보통주식(주)' 키가 '3. 증자전 발행주식총수' 행에도 있어 KV에선
+        # 발행주식총수가 덮어써 신주 수로 나갔다(하이브 종속회사: 2.86억주 → 14.9억주)
+        txt = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', kv.get('_html', '')))
+        found = re.findall(r'1\.\s*신주의\s*종류와\s*수\s*보통주식\s*\(\s*주\s*\)\s*([\d,]+)', txt)
+        if v := (found[-1] if found else _get(kv, '보통주식(주)')):
             lines.append(f'🔢 신주식수: {v}주')
-        # 값이 숫자가 아니면(헤더 라벨이 값으로 딸려오는 종속회사 서식) 생략 —
-        # '예정발행가' 키의 값이 '보통주식(원)' 라벨이라 '발행가액: 보통주식(원)원' 오출력됨.
-        _pv = _get(kv, '보통주식(원)', '예정발행가')
-        if _pv and re.search(r'\d', _pv) and not re.search(r'[가-힣]', _pv):
-            _hint = ' (액면가)' if '액면가' in (_get(kv, '7. 발행가 산정방법') or '') else ''
-            lines.append(f'💵 발행가액: {_pv}원{_hint}')
+        if price_lines:
+            lines.extend(price_lines)
+        else:
+            # 값이 숫자가 아니면(헤더 라벨이 값으로 딸려오는 종속회사 서식) 생략 —
+            # '예정발행가' 키의 값이 '보통주식(원)' 라벨이라 '발행가액: 보통주식(원)원' 오출력됨.
+            _pv = _get(kv, '보통주식(원)', '예정발행가')
+            if _pv and re.search(r'\d', _pv) and not re.search(r'[가-힣]', _pv):
+                _hint = ' (액면가)' if '액면가' in (_get(kv, '7. 발행가 산정방법') or '') else ''
+                lines.append(f'💵 발행가액: {_pv}원{_hint}')
         if v := _get(kv, '5. 증자방식', '증자방식'):
             lines.append(f'📋 방식: {v}')
         for fk, flabel in (('시설자금(원)', '시설'), ('영업양수자금(원)', '영업양수'),
@@ -81,6 +92,8 @@ def parse_rights_offering(kv: dict) -> list:
         s, e = _get(kv, '시작일'), _get(kv, '종료일')
         if s and s != '-':
             lines.append(f'📅 청약: {s}' + (f' ~ {e}' if e and e not in ('-', s) else ''))
+        if v := _get(kv, '12. 납입일', '납입일'):
+            lines.append(f'📅 납입일: {v}')
         if v := _get(kv, '18. 이사회결의일(결정일)', '이사회결의일(결정일)'):
             lines.append(f'📋 결의일: {v}')
 

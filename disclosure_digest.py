@@ -47,11 +47,26 @@ def _detail_line(detail: str, key: str) -> str:
     return ''
 
 
+def _field(detail: str, key: str) -> str:
+    """'💰 계약금액: 1,439억원 (…)' 같은 항목 줄의 값. 콜론 있는 항목 줄만 본다 — 낱말만 들어간
+    줄(지급조건 목록의 '• … / 계약금액 유보기간 종료 후 공개예정 / …')을 집어 원문째 나가던 것 방지."""
+    m = re.search(rf'^[^\S\n]*(?:\S+\s)?{key}\s*:\s*(.+)$', detail, re.M)
+    return m.group(1).strip() if m else ''
+
+
+def _contract_amount(detail: str) -> str:
+    """계약금액 — 숫자가 없으면(공시유보) '금액 비공개'."""
+    a = _field(detail, '계약금액')
+    if a and re.search(r'\d', a):
+        return a
+    return '금액 비공개(유보)' if '유보' in detail else ''
+
+
 def _base_type(nm: str) -> str:
     return re.sub(r'\(.*?\)|\[.*?\]', '', nm).strip()
 
 
-def _fetch_rows(sb):
+def _fetch_rows(sb, day: datetime.date = None):
     """오늘(KST) 발송된 공시 notice_history — (level, corp, report_nm, rcept) 중복제거.
 
     19:00 실행 순간의 일시적 네트워크 끊김(httpx 'Server disconnected')으로 그날
@@ -59,12 +74,14 @@ def _fetch_rows(sb):
     발송 전 단계라 재시도에 중복 발송 위험 없음.
     """
     import time as _time
-    since = datetime.datetime.now(_KST).strftime('%Y-%m-%d') + 'T00:00:00+09:00'
+    day = day or datetime.datetime.now(_KST).date()
+    since = f'{day.isoformat()}T00:00:00+09:00'
+    until = f'{(day + datetime.timedelta(days=1)).isoformat()}T00:00:00+09:00'
     res = None
     for attempt in (1, 2, 3):
         try:
             res = (sb.table('notice_history').select('target,content')
-                   .gte('created_at', since).like('content', '[공시/%')
+                   .gte('created_at', since).lt('created_at', until).like('content', '[공시/%')
                    .limit(2000).execute().data or [])
             break
         except Exception as e:
@@ -138,8 +155,9 @@ def _render_urgent(urgent):
     return lines
 
 
-def generate(sb=None) -> str:
-    """저녁 공시 다이제스트 메시지 생성. 발송할 게 없으면 빈 문자열."""
+def generate(sb=None, day: datetime.date = None) -> str:
+    """저녁 공시 다이제스트 메시지 생성. 발송할 게 없으면 빈 문자열.
+    day: 지난 날짜 다시 만들기(검증용) — 기본은 오늘(KST)."""
     if sb is None:
         from supabase_bridge import bridge as _bridge
         sb = _bridge._get_client()
@@ -147,7 +165,7 @@ def generate(sb=None) -> str:
         return ''
 
     from dart_parser import get_disclosure_detail
-    items = _fetch_rows(sb)
+    items = _fetch_rows(sb, day)
     if not items:
         return ''
 
@@ -173,14 +191,19 @@ def generate(sb=None) -> str:
                     earn[corp] = (rev, op, op_yoy, rev_yoy)
             elif ('공급계약' in nm or '수주' in nm) and '정정' not in nm and len(contract) < 6:
                 d = get_disclosure_detail(rc, nm)
-                a = _detail_line(d, '계약금액')
-                contract.append((corp, re.sub(r'.*계약금액:\s*', '', a) if a else ''))
+                contract.append((corp, _contract_amount(d)))
             elif '청약결과' in nm:
                 d = get_disclosure_detail(rc, nm)
                 r = _detail_line(d, '청약률')
                 subs.append((corp, re.sub(r'.*청약률:\s*', '', r) if r else ''))
             elif '유상증자결정' in nm and '정정' not in nm:
-                misc_increase.append(f'{corp} 유상증자결정')
+                # 금액 없이 이름만 나가 규모를 알 수 없었다(하이브 10-27) — 조달금액·방식을 붙인다
+                d = get_disclosure_detail(rc, nm)
+                amt = _field(d, '조달금액') or _field(d, '조달')   # 종속회사 서식은 '조달: 타법인취득자금 …'
+                how = _field(d, '방식')
+                tail = ' · '.join(x for x in (amt, how) if x)
+                who = f'{corp}(종속회사)' if '종속회사' in nm else corp
+                misc_increase.append(f'{who} 유상증자' + (f' {tail}' if tail else '결정'))
             elif '정지' not in nm and '정정' not in nm:
                 # 지배구조 이벤트 — '분할'은 회사분할만(주식 병합·분할 거래정지 제외),
                 # 라벨은 매칭 키워드로(주요사항보고서 등 껍데기 제목 방지)
@@ -192,9 +215,9 @@ def generate(sb=None) -> str:
         except Exception:
             log.debug(f'[다이제스트] enrich 실패: {corp} {nm}')
 
-    now = datetime.datetime.now(_KST)
+    now = datetime.datetime.combine(day, datetime.time()) if day else datetime.datetime.now(_KST)
     head = (f"🌆 <b>오늘의 공시 요약</b> · {now.month}월 {now.day}일({_WD[now.weekday()]})\n"
-            f"━━━━━━━━━━━━━━━\n"
+            f"════════════\n"          # 다른 텔레그램 메시지와 같은 구분선(═×12)
             f"📮 주요·긴급 <b>{n_urg + n_maj}건</b> (🚨긴급 {n_urg} · 📌주요 {n_maj})")
     blocks = [head]
 
