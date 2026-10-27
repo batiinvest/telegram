@@ -1784,8 +1784,18 @@ def get_daily_flow_summary(sb_client, monitored_only: bool = False, exclude_code
         sign = '+' if n >= 0 else ''
         return f"{sign}{eok:,}억"
 
-    def _top(key, rev, n=3):
-        return sorted(flows, key=lambda x: x[key], reverse=rev)[:n]
+    # 양대 주체가 같이 산 종목 — 한쪽만 산 것보다 신호가 강하다.
+    # 합계 10억 미만은 사실상 0(소수점 절사 시 "+0억")이라 제외.
+    MIN_BOTH = 10 * 100_000_000
+    both = [x for x in flows
+            if x['f'] > 0 and x['i'] > 0 and x['name'] and (x['f'] + x['i']) >= MIN_BOTH]
+    both.sort(key=lambda x: x['f'] + x['i'], reverse=True)
+    # 동반 줄에 외국인·기관 금액이 이미 나온 종목은 순매수 목록에서 뺀다 — 한 메시지에 삼성전자가
+    # 동반·외국인·기관 세 칸에 반복되던 것(2026-10-27). 순매도 목록엔 원래 못 들어온다.
+    shown_both = {x['code'] for x in both[:3]}
+
+    def _top(key, rev, n=3, skip=frozenset()):
+        return [x for x in sorted(flows, key=lambda x: x[key], reverse=rev) if x['code'] not in skip][:n]
 
     def _block(label, items, key):
         lines = [label]
@@ -1794,19 +1804,13 @@ def get_daily_flow_summary(sb_client, monitored_only: bool = False, exclude_code
                 lines.append(f"  {x['name']} {_amt(x[key])}")
         return "\n".join(lines)
 
+    _ex = ' <i>(동반 제외)</i>' if shown_both else ''
     blocks = [
-        ("🔴 <b>외국인 순매수</b>", _top('f', True),  'f'),
-        ("🔵 <b>외국인 순매도</b>", _top('f', False), 'f'),
-        ("🔴 <b>기관 순매수</b>",   _top('i', True),  'i'),
-        ("🔵 <b>기관 순매도</b>",   _top('i', False), 'i'),
+        (f"🔴 <b>외국인 순매수</b>{_ex}", _top('f', True, skip=shown_both),  'f'),
+        ("🔵 <b>외국인 순매도</b>",        _top('f', False), 'f'),
+        (f"🔴 <b>기관 순매수</b>{_ex}",   _top('i', True, skip=shown_both),  'i'),
+        ("🔵 <b>기관 순매도</b>",          _top('i', False), 'i'),
     ]
-
-    # 양대 주체가 같이 산 종목 — 한쪽만 산 것보다 신호가 강하다.
-    # 합계 10억 미만은 사실상 0(소수점 절사 시 "+0억")이라 제외.
-    MIN_BOTH = 10 * 100_000_000
-    both = [x for x in flows
-            if x['f'] > 0 and x['i'] > 0 and x['name'] and (x['f'] + x['i']) >= MIN_BOTH]
-    both.sort(key=lambda x: x['f'] + x['i'], reverse=True)
 
     date_tag = f" ({latest[5:7]}/{latest[8:10]})" if len(latest) >= 10 else ""
     title = "💰 <b>[관심종목 수급]</b>" if monitored_only else "💰 <b>[오늘의 수급]</b>"

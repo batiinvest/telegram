@@ -516,6 +516,16 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
         watch_events.append(
             f"🔄 {_d['ind']}: 오늘 급등분({_fmt(_d['kr1'])})이 유지되는지 확인 "
             f"(직전 4일 {_fmt(_d['kr5x'])})")
+    # 한 줄 판단이 '되돌림 주의'·'따라붙는지'를 말하면 같은 항목이 체크포인트에도 있어야 한다 —
+    # 판단엔 있는데 체크포인트는 '챙길 신호 없음'으로 나가 서로 어긋났다(2026-10-27 반도체·바이오).
+    # 역할: 판단 = 오늘 평가, 체크포인트 = 내일 볼 것.
+    if lead_overext and not (decouple_risk and decouple_risk[0]['ind'] == _lead_ind):
+        watch_events.append(
+            f"🔄 {_lead_ind}: 오늘 급등분({_fmt(_lead_chg)})이 유지되는지 확인 (직전 4일 {_fmt(_lead_d5x)})")
+    if lag_inds and kr_avg > -2.0 and vix < THR_VIX_HIGH and market_regime != "risk-off":
+        _l = lag_inds[0]
+        watch_events.append(
+            f"🔄 {_l['ind']}: 해외가 먼저 올랐습니다(해외 5일 {_fmt(_l['us'])}) — 국내 수급이 따라붙는지 확인")
     # 5일은 엇갈렸지만 직전 해외 세션이 같은 방향 — 단정 대신 "하루 더 확인"
     for t in turn_watch[:2]:
         if t["dir"] == "up":
@@ -552,8 +562,9 @@ def analyze(macro: dict, market_rows: list, us_etf: dict, ind_trend: dict, discs
         strategy = "위험 회피 국면, 방어적으로 보며 낙폭 과대 업종 관찰"
     elif lag_inds:
         x = lag_inds[0]
+        # '따라붙는지 확인'은 체크포인트가 맡는다(위 watch_events) — 판단엔 사실만
         strategy = (f"{x['ind']}{_josa(x['ind'], '은', '는')} 해외가 먼저 올랐습니다"
-                    f"(해외 5일 {_fmt(x['us'])}), 국내 수급이 따라붙는지 확인")
+                    f"(해외 5일 {_fmt(x['us'])})")
     elif len(sync_up) >= 2:
         inds = "·".join(x["ind"] for x in sync_up[:2])
         strategy = f"해외와 한국이 같이 오르는 중입니다({inds})"
