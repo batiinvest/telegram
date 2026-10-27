@@ -1413,6 +1413,9 @@ _RETRYABLE_JOBS = {
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
     'job_collect_credit_balance':   job_collect_credit_balance,
     'job_earnings_stage':           job_earnings_stage,
+    # 공매도: 17:05에 KRX 당일분이 아직 안 올라와 0건이면 실패로 기록된다 → 19:25에 한 번 더.
+    # 알림은 수집 성공 뒤에만 보내므로 실패한 회차를 다시 돌려도 중복 발송이 없다.
+    'job_short_surge':              job_short_surge,
 }
 
 

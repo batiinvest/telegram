@@ -9,10 +9,10 @@ KRX 데이터포털 → 당일 공매도 비중 수집 → short_selling_history
 
 대상: companies.is_monitored=True 종목만 (약 300개)
 
-KRX API:
-  - 전체 종목 한 번에 조회 (OTP 방식)
-  - bld: dbms/MDC/STAT/standard/MDCSTAT30101 (공매도 거래 현황, 당일 비중)
-  - 응답: ISU_SRT_CD(종목코드), ACML_SELN_PBMN(공매도거래량), SRT_RT(공매도비중%)
+KRX API (로그인 필요 — .env KRX_ID·KRX_PW, collect_active_etf.Krx 세션):
+  - 시장별(코스피 STK·코스닥 KSQ) 전 종목 하루치 JSON
+  - bld: dbms/MDC/STAT/srt/MDCSTAT30101 (전종목 공매도 거래)
+  - 응답: ISU_CD(종목코드), CVSRTSELL_TRDVOL(공매도거래량), ACC_TRDVOL(거래량), TRDVOL_WT(거래량 대비 비중%)
 
 실행:
   python collect_short.py              # 오늘
@@ -29,7 +29,6 @@ log = get_logger(__name__)
 
 from datetime import date, timedelta
 
-import requests
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -42,18 +41,6 @@ except ImportError:
 
 SB_URL         = os.getenv("SB_URL", "")
 SB_SERVICE_KEY = os.getenv("SB_SERVICE_KEY", "")
-
-KRX_OTP_URL  = "http://data.krx.co.kr/comm/fileDn/GenerateOTP/generate.cmd"
-KRX_DATA_URL = "http://data.krx.co.kr/comm/fileDn/download_excel.cmd"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Referer": "http://data.krx.co.kr/",
-}
 
 
 def _last_business_day(d: date) -> str:
@@ -77,143 +64,46 @@ def _business_days_before(d: date, n: int) -> list[str]:
     return result
 
 
-def fetch_short_selling(trd_date: str) -> list[dict]:
-    """
-    KRX에서 당일 공매도 거래 현황 전체 종목 조회.
-    bld: dbms/MDC/STAT/standard/MDCSTAT30101 (공매도 거래 현황)
+def _krx_session():
+    """KRX 정보데이터시스템 로그인 세션(collect_active_etf와 같은 계정·방식)."""
+    from collect_active_etf import Krx
+    krx = Krx()
+    krx.login()
+    return krx
 
-    KRX download_excel.cmd는 Excel 바이너리를 반환함.
-    → openpyxl로 파싱.
+
+def fetch_short_selling(trd_date: str, krx=None) -> list[dict]:
+    """
+    KRX '전종목 공매도 거래' 하루치 — 코스피(STK)·코스닥(KSQ) 각각 JSON 1회.
+    bld: dbms/MDC/STAT/srt/MDCSTAT30101
+
+    [2026-10-27 교체] 예전엔 비로그인 OTP → 엑셀 다운로드였는데, KRX가 로그인을 요구하면서
+    OTP가 'LOGOUT'·다운로드가 에러 페이지로 와서 'Excel 파싱 실패: File is not a zip file'로
+    2026-06-12부터 수집이 0건이었다(잡은 성공으로 기록돼 4개월 넘게 몰랐다).
+    로그인 세션(.env KRX_ID·KRX_PW)으로 받고, 통계 경로도 standard → srt로 옮겨졌다.
 
     반환:
-        [{'stock_code': str, 'short_ratio': float, 'short_volume': int}, ...]
-        데이터 없음(공휴일 등): []
+        [{'stock_code': str, 'short_ratio': float(거래량 대비 %), 'short_volume': int}, ...]
+        데이터 없음(휴장일 등): []
     """
-    import io
-    import openpyxl
-
-    session = requests.Session()
-    session.headers.update(HEADERS)
-
-    # Step 1: OTP 발급
-    otp_params = {
-        "bld":         "dbms/MDC/STAT/standard/MDCSTAT30101",
-        "name":        "fileDown",
-        "filetype":    "xls",          # Excel 형식으로 요청
-        "url":         "dbms/MDC/STAT/standard/MDCSTAT30101",
-        "trdDd":       trd_date,
-        "mktCd":       "ALL",
-        "isuCd":       "",
-        "sortCd":      "SRT_RT",
-        "money":       "1",
-        "csvxls_isNo": "false",
-    }
-
-    try:
-        otp_res = session.post(KRX_OTP_URL, data=otp_params, timeout=15)
-        otp_res.raise_for_status()
-        token = otp_res.text.strip()
-        if not token:
-            log.warning(f"⚠️ [공매도] OTP 빈 응답 ({trd_date})")
-            return []
-    except Exception as e:
-        log.error(f"❌ [공매도] OTP 요청 실패 ({trd_date}): {e}")
-        return []
-
-    time.sleep(0.5)
-
-    # Step 2: Excel 파일 다운로드
-    try:
-        data_res = session.post(
-            KRX_DATA_URL,
-            data={"code": token},
-            timeout=30,
-        )
-        data_res.raise_for_status()
-
-        content_type = data_res.headers.get("Content-Type", "")
-        log.debug(f"📉 [공매도] {trd_date} Content-Type: {content_type}")
-
-        # 빈 응답 또는 HTML 에러 페이지 (공휴일 등)
-        if len(data_res.content) < 1000:
-            log.debug(f"📉 [공매도] {trd_date} 응답 너무 작음 ({len(data_res.content)}bytes) — 공휴일 또는 수집 전")
-            return []
-
-    except Exception as e:
-        log.error(f"❌ [공매도] 데이터 다운로드 실패 ({trd_date}): {e}")
-        return []
-
-    # Step 3: Excel 파싱
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(data_res.content), read_only=True, data_only=True)
-        ws = wb.active
-    except Exception as e:
-        log.error(f"❌ [공매도] Excel 파싱 실패 ({trd_date}): {e}")
-        log.debug(f"응답 앞부분: {data_res.content[:200]}")
-        return []
-
-    rows = list(ws.iter_rows(values_only=True))
-    if len(rows) < 2:
-        log.debug(f"📉 [공매도] {trd_date} 데이터 없음")
-        wb.close()
-        return []
-
-    # 헤더 행에서 컬럼 인덱스 찾기
-    header = [str(c).strip() if c else "" for c in rows[0]]
-    log.debug(f"📉 [공매도] {trd_date} 헤더: {header}")
-
-    # KRX Excel 헤더 매핑 (버전별로 이름이 다를 수 있음)
-    COL_CODE   = _find_col(header, ["단축코드", "종목코드", "ISU_SRT_CD"])
-    COL_RATIO  = _find_col(header, ["공매도비중", "비중", "SRT_RT"])
-    COL_VOLUME = _find_col(header, ["공매도거래량", "거래량", "ACML_SELN_PBMN"])
-
-    if COL_CODE is None:
-        log.error(f"❌ [공매도] 종목코드 컬럼을 찾을 수 없음. 헤더: {header}")
-        wb.close()
-        return []
-
+    krx = krx or _krx_session()
     results = []
-    for row in rows[1:]:
-        if not row or not row[COL_CODE]:
-            continue
-
-        code = str(row[COL_CODE]).strip().zfill(6)  # 6자리 패딩
-
-        ratio = None
-        if COL_RATIO is not None and row[COL_RATIO] is not None:
+    for mkt in ("STK", "KSQ"):
+        d = krx.get("dbms/MDC/STAT/srt/MDCSTAT30101", searchType="1", mktId=mkt, trdDd=trd_date,
+                    inqCond="STMFRTSCIFDRFS", share="1", money="1", csvxls_isNo="false")
+        for r in d.get("OutBlock_1") or []:
+            code = (r.get("ISU_CD") or "").strip()
             try:
-                ratio = float(str(row[COL_RATIO]).replace(",", "").replace("%", ""))
-            except (ValueError, TypeError):
-                pass
-
-        volume = None
-        if COL_VOLUME is not None and row[COL_VOLUME] is not None:
-            try:
-                volume = int(str(row[COL_VOLUME]).replace(",", "").split(".")[0])
-            except (ValueError, TypeError):
-                pass
-
-        if ratio is None:
-            continue
-
-        results.append({
-            "stock_code":   code,
-            "short_ratio":  ratio,
-            "short_volume": volume,
-        })
-
-    wb.close()
-    log.debug(f"📉 [공매도] {trd_date}: {len(results)}개 종목 파싱")
+                ratio = float(str(r.get("TRDVOL_WT") or "").replace(",", ""))
+                volume = int(str(r.get("CVSRTSELL_TRDVOL") or "0").replace(",", ""))
+                traded = int(str(r.get("ACC_TRDVOL") or "0").replace(",", ""))
+            except ValueError:
+                continue
+            if code and traded:          # 거래 없는 날(휴장일 등)은 전부 0으로 온다
+                results.append({"stock_code": code, "short_ratio": ratio, "short_volume": volume})
+        time.sleep(0.5)
+    log.debug(f"📉 [공매도] {trd_date}: {len(results)}개 종목")
     return results
-
-
-def _find_col(header: list, candidates: list) -> int | None:
-    """헤더 리스트에서 후보 컬럼명 중 하나를 찾아 인덱스 반환"""
-    for i, h in enumerate(header):
-        for c in candidates:
-            if c in h:
-                return i
-    return None
 
 
 def _get_monitored_codes(sb) -> set:
@@ -257,7 +147,9 @@ def run(trd_date: str = None) -> tuple[int, int]:
 
     all_records = fetch_short_selling(trd_date)
     if not all_records:
-        return 0, 0
+        # 잡은 휴장일 가드(@_job holiday)라 여기 오면 영업일 — 0건은 장애로 올린다.
+        # 예전엔 0을 돌려줘 '급증 종목 없음'으로만 보였고, 4개월간 수집 0건을 몰랐다.
+        raise RuntimeError(f"[공매도] {trd_date} 수집 0건 — KRX 응답 없음(로그인·경로 확인)")
 
     # 모니터링 종목만 필터
     to_save = [
@@ -319,6 +211,7 @@ def backfill(stock_codes: list[str], days: int = 252) -> int:
 
     total_saved = 0
     empty_streak = 0  # 연속 빈 응답 (공휴일 연속 등) 카운트
+    krx = _krx_session()   # 날짜마다 로그인하지 않도록 한 번만
 
     for i, trd_date in enumerate(dates):
         # 이 날짜에 모든 대상 종목의 데이터가 이미 있으면 스킵
@@ -326,7 +219,7 @@ def backfill(stock_codes: list[str], days: int = 252) -> int:
             log.debug(f"  {trd_date}: 전체 기존 데이터 존재 — 스킵")
             continue
 
-        all_records = fetch_short_selling(trd_date)
+        all_records = fetch_short_selling(trd_date, krx)
 
         if not all_records:
             empty_streak += 1
@@ -384,12 +277,17 @@ def check_surge(sb, n_days: int = 5, multiplier: float = 2.0) -> list[dict]:
             return []
         latest_date = date_res.data[0]["base_date"]
 
-        # 최근 n_days+1일치 전체 조회 (당일 포함)
-        rows_res = sb.table("short_selling_history") \
-                     .select("stock_code,base_date,short_ratio") \
-                     .order("base_date", desc=True) \
-                     .limit((n_days + 1) * 500).execute()
-        rows = rows_res.data or []
+        # 최근 n_days+1거래일치 전체 조회 (당일 포함) — 달력 3주로 넉넉히 잡고 페이지네이션.
+        # 예전 limit((n_days+1)*500)은 PostgREST 1,000행 상한에 잘려 311종목×6일(1,866행) 중
+        # 3일치만 와서 '비교 데이터 3일 미만'으로 전 종목이 빠졌다.
+        ld = str(latest_date).replace("-", "")[:8]
+        cutoff = (date(int(ld[:4]), int(ld[4:6]), int(ld[6:])) - timedelta(days=21)).isoformat()
+        rows = fetch_all_pages(
+            sb.table("short_selling_history")
+              .select("stock_code,base_date,short_ratio")
+              .gte("base_date", cutoff)
+              .order("base_date", desc=True)
+        )
         if not rows:
             return []
 
