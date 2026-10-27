@@ -27,6 +27,18 @@ def _amt_num(s: str) -> float:
     return n
 
 
+def _earn_metric(detail: str, label: str):
+    """잠정실적 본문 '  매출: 3조 4,139억 / QoQ +5.1% / YoY +12.9%' → ('3조 4,139억', '+12.9%').
+
+    금액은 첫 '/' 앞까지 통째로 — 예전 정규식([\\d,조억]+)은 공백에서 멈춰 '3조 4,139억'이
+    '3조'로 나갔다(한화오션·HD현대일렉트릭 2026-10-27). YoY는 증감률 또는 흑자/적자 전환 문구."""
+    m = re.search(rf'^\s*{label}:\s*([^/\n]+?)\s*(?:/(.*))?$', detail, re.M)
+    if not m:
+        return '', ''
+    y = re.search(r'YoY\s*([+\-]?[\d.]+%|[흑적]자\s*[전지][환속])', m.group(2) or '')
+    return m.group(1).strip(), (y.group(1) if y else '')
+
+
 def _detail_line(detail: str, key: str) -> str:
     for ln in detail.split('\n'):
         head = ln.split(':', 1)[0]
@@ -155,10 +167,10 @@ def generate(sb=None) -> str:
         try:
             if '잠정' in nm and corp not in earn:
                 d = get_disclosure_detail(rc, nm)
-                mr = re.search(r'매출:\s*([\d,조억]+)(?:.*?YoY\s*([+\-\d.]+%))?', d)
-                mo = re.search(r'영업이익:\s*([\d,조억]+)', d)
-                if mr:
-                    earn[corp] = (mr.group(1), mo.group(1) if mo else '?', mr.group(2) or '')
+                rev, rev_yoy = _earn_metric(d, '매출')
+                op, op_yoy = _earn_metric(d, '영업이익')
+                if rev:
+                    earn[corp] = (rev, op, op_yoy, rev_yoy)
             elif ('공급계약' in nm or '수주' in nm) and '정정' not in nm and len(contract) < 6:
                 d = get_disclosure_detail(rc, nm)
                 a = _detail_line(d, '계약금액')
@@ -192,10 +204,12 @@ def generate(sb=None) -> str:
 
     if earn:
         rows = sorted(earn.items(), key=lambda x: -_amt_num(x[1][0]))
-        lines = ['📊 <b>잠정실적</b> (매출 / 영업익 · YoY)']
-        for corp, (rev, op, yoy) in rows[:10]:
-            y = f' · YoY {yoy}' if yoy else ''
-            lines.append(f'• {corp}: {rev} / {op}{y}')
+        lines = ['📊 <b>잠정실적</b> (매출 / 영업익 · 영업익 YoY)']
+        for corp, (rev, op, op_yoy, rev_yoy) in rows[:10]:
+            if op:
+                lines.append(f'• {corp}: {rev} / {op}' + (f' · YoY {op_yoy}' if op_yoy else ''))
+            else:   # 영업익 칸이 '-'인 공시 — 예전엔 '?'로 나갔다
+                lines.append(f'• {corp}: {rev} / 영업익 미기재' + (f' · 매출 YoY {rev_yoy}' if rev_yoy else ''))
         if len(rows) > 10:
             lines.append(f'• 외 {len(rows) - 10}곳')
         blocks.append('\n'.join(lines))
