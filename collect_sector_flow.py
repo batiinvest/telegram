@@ -243,7 +243,7 @@ def _gauge(vals: list) -> dict:
 
 def compute_osc(sb, write_days: int | None = WRITE_DAYS) -> int:
     """소분류 합계 전체 → 중분류 × 시장 오실레이터·수급 칸·단계. write_days=None이면 전체를 쓴다."""
-    from collect_flow_empty import _macd_hist, _stage, OSC_WARMUP, SPAN, MIN_SER
+    from collect_flow_empty import _macd_hist, _position, _stage, OSC_WARMUP, SPAN, MIN_SER
     rows = fetch_all_pages(sb.table(DAILY)
                            .select('base_date,wics_code,market,net_amt,cap,cap_flow')
                            .order('base_date').order('wics_code').order('market'))
@@ -261,7 +261,9 @@ def compute_osc(sb, write_days: int | None = WRITE_DAYS) -> int:
         osc = _macd_hist(xs)
         xv = dict(xs)
         hist = []                                   # 워밍업 뒤 오실레이터 이력
+        allv = []                                   # 처음부터의 이력 — 수급 위치는 원본처럼 워밍업을 안 뺀다
         for i, (d, o) in enumerate(osc):
+            allv.append(o)
             if i < OSC_WARMUP:
                 continue
             hist.append(o)
@@ -269,6 +271,8 @@ def compute_osc(sb, write_days: int | None = WRITE_DAYS) -> int:
                 continue
             win = hist[-SPAN:]
             gauge = _gauge(win) if len(win) >= MIN_SER else None
+            if gauge:
+                gauge.update(_position(allv) or {})   # p·n·d5 — 종목과 같은 계산
             net, capf, cap = days[d]
             out.append({'base_date': d, 'mid_code': mid, 'market': g, 'name': names.get(mid),
                         'x': round(xv[d], 6), 'osc': round(o, 7),

@@ -68,6 +68,11 @@ MIN_SER = 8      # 백분위를 말할 최소 표본 (_fmRenderEmpty)
 #   63일 창 안 위치 평균 1.5%p. 업종 오실레이터(collect_sector_flow)도 이 상수를 쓴다.
 MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 9
 OSC_WARMUP = 10  # EMA가 막 시작한 앞쪽 점(0 근처로 쏠림)은 비교에서 뺀다
+# 수급 위치(퍼센타일) — 원본 「1400종목 수급오실레이터 퍼센타일」(2026-10-28, config.js FLOW_POS와 같게).
+#   현재 오실레이터의 최근 60개 관측치 안 위치 P0~P100 = Excel PERCENTRANK.INC(같은 값은 가운데 순위),
+#   관측치 20개부터, 5거래일 변화(%p). 원본 종목별데이터 73,269점을 이 계산으로 재현해 전부 일치(차 1e-16).
+#   원본은 EMA 앞쪽 점을 빼지 않는다 — 위치만 원본대로, 칸(lv)은 기존 창·워밍업 그대로.
+POS_WIN, POS_MIN, POS_D = 60, 20, 5
 
 # ── 이 모듈 고유 ─────────────────────────────────────────────────────────────
 MIN_PEERS = 10        # 순위를 매길 최소 집단 크기 — 이보다 작으면 한 단계 위 분류로
@@ -144,6 +149,30 @@ def _macd_hist(ser: list) -> list:
         sg = macd if sg is None else sg + kg * (macd - sg)
         out.append((d, macd - sg))
     return out
+
+
+def _pctrank(win: list) -> float:
+    """win 마지막 값의 PERCENTRANK.INC(0~1) — 같은 값은 가운데 순위로 센다(원본과 같게)."""
+    cur = win[-1]
+    less = sum(1 for v in win if v < cur)
+    eq = sum(1 for v in win if v == cur)
+    return (less + 0.5 * (eq - 1)) / (len(win) - 1)
+
+
+def _position(hist: list) -> dict | None:
+    """오실레이터 이력(오래된→최근) → 수급 위치 {p, n, d5}. 관측치가 POS_MIN보다 적으면 None.
+
+    p = 최근 POS_WIN개 안 현재값 위치(0~100), n = 그 관측치 수, d5 = POS_D거래일 전 위치와의 차(%p).
+    화면 config.js flowPosOf와 같은 계산 — 바꾸면 둘 다.
+    """
+    def at(end):
+        win = hist[max(0, end - POS_WIN):end]
+        return _pctrank(win) * 100 if len(win) >= POS_MIN else None
+    p = at(len(hist))
+    if p is None:
+        return None
+    p5 = at(len(hist) - POS_D)
+    return {'p': round(p, 1), 'n': min(len(hist), POS_WIN), 'd5': None if p5 is None else round(p - p5, 1)}
 
 
 def _osc_series(days: dict, dates: list) -> list:
@@ -629,7 +658,8 @@ def _stat(days: dict, dates: list, cut_date: str):
     avg = 5일 수급 비율의 평균(가로축 '공급강도' 순위용).
     """
     base = _osc_series(days, dates)
-    ser = [o for o in _macd_hist(base)[OSC_WARMUP:] if o[0] >= cut_date]
+    hist = _macd_hist(base)
+    ser = [o for o in hist[OSC_WARMUP:] if o[0] >= cut_date]
     if len(ser) < MIN_SER:
         return None, 'short'
     # 마지막 거래일 값이 없으면 어제 판정을 오늘 행에 적게 된다 — 적지 않는다
@@ -648,10 +678,12 @@ def _stat(days: dict, dates: list, cut_date: str):
     avg_osc = statistics.fmean(vals)
     xs = [v for d, v in base if d >= cut_date]
     avg = statistics.fmean(xs) if xs else 0.0
+    gauge = {'lv': [round(x, 4) for x in (q10[8], q4[2], avg_osc, q4[0], q10[0])],
+             'cur': round(cur, 4), 'prev': round(vals[-2], 4)}
+    gauge.update(_position([v for _, v in hist]) or {})   # 수급 위치 p·n·d5 (원본 1400종목 파일)
     return {'cur': cur, 'avg': avg,
             'pct': sum(1 for v in vals if v < cur) / len(vals) * 100,
-            'gauge': {'lv': [round(x, 4) for x in (q10[8], q4[2], avg_osc, q4[0], q10[0])],
-                      'cur': round(cur, 4), 'prev': round(vals[-2], 4)}}, None
+            'gauge': gauge}, None
 
 
 def _stage(g: dict | None) -> str | None:
