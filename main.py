@@ -204,7 +204,9 @@ class DartRoutingBot:
 
     @staticmethod
     def _fmt_eok(won) -> str:
-        """원 단위 정수 → '549억' / '-70억' / '1.6조' 압축 표기."""
+        """원 단위 정수 → '549억' / '-70억' / '1조 6,000억' 표기.
+        잠정실적 본문(dart_parse_helpers._fmt_amount)과 같은 형식·버림 — 예전엔 같은 메시지 안에서
+        본문 '104조 6,154억', 추이 '104.6조'로 두 가지였다(10-28)."""
         if won is None:
             return '-'
         try:
@@ -214,9 +216,10 @@ class DartRoutingBot:
         sign = '-' if n < 0 else ''
         a = abs(n)
         if a >= 1_000_000_000_000:      # 조
-            return f'{sign}{a / 1_000_000_000_000:.1f}조'
+            jo, eok = a // 1_000_000_000_000, (a % 1_000_000_000_000) // 100_000_000
+            return f'{sign}{jo}조 {eok:,}억' if eok else f'{sign}{jo}조'
         if a >= 100_000_000:            # 억
-            return f'{sign}{round(a / 100_000_000):,}억'
+            return f'{sign}{a // 100_000_000:,}억'
         return f'{sign}{round(a / 10_000):,}만'
 
     def _earnings_trend(self, stock_code: str, rcept_no: str = "", n: int = 5,
@@ -426,8 +429,9 @@ class DartRoutingBot:
 
     def _build_msg(self, corp_name, report_nm, rcept_no, stock_code, prefix="", detail=""):
         emoji       = self.get_emoji(report_nm)
-        # 배지와 같은 이모지면 생략 ("🚨[긴급] 🚨[기업명]" 중복 방지)
-        if emoji and emoji in prefix:
+        # 배지([주요]·[긴급]·[시장속보])가 있으면 종류 이모지는 뺀다 — '📌 [주요] 📄 [SK하이닉스]'처럼
+        # 머리에 이모지가 겹쳤다(10-28). 배지 없는 보통 공시만 종류 이모지로 머리를 단다.
+        if prefix:
             emoji = ""
         link        = f"http://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
         target_code = COMPANY_CODES.get(corp_name, stock_code)

@@ -90,6 +90,14 @@ NEWS_THEME_GATE: Dict[str, List[str]] = {
 }
 
 
+def _desc_tail(desc: str) -> str:
+    """요약문이 문장 중간에서 끊겼을 때만 '...' — 예전엔 끝났든 아니든 늘 붙여 '다.…'·'......'가 됐다(10-28)."""
+    d = (desc or '').rstrip()
+    if not d or d.endswith(('...', '…', '.', '!', '?', '"', '”', "'", '’')):
+        return ''
+    return '...'
+
+
 def _theme_gate_ok(company: str, title: str, desc: str = '') -> bool:
     """산업방으로 보내도 되는 기사인가 — 게이트에 없는 종목은 늘 True."""
     kws = NEWS_THEME_GATE.get(company)
@@ -851,7 +859,7 @@ class NaverNewsBot:
                         f"{hidden_link}"
                         f"🏢 <b>[{html.escape(company_name, quote=False)}] ({time_str})</b>\n{stock_msg}"
                         f"<b><a href='{l_attr}'>{html.escape(title, quote=False)}</a></b>\n\n"
-                        f"📄 {html.escape(desc, quote=False)}..."
+                        f"📄 {html.escape(desc, quote=False)}{_desc_tail(desc)}"
                     )
 
                     industry = COMPANY_TO_INDUSTRY.get(company_name)

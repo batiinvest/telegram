@@ -103,3 +103,11 @@ def test_theme_gate_only_lets_topic_news_into_industry_room(monkeypatch):
     assert nm._theme_gate_ok("한화에어로스페이스", "아무 기사")          # 게이트 없는 종목은 늘 통과
     monkeypatch.setattr(nm, "NEWS_THEME_GATE", nm._parse_theme_gate("가나증권: 위성, 발사\n\n잘못된줄"))
     assert nm.NEWS_THEME_GATE == {"가나증권": ["위성", "발사"]}
+
+
+def test_desc_tail_only_when_cut():
+    """뉴스 요약 끝 '...'는 문장 중간에서 끊겼을 때만(10-28 가독성 검토)."""
+    assert nm._desc_tail("SK하이닉스가 3분기 실적을 발표하며 주당") == "..."
+    assert nm._desc_tail("배당을 확대한다고 밝혔다.") == ""
+    assert nm._desc_tail("이미 잘린 요약...") == ""
+    assert nm._desc_tail("") == ""

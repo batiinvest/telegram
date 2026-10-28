@@ -1013,8 +1013,8 @@ def get_market_scoreboard(shared_prices: dict = None, breadth: str = None,
         kosdaq = get_index_status("1001")
         market_summary = (
             f"📊 <b>[지수]</b>\n"
-            f"{fmt_idx(kospi, '1. 코스피')}\n"
-            f"{fmt_idx(kosdaq, '2. 코스닥')}\n"
+            f"{fmt_idx(kospi, '코스피')}\n"     # 둘뿐이라 번호(1. 2.)는 뺌
+            f"{fmt_idx(kosdaq, '코스닥')}\n"
         )
 
     from managers import market_timer
@@ -1085,7 +1085,8 @@ def get_market_scoreboard(shared_prices: dict = None, breadth: str = None,
         r_icon = '🔴' if sec['rate'] > 0 else '🔵' if sec['rate'] < 0 else '➖'
         msg += f"{rank}. <b>{sec['name']}</b> {r_icon} {fmt_change_pct(sec['rate'])}\n"
 
-    msg += "════════════\n💡 <b>Tip:</b> 상세 분석은 각 산업방에서 <i>/업황</i> 또는 <i>/자금</i>"
+    # 예전엔 끝에 'Tip: 상세 분석은 각 산업방에서 /업황 또는 /자금'이 점심·마감 매일 2회 붙었다 — 반복 문구라 뺌(10-28)
+    msg += "════════════"
     return msg
 
 def get_universe_ranking(shared_prices: dict = None, tag_map: dict = None) -> str:
@@ -2184,7 +2185,14 @@ def get_macro_briefing(data: dict, sectors: dict = None, sector_date: str = None
     usd = data.get('usd_krw');  usd_c = data.get('usd_krw_chg')
 
     if y10 is not None:
-        lines.append(f"🏦 <b>미 10년물</b>  {y10:.2f}%{_chg(y10_c)}")
+        # 금리는 bp(0.01%p)로 — us10y_chg는 금리 자체의 상대 변화율이라 '5.00% (+0.04%)'가
+        # 실제로는 +0.2bp인데 +4bp처럼 읽혔다(10-28). 변화율로 전일 금리를 되돌려 차이를 bp로.
+        y10_line = f"🏦 <b>미 10년물</b>  {y10:.2f}%"
+        if y10_c is not None and y10_c != -100:
+            bp = y10 * y10_c / (100 + y10_c) * 100
+            icon = '🔴' if bp >= 0.05 else '🔵' if bp <= -0.05 else '➖'
+            y10_line += f"  ({icon}{bp:+.1f}bp)" if icon != '➖' else "  (➖0.0bp)"
+        lines.append(y10_line)
     if usd is not None:
         lines.append(f"💵 <b>달러/원</b>  {usd:,.0f}원{_chg(usd_c)}")
     if y10 is not None or usd is not None:
