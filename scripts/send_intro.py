@@ -176,7 +176,7 @@ def build_message(rooms: list) -> str:
         '✅ <b>입장 안내</b>',
         '· 승인 후 1~2일 내 순차 입장',
         '· 3일 이상 미접속 시 자동 퇴장',
-        '· 후원자 우선 입장: buymeacoffee.com/batiinvest',
+        '· 후원자 우선 입장: litt.ly/batiinvest',
         '',
         '📬 신규 채팅방 개설 문의: @BatiInvestment',
     ]
