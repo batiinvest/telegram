@@ -45,6 +45,7 @@ DEFAULT_CHAT_ID = "@BatiInvestChat"
 # reload_flag 시 재로드 콜백(config.on_reload)은 dart_rules 모듈이 등록.
 from dart_rules import (
     classify_disclosure, decide_targets, load_dart_filters,
+    event_fingerprint, is_secondary_earnings, is_urgent_followup,
     DART_BLACKLIST, DART_TITLE_FILTER, DART_CORP_FILTER,
     CAP_MAIN, CAP_LARGE,
 )
@@ -63,6 +64,11 @@ class DartRoutingBot:
         # 일일 운영 통계 (19시 이후 요약 1회 보고)
         self._day_stats: dict = {"date": "", "reported": False, "sent": 0,
                                  "filtered": 0, "fail": 0, "err": 0, "by_level": {}}
+
+        # 산업·메인 방송 정리용(_trim_broadcast) — 재시작하면 비지만 하루 중복 몇 건 정도라 메모리로 둔다
+        self._bcast_seen: dict = {}    # (방, 사건 지문) → (회사, 시각)
+        self._main_urgent: dict = {}   # 회사 → 메인에 긴급 보낸 시각
+        self._cfs_cache: dict = {}     # 종목코드 → 연결(CFS) 재무 있음 여부
 
         # 시총 캐시 (메인 채널 필터링용)
         self._cap_cache: dict = {}   # stock_code(숫자) → market_cap
@@ -116,6 +122,60 @@ class DartRoutingBot:
             return None
         code = stock_code.replace('.KS', '').replace('.KQ', '').strip()
         return self._cap_cache.get(code)
+
+    def _has_consolidated(self, stock_code: str) -> bool:
+        """연결(CFS) 재무가 있는 회사인가 — 별도 잠정실적을 방송에서 뺄지(dart_rules.is_secondary_earnings).
+        조회 실패·정보 없음이면 False(=예전처럼 보냄)."""
+        code = (stock_code or '').split('.')[0].strip()
+        if not code:
+            return False
+        if code not in self._cfs_cache:
+            has = False
+            try:
+                sb = _bridge._get_client() if _BRIDGE_OK else None
+                if sb:
+                    r = (sb.table('financials').select('stock_code')
+                         .eq('stock_code', code).eq('fs_div', 'CFS').limit(1).execute())
+                    has = bool(r.data)
+            except Exception as e:
+                logging.debug(f"[공시봇] 연결재무 확인 실패({code}): {e}")
+                return False   # 실패는 기억하지 않음 — 다음에 다시
+            self._cfs_cache[code] = has
+        return self._cfs_cache[code]
+
+    def _trim_broadcast(self, targets: list, corp_name: str, stock_code: str,
+                        report_nm: str, detail: str, level: str, comp_chat) -> list:
+        """산업·메인 방송에서 ①연결 실적 회사의 별도·자회사 잠정실적 ②다른 회사가 이미 보낸 같은 사건
+        (지주·자회사 공시) ③같은 회사 긴급의 후속 안내(메인)를 뺀다. 기업방은 늘 그대로.
+        정책은 dart_rules 순수 함수, 여기는 하루치 상태만 들고 있다(2026-10-28 점검)."""
+        now = time.time()
+        self._bcast_seen = {k: v for k, v in self._bcast_seen.items() if now - v[1] < 86400}
+        self._main_urgent = {k: v for k, v in self._main_urgent.items() if now - v < 6 * 3600}
+        fp = event_fingerprint(report_nm, detail)
+        secondary = ('잠정' in report_nm) and is_secondary_earnings(report_nm, self._has_consolidated(stock_code))
+        out = []
+        for t in targets:
+            if t == comp_chat:
+                out.append(t)
+                continue
+            if secondary:
+                continue
+            seen = self._bcast_seen.get((t, fp)) if fp else None
+            if seen and seen[0] != corp_name:
+                continue
+            if (t == DEFAULT_CHAT_ID and level == 'urgent' and is_urgent_followup(report_nm)
+                    and corp_name in self._main_urgent):
+                continue
+            out.append(t)
+        for t in out:
+            if fp and t != comp_chat:
+                self._bcast_seen.setdefault((t, fp), (corp_name, now))
+            if t == DEFAULT_CHAT_ID and level == 'urgent':
+                self._main_urgent[corp_name] = now
+        if len(out) < len(targets):
+            logging.info(f"✂️ [공시] 방송 {len(targets) - len(out)}곳 생략(별도실적·같은 사건·긴급 후속): "
+                         f"{corp_name} {report_nm}")
+        return out
 
     def _seed_history_from_db(self):
         """notice_history의 최근 2일 발송분(#rcept_no 마커)으로 이력 복원.
@@ -575,6 +635,7 @@ class DartRoutingBot:
             cap_ok_main=(cap is None or cap >= CAP_MAIN),
             cap_ok_large=(cap is not None and cap >= CAP_LARGE),
         )
+        targets = self._trim_broadcast(targets, corp_name, stock_code, report_nm, detail, level, _cid)
 
         results = [stock_api.send_telegram(t, msg) for t in targets]
         failed  = [t for t, ok in zip(targets, results) if not ok]

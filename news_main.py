@@ -17,7 +17,7 @@ import re
 import hashlib
 
 from email.utils import parsedate_to_datetime
-from typing import Dict
+from typing import Dict, List
 
 from managers import market_timer, HistoryManager, get_session
 import stock_api
@@ -52,6 +52,7 @@ BURST_WINDOW = datetime.timedelta(minutes=60)
 BUNDLE_FLUSH = datetime.timedelta(minutes=60)
 BUNDLE_FILE = "news_bundle_pending.json"   # 재시작해도 모아 둔 기사를 잃지 않게
 BUNDLE_MAX_CHARS = 3500                    # 텔레그램 4,096자(태그 제외 글자 수) 아래로 나눠 보낸다
+_BUNDLE_MARK_RE = re.compile(r'\s*⟪묶음 \d+⟫$')   # 발송 기록 끝 묶음 표시(_route 'bundled')
 
 _KST = datetime.timezone(datetime.timedelta(hours=9))
 
@@ -79,6 +80,36 @@ def _parse_db_ts(s: str) -> datetime.datetime:
     return dt.astimezone().replace(tzinfo=None)
 
 
+# 테마로 편입된 종목(본업이 그 산업이 아님)의 뉴스는 산업방에 보낼 때 주제 낱말이 있어야 보낸다(종목방은 그대로).
+# 미래에셋증권이 '우주'로 묶여 10-25~28 뉴스 34건 중 우주 관련 3건뿐, 나머지(AI 페스티벌·다른 회사 목표주가)가
+# 우주 산업방으로 나갔다(2026-10-28 점검). app_config 'news_theme_gate'(줄마다 '회사명: 낱말,낱말')로 운영 조정.
+_SPACE_KW = ['우주', '스페이스', '위성', '발사', '로켓', 'SpaceX', '항공우주', '누리호', '궤도']
+NEWS_THEME_GATE: Dict[str, List[str]] = {
+    '미래에셋증권': _SPACE_KW, '미래에셋벤처투자': _SPACE_KW, '아주IB투자': _SPACE_KW,
+    '한국가구': _SPACE_KW, '세아베스틸지주': _SPACE_KW,
+}
+
+
+def _theme_gate_ok(company: str, title: str, desc: str = '') -> bool:
+    """산업방으로 보내도 되는 기사인가 — 게이트에 없는 종목은 늘 True."""
+    kws = NEWS_THEME_GATE.get(company)
+    if not kws:
+        return True
+    text = f'{title} {desc}'.lower()
+    return any(k.lower() in text for k in kws)
+
+
+def _parse_theme_gate(raw: str) -> Dict[str, List[str]]:
+    out = {}
+    for ln in (raw or '').split('\n'):
+        name, _, kws = ln.partition(':')
+        name = name.strip()
+        words = [k.strip() for k in kws.split(',') if k.strip()]
+        if name and words:
+            out[name] = words
+    return out
+
+
 def _load_news_filters():
     """
     app_config에서 스팸패턴/실질보도 키워드 로드.
@@ -94,6 +125,7 @@ def _load_news_filters():
         "news_low_trust_sources":   ",".join(LOW_TRUST_SOURCES),
         "news_dup_similarity":      str(DUP_SIM_THRESHOLD),
         "news_dup_event_gate":      str(DUP_EVENT_GATE),
+        "news_theme_gate":          "\n".join(f"{k}: {','.join(v)}" for k, v in NEWS_THEME_GATE.items()),
     })
     try:
         client = _bridge._get_client()
@@ -102,7 +134,7 @@ def _load_news_filters():
         res = client.table('app_config').select('key,value').in_(
             'key', ['news_spam_patterns', 'news_meaningful_keywords',
                     'news_low_trust_sources', 'news_dup_similarity',
-                    'news_dup_event_gate']
+                    'news_dup_event_gate', 'news_theme_gate']
         ).execute()
         cfg = {r['key']: r['value'] for r in (res.data or [])}
 
@@ -142,6 +174,11 @@ def _load_news_filters():
                     logging.info(f"✅ [뉴스봇] 이벤트키 게이트 {DUP_EVENT_GATE} DB에서 로드")
             except (TypeError, ValueError):
                 pass
+
+        if 'news_theme_gate' in cfg:   # 비워 두면 게이트 없음
+            NEWS_THEME_GATE.clear()
+            NEWS_THEME_GATE.update(_parse_theme_gate(cfg['news_theme_gate']))
+            logging.info(f"✅ [뉴스봇] 테마 편입 종목 산업방 게이트 {len(NEWS_THEME_GATE)}종목 DB에서 로드")
     except Exception as e:
         logging.warning(f"⚠️ [뉴스봇] 필터 키워드 DB 로드 실패 (기본값 사용): {e}")
 
@@ -518,8 +555,10 @@ class NaverNewsBot:
         except Exception as e:
             logging.warning(f"⚠️ [뉴스봇] 묶음 대기 저장 실패: {e}")
 
-    def _route(self, chat_id, msg: str, item: list) -> bool:
-        """한 방으로 개별 발송하거나, 그 방이 몰리는 중이면 묶음에 넣는다. 발송 성공·묶음 대기면 True."""
+    def _route(self, chat_id, msg: str, item: list):
+        """한 방으로 개별 발송하거나, 그 방이 몰리는 중이면 묶음에 넣는다.
+        반환: 'sent'(개별 발송) · 'bundled'(묶음 대기) · False(발송 실패) — 앞의 둘은 참으로 평가된다.
+        구분하는 이유: 예전엔 묶음 대기도 True라 발송 기록 '[뉴스] 1/1'만으로는 실제로 나갔는지 알 수 없었다."""
         now = datetime.datetime.now()
         key = str(chat_id)
         sends = [t for t in self._room_sends.get(key, []) if now - t < BURST_WINDOW]
@@ -528,11 +567,11 @@ class NaverNewsBot:
             b = self._bundles.setdefault(key, {'chat_id': chat_id, 'first': now.isoformat(), 'items': []})
             b['items'].append(item)
             self._save_bundles()
-            return True
+            return 'bundled'
         ok = stock_api.send_telegram(chat_id, msg, preview=True, keyboard=COMMON_BUTTON)
         if ok:
             sends.append(now)
-        return ok
+        return 'sent' if ok else False
 
     @staticmethod
     def _bundle_messages(items: list) -> list:
@@ -603,18 +642,28 @@ class NaverNewsBot:
                 return
             since = (datetime.datetime.now(datetime.timezone.utc)
                      - self._title_cache_ttl).isoformat()
-            res = (client.table('notice_history')
-                   .select('target,content,created_at')
-                   .like('content', '[뉴스] %')
-                   .gte('created_at', since)
-                   .order('created_at', desc=False)   # 시간순 — 이벤트 캐시에 최신이 남도록
-                   .execute())
+            # 페이지로 다 받는다 — 한 번에 받으면 1,000행에서 잘리는데 시간순이라 '가장 최근' 기사가 빠졌다
+            # (하루 뉴스 기록 886건+ 10-28 — 재시작 직후 최신 기사 중복 방지가 비던 것)
+            rows = []
+            for off in range(0, 20000, 1000):
+                page = (client.table('notice_history')
+                        .select('target,content,created_at')
+                        .like('content', '[뉴스] %')
+                        .gte('created_at', since)
+                        .order('created_at', desc=False)   # 시간순 — 이벤트 캐시에 최신이 남도록
+                        .order('id', desc=False)            # 같은 시각 페이지 경계 결정성
+                        .range(off, off + 999)
+                        .execute()).data or []
+                rows.extend(page)
+                if len(page) < 1000:
+                    break
             n = 0
-            for row in (res.data or []):
+            for row in rows:
                 company = row.get('target') or ''
                 content = row.get('content') or ''
                 if content.startswith('[뉴스]'):
                     content = content[len('[뉴스]'):].strip()
+                content = _BUNDLE_MARK_RE.sub('', content)   # 기록 끝 '⟪묶음 N⟫' 표시는 제목이 아님
                 title = content
                 if not company or not title:
                     continue
@@ -809,7 +858,9 @@ class NaverNewsBot:
                     _item = [company_name, time_str, title, link]
                     _results = []
                     # 방마다 몰리는 중이면 묶음으로(_route) — 산업방과 종목방은 따로 센다
-                    if industry and industry in INDUSTRY_CHAT_IDS:
+                    # 테마 편입 종목은 주제 낱말이 있어야 산업방으로(_theme_gate_ok, 종목방은 그대로)
+                    if (industry and industry in INDUSTRY_CHAT_IDS
+                            and _theme_gate_ok(company_name, title, desc)):
                         _results.append(self._route(INDUSTRY_CHAT_IDS[industry], msg, _item))
                     # stock_api.get_company_chat_id()로 통일
                     # — 종목명 변경 시 stock_code fallback 포함
@@ -829,9 +880,12 @@ class NaverNewsBot:
 
                     if _BRIDGE_OK:
                         try:
+                            # ok = 개별 발송+묶음 대기, 끝의 '⟪묶음 N⟫' = 그중 묶음 대기로 간 방 수
+                            # (캐시 복원이 '[뉴스] ' 접두를 읽으므로 접두는 그대로 둔다)
+                            _n_bun = sum(1 for r in _results if r == 'bundled')
                             _bridge.log_notice(
                                 target=company_name,
-                                content=f"[뉴스] {title}",
+                                content=f"[뉴스] {title}" + (f" ⟪묶음 {_n_bun}⟫" if _n_bun else ""),
                                 sent_count=len(_results),
                                 ok_count=sum(1 for r in _results if r),
                             )

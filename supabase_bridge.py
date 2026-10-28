@@ -113,8 +113,10 @@ class SupabaseBridge:
     # ══════════════════════════════════════════
     #  공지 발송 기록
     # ══════════════════════════════════════════
-    def log_notice(self, target: str, content: str, sent_count: int = 1, ok_count: int = 1):
-        """공시/뉴스/브리핑 발송 기록을 notice_history에 저장"""
+    def log_notice(self, target: str, content: str, sent_count: int = 1, ok_count: int = 1,
+                   max_len: int = 500):
+        """공시/뉴스/브리핑 발송 기록을 notice_history에 저장.
+        max_len: 브리핑처럼 본문을 남겨 사후 점검할 기록은 길게(job_infra._send_logged)."""
         client = self._get_client()
         if not client:
             return
@@ -122,7 +124,7 @@ class SupabaseBridge:
         try:
             client.table("notice_history").insert({
                 "target":     target,
-                "content":    content[:500],   # 너무 길면 자름
+                "content":    content[:max_len],   # 너무 길면 자름
                 "sent_count": sent_count,
                 "ok_count":   ok_count,
             }).execute()

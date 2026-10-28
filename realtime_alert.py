@@ -38,6 +38,18 @@ ADMIN_CHAT_ID = "@batiinvest"
 from telegram_utils import LOW_TRUST_SOURCES
 
 
+def _log_alert(chat_id, msg: str):
+    """실시간 시세 알림도 notice_history에 남긴다 — 예전엔 sent_alert.txt(서버 파일)뿐이라
+    무엇이 어느 방에 나갔는지 사후 점검할 수 없었다(2026-10-28). 실패해도 무시."""
+    try:
+        import re
+        from supabase_bridge import bridge as _b
+        text = re.sub(r'<[^>]+>', '', msg).replace('\n', ' ').strip()
+        _b.log_notice(target=str(chat_id), content=f"[시세알림] {text}", sent_count=1, ok_count=1)
+    except Exception:
+        pass
+
+
 def _load_alert_config():
     """app_config에서 시세 알림 임계값, 어드민 채팅방, 신뢰도 낮은 출처 로드"""
     global ALERT_SURGE_THRESHOLD, ALERT_UP_THRESHOLD, ALERT_DOWN_THRESHOLD
@@ -233,12 +245,16 @@ class KisMyStockScanner:
     def _send_once(self, key, chat_id, msg):
         # sent_alert.txt는 일자별 초기화가 없어 전일 키가 오늘 알림을 막음 → 날짜 접두 필수
         key = f"{market_timer.get_now().strftime('%Y%m%d')}_{key}"
+        ok = False
         with self._lock:
             if not self.sent_history.contains(key):
                 # 발송 성공한 경우에만 기록 — 실패(429/네트워크 등) 시 미기록으로 다음 사이클 재시도.
                 # (급변동장 429는 급등·상한가 알림과 동시다발 → 무조건 기록하면 그 순간 알림 영구 소실)
-                if stock_api.send_telegram(chat_id, msg):
+                ok = stock_api.send_telegram(chat_id, msg)
+                if ok:
                     self.sent_history.add(key)
+        if ok:   # DB 기록은 잠금 밖에서 — 알림 루프를 늦추지 않게
+            _log_alert(chat_id, msg)
 
     # ===============================================================
     # 🛠️ [Helper] 제보 및 관리자 기능 (기존 로직 복원)

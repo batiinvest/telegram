@@ -108,11 +108,51 @@ def classify_disclosure(report_nm: str) -> str:
     # (키워드는 app_config에서 운영 변경되므로 겹침을 전제로 방어)
     if any(k in report_nm for k in URGENT_KEYWORDS):
         return 'urgent'
-    if any(k in report_nm for k in SKIP_FOR_BROADCAST):
+    if any(k in report_nm for k in SKIP_FOR_BROADCAST) or any(k in report_nm for k in ROUTINE_FILING_KEYWORDS):
         return 'skip'
     if any(k in report_nm for k in MAJOR_KEYWORDS):
         return 'major'
     return 'normal'
+
+
+# 증권사 파생결합증권(ELS·DLS) 등 일상 발행 서류 — 기업방만(산업·메인 방송 제외).
+# SKIP_FOR_BROADCAST는 app_config 'dart_skip'이 통째로 덮어써서(이미 시드됨) 기본값에 넣어도 안 먹으니 따로 둔다.
+# 2026-10-28: 미래에셋증권(우주 테마) '일괄신고추가서류(파생결합증권)'가 보통 등급으로 우주 산업방에 나감.
+ROUTINE_FILING_KEYWORDS = ("일괄신고추가서류", "일괄신고서")
+
+# 긴급 공시의 후속 안내 — 같은 회사 긴급이 이미 메인에 나갔으면 메인엔 다시 안 보낸다(기업·산업방은 그대로).
+# 2026-10-28 피델릭스: 거래정지 → 정지기간변경 → 기타시장안내가 40분 안에 메인 3통.
+URGENT_FOLLOWUP_KEYWORDS = ("기간변경", "기타시장안내")
+
+
+def is_urgent_followup(report_nm: str) -> bool:
+    return any(k in report_nm for k in URGENT_FOLLOWUP_KEYWORDS)
+
+
+def is_secondary_earnings(report_nm: str, has_consolidated: bool) -> bool:
+    """연결 실적을 따로 내는 회사의 별도(개별)·자회사 잠정실적 — 산업·메인 방송에서 뺀다(기업방만).
+    2026-10-28 HD한국조선해양 별도·연결·자회사 잠정실적 3건 + HD현대중공업 2건이 조선방·메인에 5통씩 나갔다.
+    has_consolidated: 그 회사에 연결(CFS) 재무가 있는가(financials)."""
+    return has_consolidated and '잠정' in report_nm and '연결' not in report_nm
+
+
+def event_fingerprint(report_nm: str, detail: str):
+    """다른 회사가 같은 사건을 또 공시한 것(지주사 '…(자회사의 주요경영사항)')을 알아보는 열쇠.
+    공급계약·수주 = 계약금액, 잠정실적 = 매출·영업이익(파싱된 본문 기준). 못 뽑으면 None.
+    2026-10-26·28: 코오롱·코오롱글로벌, HL홀딩스·HL D&I 같은 계약이 메인방에 두 통씩."""
+    import re
+    nm, d = report_nm or '', detail or ''
+    if '공급계약' in nm or '수주' in nm:
+        m = re.search(r'계약금액\s*:\s*([^\n(]+)', d)
+        if m and re.search(r'\d', m.group(1)):
+            return ('계약', re.sub(r'\s+', '', m.group(1)))
+        return None
+    if '잠정' in nm:
+        rev = re.search(r'^\s*매출:\s*([^/\n]+)', d, re.M)
+        if rev:
+            op = re.search(r'^\s*영업이익:\s*([^/\n]+)', d, re.M)
+            return ('실적', rev.group(1).strip(), op.group(1).strip() if op else '')
+    return None
 
 
 def decide_targets(level: str, *, main_chat: str, ind_chat: str | None,

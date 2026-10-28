@@ -329,3 +329,17 @@ def _log_notice(target: str, content: str):
         _bridge.log_notice(target=target, content=content, sent_count=1, ok_count=1)
     except Exception:
         pass
+
+
+def _send_logged(target: str, label: str, msg: str, **kw) -> bool:
+    """발송 + 본문·성공 여부를 notice_history에 기록(사후 점검용).
+    예전엔 '[마감 브리핑] 시작'처럼 한 줄만 남거나(신고가·공매도는 아예 없음) 발송 성공 여부도
+    없어, 메인방에 실제로 무엇이 나갔는지 확인할 수 없었다(2026-10-28 점검)."""
+    ok = stock_api.send_telegram(target, msg, **kw)
+    if _BRIDGE_OK:
+        try:
+            _bridge.log_notice(target=target, content=f"[{label}] {'발송' if ok else '발송 실패'}\n{msg}",
+                               sent_count=1, ok_count=int(bool(ok)), max_len=4000)
+        except Exception:
+            pass
+    return ok

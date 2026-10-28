@@ -320,8 +320,22 @@ def parse_preliminary_earnings(kv: dict) -> list:
             if abs(f) >= 10000 or ('.' not in v and abs(f) >= 1000):
                 return ''
             sign = '+' if f > 0 else ''
-            return f'{sign}{v}%'
+            return f'{sign}{f:.1f}%'   # 소수 한 자리로 통일(회사마다 '157.59'·'67.6' 섞여 나갔음)
         return ''
+
+    def _loss_cmp(cur_s: str, prev_s: str):
+        """둘 중 하나라도 적자면 증감률(%) 대신 흑자/적자 전환·지속 — 손실끼리의 %는 부호 뜻이 모호하다
+        (SKC 영업익 -496억 'YoY +9.7%', 2026-10-28). 비교할 수 없으면 None(회사가 적은 % 그대로)."""
+        if not (_IS_NUM.match(cur_s or '') and _IS_NUM.match(prev_s or '')):
+            return None
+        c, p = float(cur_s.replace(',', '')), float(prev_s.replace(',', ''))
+        if c >= 0 and p >= 0:
+            return None
+        if p >= 0 > c:
+            return '적자전환'
+        if c >= 0 > p:
+            return '흑자전환'
+        return '적자지속' + (' (손실 축소)' if c > p else ' (손실 확대)' if c < p else '')
 
     for idx, (k, v) in enumerate(items):
         if k not in _METRICS:
@@ -339,8 +353,8 @@ def parse_preliminary_earnings(kv: dict) -> list:
             continue
 
         amt_str = _fmt_amt(k1)
-        qoq_str = _pct_str(k2)
-        yoy_str = _pct_str(yoy) if _IS_NUM.match(k3) else ''
+        qoq_str = _loss_cmp(k1, curr) or _pct_str(k2)                       # 전기값(직전 분기)과
+        yoy_str = (_loss_cmp(k1, k3) or _pct_str(yoy)) if _IS_NUM.match(k3) else ''   # 전년 동기와
 
         parts = [amt_str]
         if qoq_str:

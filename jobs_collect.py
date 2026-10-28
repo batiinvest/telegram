@@ -17,7 +17,7 @@ from db_utils import fetch_all_pages
 from format_utils import fmt_change_pct
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, CHAT_IDS_BY_CODE
-from job_infra import _job, _is_enabled, _log_notice, _bridge, _BRIDGE_OK, mark_failed, get_missing_jobs, is_dart_maintenance
+from job_infra import _job, _is_enabled, _log_notice, _send_logged, _bridge, _BRIDGE_OK, mark_failed, get_missing_jobs, is_dart_maintenance
 
 # ✅ 재무/시장 데이터 수집 + 상장사 동기화
 try:
@@ -729,8 +729,7 @@ def job_collect_macro():
                 _sectors, _sec_date = {}, None
             msg = stock_api.get_macro_briefing(data, sectors=_sectors, sector_date=_sec_date)
             if msg:
-                stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
-                _log_notice(DEFAULT_CHAT_ID, "[매크로 브리핑] 발송")
+                _send_logged(DEFAULT_CHAT_ID, "매크로 브리핑", msg)
                 logging.info("📊 [매크로 브리핑] 메인 채널 발송 완료")
     except Exception as e:
         logging.error(f"매크로 데이터 수집 실패: {e}")
@@ -863,7 +862,7 @@ def _alert_new_high(rows: list):
 
         header = f"🏆 <b>[52주 신고가 갱신] {today}</b> · {len(rows)}종목\n════════════\n"
         # 섹터 블록 사이 빈 줄로 가독성 확보
-        stock_api.send_telegram(DEFAULT_CHAT_ID, header + "\n\n".join(blocks))
+        _send_logged(DEFAULT_CHAT_ID, "52주 신고가", header + "\n\n".join(blocks))   # 예전엔 기록 없음
         logging.info(f"🏆 [신고가 알림] 메인방 {len(rows)}개 / {len(ordered)}섹터 발송")
 
 
@@ -1044,7 +1043,7 @@ def job_short_surge():
 
         # 3. 메인 채널 알림 (collect_short 공용 포매터)
         msg = _format_surge_msg(surges, multiplier=2.0)
-        stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
+        _send_logged(DEFAULT_CHAT_ID, "공매도 급증", msg)   # 예전엔 기록 없음
         logging.info(f"📉 [공매도급증] 알림 발송 완료 ({len(surges)}건)")
     except Exception as e:
         logging.error(f"❌ [공매도급증] job 실패: {e}")
@@ -1207,8 +1206,7 @@ def job_earnings_surprise_briefing():
     import earnings_surprise
     msg = earnings_surprise.build_briefing()
     if msg:
-        stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
-        _log_notice(DEFAULT_CHAT_ID, "[어닝서프라이즈] 발송")
+        _send_logged(DEFAULT_CHAT_ID, "어닝서프라이즈", msg)
         logging.info("📊 [어닝서프라이즈] 메인채널 발송 완료")
     else:
         logging.info("[어닝서프라이즈] 당일 대상 없음 — 발송 스킵")

@@ -10,7 +10,7 @@ import datetime
 import stock_api
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, COMMON_BUTTON
-from job_infra import (_job, _log_notice, _bridge, _JOB_RESULTS,
+from job_infra import (_job, _log_notice, _send_logged, _bridge, _JOB_RESULTS,
                        _broadcast_to_industries, _broadcast_to_companies,
                        mark_failed, get_missing_jobs)
 from managers import pop_send_failures
@@ -40,15 +40,13 @@ except ImportError as _kie:
 def job_lunch_briefing():
     logging.info("🍱 [점심 브리핑] 시작")
 
-    _log_notice(DEFAULT_CHAT_ID, "[점심 브리핑] 시작")
-
     # 관리종목 시세 1회 배치 조회 → 전광판·유니버스·테마 공유 (KIS 중복 호출 제거)
     prices = stock_api.get_universe_price_map()
 
     # 인사 + 시장 전광판 + 유니버스 랭킹을 한 메시지로 통합 (알림 3건 → 1건)
     intro = "🍱 <b>[점심 시황]</b> 맛점하세요! 오전 장 요약입니다."
     msg = f"{intro}\n\n{stock_api.get_market_scoreboard(shared_prices=prices)}\n\n{stock_api.get_universe_ranking(shared_prices=prices)}"
-    stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
+    _send_logged(DEFAULT_CHAT_ID, "점심 브리핑", msg)   # 본문·성공 여부 기록(예전엔 '시작' 한 줄)
 
     _broadcast_to_industries(
         stock_api.get_industry_theme_ranking, prices,
@@ -61,7 +59,8 @@ def job_naver_report():
     logging.info("📑 [네이버 리포트] 발송 시작")
     try:
         stock_api.run_naver_report_job()
-        _log_notice(DEFAULT_CHAT_ID, "[네이버 리포트] 발송")
+        import naver_report   # 리포트는 메인방이 아니라 리포트 채널로 나간다 — 기록 대상도 그 방
+        _log_notice(naver_report.NAVER_REPORT_CHAT_ID, "[네이버 리포트] 발송")
     except Exception as e:
         logging.error(f"네이버 리포트 발송 에러: {e}")
         mark_failed(e)
@@ -84,8 +83,6 @@ def job_industry_summary():
 @_job("closing", holiday=True)
 def job_daily_closing():
     logging.info("🏁 [마감 브리핑] 시작")
-
-    _log_notice(DEFAULT_CHAT_ID, "[마감 브리핑] 시작")
 
     # 관리종목 시세 1회 배치 조회 → 전광판·유니버스·테마 공유 (KIS 중복 호출 제거)
     prices = stock_api.get_universe_price_map()
@@ -137,7 +134,7 @@ def job_daily_closing():
         msg += f"\n\n{_investor}"
     if _daily_flow:
         msg += f"\n\n{_daily_flow}"
-    stock_api.send_telegram(DEFAULT_CHAT_ID, msg)
+    _send_logged(DEFAULT_CHAT_ID, "마감 브리핑 ①시황", msg)
 
     # ② 관심종목
     msg2 = "🎯 <b>[관심종목 마감]</b> 바티인베스트가 보는 종목들입니다.\n\n"
@@ -153,7 +150,7 @@ def job_daily_closing():
         msg2 += f"\n\n{_leaders}"
     if _uni_flow:
         msg2 += f"\n\n{_uni_flow}"
-    stock_api.send_telegram(DEFAULT_CHAT_ID, msg2, keyboard=COMMON_BUTTON)
+    _send_logged(DEFAULT_CHAT_ID, "마감 브리핑 ②관심종목", msg2, keyboard=COMMON_BUTTON)
 
     _broadcast_to_industries(
         stock_api.get_industry_theme_ranking, prices, _flow,
@@ -213,8 +210,7 @@ def job_disclosure_digest():
     if not msg:
         logging.info("📭 [공시 다이제스트] 오늘 주요·긴급 공시 없음 — 발송 생략")
         return
-    if stock_api.send_telegram(DEFAULT_CHAT_ID, msg):
-        _log_notice(DEFAULT_CHAT_ID, "[공시 다이제스트] 메인 발송")
+    if _send_logged(DEFAULT_CHAT_ID, "공시 다이제스트", msg):
         logging.info("🌆 [공시 다이제스트] 메인 채널 발송 완료")
 
 
@@ -283,8 +279,7 @@ def job_saturday_main_ranking():
     logging.info("🏆 [주간 랭킹] 메인방 발송 시작")
     try:
         msg = stock_api.get_weekly_universe_ranking()
-        stock_api.send_telegram(DEFAULT_CHAT_ID, msg, keyboard=COMMON_BUTTON)
-        _log_notice(DEFAULT_CHAT_ID, "[토요일] 주간 랭킹 발송")
+        _send_logged(DEFAULT_CHAT_ID, "토요일 주간 랭킹", msg, keyboard=COMMON_BUTTON)
     except Exception as e:
         logging.error(f"주간 메인 랭킹 에러: {e}")
         mark_failed(e)
@@ -297,8 +292,7 @@ def job_saturday_flow_summary():
     try:
         sb = _bridge._get_client()
         msg = stock_api.get_weekly_flow_summary(sb)
-        stock_api.send_telegram(DEFAULT_CHAT_ID, msg, keyboard=COMMON_BUTTON)
-        _log_notice(DEFAULT_CHAT_ID, "[토요일] 주간 수급 요약 발송")
+        _send_logged(DEFAULT_CHAT_ID, "토요일 주간 수급 요약", msg, keyboard=COMMON_BUTTON)
     except Exception as e:
         logging.error(f"❌ [주간수급] 오류: {e}")
         mark_failed(e)

@@ -35,7 +35,7 @@ def _earn_metric(detail: str, label: str):
     m = re.search(rf'^\s*{label}:\s*([^/\n]+?)\s*(?:/(.*))?$', detail, re.M)
     if not m:
         return '', ''
-    y = re.search(r'YoY\s*([+\-]?[\d.]+%|[흑적]자\s*[전지][환속])', m.group(2) or '')
+    y = re.search(r'YoY\s*([+\-]?[\d.]+%|[흑적]자\s*[전지][환속](?:\s*\(손실 [축확][소대]\))?)', m.group(2) or '')
     return m.group(1).strip(), (y.group(1) if y else '')
 
 
@@ -80,9 +80,10 @@ def _fetch_rows(sb, day: datetime.date = None):
     res = None
     for attempt in (1, 2, 3):
         try:
+            # 시간순 — 예전엔 정렬이 없어 같은 회사·같은 종류 중 어느 건이 남을지 그때그때 달랐다
             res = (sb.table('notice_history').select('target,content')
                    .gte('created_at', since).lt('created_at', until).like('content', '[공시/%')
-                   .limit(2000).execute().data or [])
+                   .order('created_at').limit(2000).execute().data or [])
             break
         except Exception as e:
             if attempt == 3:
@@ -96,7 +97,12 @@ def _fetch_rows(sb, day: datetime.date = None):
         if not m:
             continue
         lvl, nm, rc = m.group(1), re.sub(r'\s+', ' ', m.group(2)).strip(), m.group(3)
-        key = (x.get('target', ''), _base_type(nm))
+        # 같은 회사·같은 종류는 한 건만 — 단 공급계약·수주는 건마다 다른 계약이고(코오롱글로벌 10-26
+        # 1,384억·973억 중 하나가 빠졌음), 잠정실적은 별도·연결·자회사 서식을 골라 써야 해서 다 남긴다
+        if '공급계약' in nm or '수주' in nm or '잠정' in nm:
+            key = (x.get('target', ''), rc)
+        else:
+            key = (x.get('target', ''), _base_type(nm))
         if key in seen:
             continue
         seen.add(key)
@@ -179,19 +185,30 @@ def generate(sb=None, day: datetime.date = None) -> str:
     earn, contract, subs, gov = OrderedDict(), [], [], []
     misc_increase = []
 
+    # 잠정실적은 회사마다 한 건 — 연결 > 별도 > 자회사(지주가 낸 자회사 실적). 예전엔 먼저 온 서식을 써서
+    # 지주사 줄에 자회사 숫자가 들어갈 수 있었다(HD한국조선해양 10-28: 자회사·별도·연결 3건이 1분 안에)
+    earn_pick = {}
+    for lvl, corp, nm, rc in items:
+        if lvl != 'skip' and '잠정' in nm:
+            pr = 0 if '자회사' in nm else (2 if '연결' in nm else 1)
+            if corp not in earn_pick or pr > earn_pick[corp][0]:
+                earn_pick[corp] = (pr, rc)
+
     for lvl, corp, nm, rc in items:
         if lvl == 'skip':
             continue
         try:
-            if '잠정' in nm and corp not in earn:
+            if '잠정' in nm:
+                if earn_pick.get(corp, (0, None))[1] != rc:
+                    continue
                 d = get_disclosure_detail(rc, nm)
                 rev, rev_yoy = _earn_metric(d, '매출')
                 op, op_yoy = _earn_metric(d, '영업이익')
                 if rev:
-                    earn[corp] = (rev, op, op_yoy, rev_yoy)
-            elif ('공급계약' in nm or '수주' in nm) and '정정' not in nm and len(contract) < 6:
+                    earn[corp] = (rev, op, op_yoy, rev_yoy, earn_pick[corp][0] == 0)
+            elif ('공급계약' in nm or '수주' in nm) and '정정' not in nm and len(contract) < 20:
                 d = get_disclosure_detail(rc, nm)
-                contract.append((corp, _contract_amount(d)))
+                contract.append((corp, _contract_amount(d), '자회사' in nm))
             elif '청약결과' in nm:
                 d = get_disclosure_detail(rc, nm)
                 r = _detail_line(d, '청약률')
@@ -226,27 +243,43 @@ def generate(sb=None, day: datetime.date = None) -> str:
         blocks.append('\n'.join(u))
 
     if earn:
-        rows = sorted(earn.items(), key=lambda x: -_amt_num(x[1][0]))
+        # 지주가 낸 자회사 실적은 그 자회사가 따로 낸 실적(같은 매출)이 있으면 뺀다
+        own_revs = {v[0] for v in earn.values() if not v[4]}
+        rows = sorted(((c, v) for c, v in earn.items() if not (v[4] and v[0] in own_revs)),
+                      key=lambda x: -_amt_num(x[1][0]))
         lines = ['📊 <b>잠정실적</b> (매출 / 영업익 · 영업익 YoY)']
-        for corp, (rev, op, op_yoy, rev_yoy) in rows[:10]:
+        for corp, (rev, op, op_yoy, rev_yoy, is_sub) in rows[:10]:
+            name = f'{corp}(자회사)' if is_sub else corp
             if op:
-                lines.append(f'• {corp}: {rev} / {op}' + (f' · YoY {op_yoy}' if op_yoy else ''))
+                lines.append(f'• {name}: {rev} / {op}' + (f' · YoY {op_yoy}' if op_yoy else ''))
             else:   # 영업익 칸이 '-'인 공시 — 예전엔 '?'로 나갔다
-                lines.append(f'• {corp}: {rev} / 영업익 미기재' + (f' · 매출 YoY {rev_yoy}' if rev_yoy else ''))
+                lines.append(f'• {name}: {rev} / 영업익 미기재' + (f' · 매출 YoY {rev_yoy}' if rev_yoy else ''))
         if len(rows) > 10:
             lines.append(f'• 외 {len(rows) - 10}곳')
         blocks.append('\n'.join(lines))
 
     if contract:
-        # 같은 종목 중복(신고서/정정 등 다른 서식)·빈 금액 제거 — 금액 큰 것 우선
-        best = {}
-        for _c, _a in contract:
-            if _c not in best or _amt_num(_a) > _amt_num(best[_c]):
-                best[_c] = _a
-        rows = sorted(best.items(), key=lambda x: -_amt_num(x[1]))
+        # 계약마다 한 줄(같은 회사 다른 계약도 따로 — 예전엔 회사당 1건만 남아 코오롱글로벌 1,384억이 빠졌음).
+        # 같은 회사·같은 금액은 같은 계약의 다른 서식이라 한 줄. 지주가 낸 자회사 계약(…자회사의 주요경영사항)은
+        # 자회사 공시(같은 금액)가 따로 있으면 빼고, 없으면 '(자회사)'·'자회사 매출대비'로 — 지주사 줄에 자회사
+        # 매출 대비 비율이 그대로 붙어 오해를 샀다(코오롱 3.63%·HL홀딩스 14.58%, 10-26·28)
+        _key = lambda a: (a or '').split('(')[0].strip()
+        own = {_key(a) for c, a, sub in contract if not sub and re.search(r'\d', _key(a))}
+        rows, seen_c = [], set()
+        for c, a, sub in contract:
+            k = _key(a)
+            if sub and k in own:
+                continue
+            if (c, k) in seen_c:
+                continue
+            seen_c.add((c, k))
+            rows.append((f'{c}(자회사)', (a or '').replace('(매출대비', '(자회사 매출대비')) if sub else (c, a))
+        rows.sort(key=lambda x: -_amt_num(x[1]))
         lines = ['🤝 <b>공급계약·수주</b>']
-        for corp, a in rows:
+        for corp, a in rows[:8]:
             lines.append(f'• {corp}: {a}' if a else f'• {corp}')
+        if len(rows) > 8:
+            lines.append(f'• 외 {len(rows) - 8}건')
         blocks.append('\n'.join(lines))
 
     if subs or misc_increase:

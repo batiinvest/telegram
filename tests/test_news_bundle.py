@@ -86,3 +86,20 @@ def test_bundle_messages_multi_company_and_split(monkeypatch):
     parts = nm.NaverNewsBot._bundle_messages(many)
     assert len(parts) > 1 and parts[1].startswith("📰 <b>[뉴스 묶음]</b> (이어서)")
     assert sum(p.count("<a href=") for p in parts) == 6           # 나눠도 기사 수 그대로
+
+
+def test_route_tells_sent_from_bundled(monkeypatch, tmp_path):
+    """발송 기록에서 개별 발송과 묶음 대기를 구분할 수 있게 — 예전엔 둘 다 True(10-28 점검)."""
+    bot, clock, sent = _bot(monkeypatch, tmp_path)
+    rs = [bot._route("room", "개별", ["삼성전자", "09:0%d" % i, "기사%d" % i, "https://n/%d" % i]) for i in range(4)]
+    assert rs == ["sent", "sent", "sent", "bundled"]
+    assert nm._BUNDLE_MARK_RE.sub("", "삼성전자 실적 발표 ⟪묶음 1⟫") == "삼성전자 실적 발표"
+
+
+def test_theme_gate_only_lets_topic_news_into_industry_room(monkeypatch):
+    """테마 편입 종목(미래에셋증권=우주)은 주제 낱말이 있어야 산업방으로(10-25~28 34건 중 우주 관련 3건)."""
+    assert nm._theme_gate_ok("미래에셋증권", "'스페이스X 0주' 후폭풍…미래에셋증권, 임원 책임까지")
+    assert not nm._theme_gate_ok("미래에셋증권", "미래에셋증권, 제10회 AI 페스티벌 성료")
+    assert nm._theme_gate_ok("한화에어로스페이스", "아무 기사")          # 게이트 없는 종목은 늘 통과
+    monkeypatch.setattr(nm, "NEWS_THEME_GATE", nm._parse_theme_gate("가나증권: 위성, 발사\n\n잘못된줄"))
+    assert nm.NEWS_THEME_GATE == {"가나증권": ["위성", "발사"]}
