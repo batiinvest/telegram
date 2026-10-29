@@ -855,12 +855,19 @@ class KisMyStockScanner:
             return
         tname = frm.get("first_name", "") or str(target)
         import spam_guard as _sg, html as _h
-        if cmd in ("/차단해제", "/unban"):
-            n = _sg.unban_all(target)
-            _r(f"♻️ <b>{_h.escape(tname)}</b> (id <code>{target}</code>) — {n}개 방 차단 해제")
-        else:
-            n = _sg.ban_all(target)
-            _r(f"🚫 <b>{_h.escape(tname)}</b> (id <code>{target}</code>) — {n}개 방에서 차단")
+        unban = cmd in ("/차단해제", "/unban")
+        if not unban:
+            _sg._delete(chat_id, reply.get("message_id"))   # 답장한 스팸 메시지는 바로 삭제
+        # 79개 방 순회는 수 초~십수 초 — 리스너를 막지 않게 별도 스레드, 결과는 spam_guard 세션으로 회신
+        def _work():
+            if unban:
+                n = _sg.unban_all(target)
+                t = f"♻️ <b>{_h.escape(tname)}</b> (id <code>{target}</code>) — {n}개 방 차단 해제"
+            else:
+                n = _sg.ban_all(target)
+                t = f"🚫 <b>{_h.escape(tname)}</b> (id <code>{target}</code>) — {n}개 방에서 차단·메시지 삭제"
+            _sg._tg("sendMessage", chat_id=chat_id, reply_to_message_id=mid, text=t, parse_mode="HTML")
+        threading.Thread(target=_work, daemon=True).start()
 
     def _handle_spam_callback(self, cb_id, chat_id, message_id, callback_q, parts):
         base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
@@ -908,17 +915,33 @@ class KisMyStockScanner:
             answer('🚫 차단됨' if ok else '차단 실패', alert=not ok)
             edit_append((chr(10) + chr(10) + '🚫 이 방에서 차단됨') if ok else (chr(10) + chr(10) + '⚠️ 차단 실패'))
             return
+        # 79개 방 순회(차단·해제)는 리스너를 막지 않게 별도 스레드 — 버튼엔 바로 '진행 중' 응답
+        def _bg_edit(suffix):
+            base = (callback_q.get('message') or {}).get('text', '')
+            _sg._tg('editMessageText', chat_id=chat_id, message_id=message_id, text=base + suffix)
+        if action in ('fban', 'fdel'):
+            answer('처리 중… 끝나면 알림이 바뀝니다')
+            threading.Thread(target=_sg.flood_action, args=(parts[2], action[1:], message_id),
+                             daemon=True).start()
+            return
+        if action == 'fok':
+            answer(_sg.flood_action(parts[2], 'ok', message_id))
+            return
         if action == 'banall':
             uid = parts[2]
-            n = _sg.ban_all(uid)
-            answer('🚫 ' + str(n) + '개 방에서 차단')
-            edit_append(chr(10) + chr(10) + '🚫 전체 차단 완료(' + str(n) + '개 방)')
+            answer('🚫 전체 방 차단 진행 중…')
+            def _ban():
+                n = _sg.ban_all(uid)
+                _bg_edit(chr(10) + chr(10) + '🚫 전체 차단 완료(' + str(n) + '개 방)')
+            threading.Thread(target=_ban, daemon=True).start()
             return
         if action == 'unban':
             uid = parts[2]
-            n = _sg.unban_all(uid)
-            answer('♻️ ' + str(n) + '개 방 해제')
-            edit_append(chr(10) + chr(10) + '♻️ 차단 해제 완료(' + str(n) + '개 방)')
+            answer('♻️ 차단 해제 진행 중…')
+            def _unban():
+                n = _sg.unban_all(uid)
+                _bg_edit(chr(10) + chr(10) + '♻️ 차단 해제 완료(' + str(n) + '개 방)')
+            threading.Thread(target=_unban, daemon=True).start()
             return
 
     def _handle_rm_callback(self, cb_id, chat_id, message_id, callback_q, parts):
@@ -1175,6 +1198,17 @@ class KisMyStockScanner:
                             self._handle_my_chat_member(update["my_chat_member"])
                             continue
 
+                        # 수정된 그룹 메시지 — 올린 뒤 링크를 넣는 광고 회피 차단(링크 검사만)
+                        if "edited_message" in update:
+                            _em = update["edited_message"]
+                            if _em.get("chat", {}).get("type") in ("group", "supergroup"):
+                                try:
+                                    import spam_guard as _sg
+                                    _sg.check_message(self, _em, edited=True)
+                                except Exception as _sge:
+                                    logging.warning(f"spam_guard 오류(수정 메시지): {_sge}")
+                            continue
+
                         message = None
                         if "message" in update:
                             message = update["message"]
@@ -1209,7 +1243,7 @@ class KisMyStockScanner:
                                 import spam_guard as _sg
                                 _sg.check_message(self, message)
                             except Exception as _sge:
-                                logging.debug(f"spam_guard 오류: {_sge}")
+                                logging.warning(f"spam_guard 오류: {_sge}")
 
                         # 1:1 DM의 봇 명령어(/start, /status, /myid)는 admin 계정 포함 항상 bot_commands로
                         # (admin chat_id가 allowed_configs에 잡혀 _handle을 건너뛰는 문제 방지)
