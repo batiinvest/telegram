@@ -8,7 +8,7 @@
 WICS로 합친다 — 원본 반도체와반도체장비(코스피 G4530) 칸과 60거래일 대조: 5일 순매수 상관 0.998·
 부호 97%·크기 97%, 시가총액은 우선주가 빠져 8% 작다(09-29 실측).
 
-계산은 종목 수급 오실레이터(collect_flow_empty)와 같은 함수(_macd_hist·_stage)를 쓴다 —
+계산은 종목 수급 오실레이터(collect_flow_empty)와 같은 함수(_osc_window·_position·_stage)를 쓴다 —
 MACD 상수를 바꾸면 종목·업종이 함께 바뀐다.
 
 두 표
@@ -242,8 +242,12 @@ def _gauge(vals: list) -> dict:
 
 
 def compute_osc(sb, write_days: int | None = WRITE_DAYS) -> int:
-    """소분류 합계 전체 → 중분류 × 시장 오실레이터·수급 칸·단계. write_days=None이면 전체를 쓴다."""
-    from collect_flow_empty import _macd_hist, _position, _stage, OSC_WARMUP, SPAN, MIN_SER
+    """소분류 합계 전체 → 중분류 × 시장 오실레이터·수급 칸·단계. write_days=None이면 전체를 쓴다.
+
+    날마다 '그날 원본이 보여줄 값'을 적는다 — 그날까지 최근 OSC_DAYS(77)거래일 자료로 EMA를 새로
+    시작한 오실레이터의 마지막 값과 그 계산의 칸·위치(원본 「업종_시가총액_오실레이터」도 77거래일).
+    """
+    from collect_flow_empty import _osc_window, _position, _stage, OSC_WARMUP, SPAN, MIN_SER
     rows = fetch_all_pages(sb.table(DAILY)
                            .select('base_date,wics_code,market,net_amt,cap,cap_flow')
                            .order('base_date').order('wics_code').order('market'))
@@ -255,27 +259,24 @@ def compute_osc(sb, write_days: int | None = WRITE_DAYS) -> int:
     acc, dates = _series(rows)
     since = None if write_days is None else (date.today() - timedelta(days=write_days)).isoformat()
 
+    at = {d: i for i, d in enumerate(dates)}
     out = []
     for (mid, g), days in acc.items():
         xs = _x_series(days, dates)
-        osc = _macd_hist(xs)
-        xv = dict(xs)
-        hist = []                                   # 워밍업 뒤 오실레이터 이력
-        allv = []                                   # 처음부터의 이력 — 수급 위치는 원본처럼 워밍업을 안 뺀다
-        for i, (d, o) in enumerate(osc):
-            allv.append(o)
-            if i < OSC_WARMUP:
-                continue
-            hist.append(o)
+        for d, x in xs:
             if since and d < since:
                 continue
-            win = hist[-SPAN:]
+            run = [v for _, v in _osc_window(xs, dates[:at[d] + 1])]   # 그날까지 최근 77거래일로 계산
+            if len(run) <= OSC_WARMUP:              # EMA가 막 시작한 날은 적지 않는다(예전과 같게)
+                continue
+            o = run[-1]
+            win = run[OSC_WARMUP:][-SPAN:]          # 칸 = 워밍업 뒤 최근 SPAN개
             gauge = _gauge(win) if len(win) >= MIN_SER else None
             if gauge:
-                gauge.update(_position(allv) or {})   # p·n·d5 — 종목과 같은 계산
+                gauge.update(_position(run) or {})   # p·n·d5 — 종목과 같은 계산(워밍업 안 뺌)
             net, capf, cap = days[d]
             out.append({'base_date': d, 'mid_code': mid, 'market': g, 'name': names.get(mid),
-                        'x': round(xv[d], 6), 'osc': round(o, 7),
+                        'x': round(x, 6), 'osc': round(o, 7),
                         'pct': round(sum(1 for v in win if v < o) / len(win) * 100, 1) if gauge else None,
                         'gauge': gauge, 'stage': _stage(gauge),
                         'cover': round(capf / cap, 4) if cap else None})

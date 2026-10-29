@@ -68,6 +68,11 @@ MIN_SER = 8      # 백분위를 말할 최소 표본 (_fmRenderEmpty)
 #   63일 창 안 위치 평균 1.5%p. 업종 오실레이터(collect_sector_flow)도 이 상수를 쓴다.
 MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 9
 OSC_WARMUP = 10  # EMA가 막 시작한 앞쪽 점(0 근처로 쏠림)은 비교에서 뺀다
+# 오실레이터를 계산하는 자료 길이 — 원본은 늘 최근 77거래일만 담아 그 창의 첫 5일 합에서 EMA를 시작한다
+# (09-18 700종목·10-28 1400종목·10-28 업종 파일 모두 77거래일). EMA는 시작점에 따라 값이 달라져서
+# 더 긴 이력으로 시작하면 원본과 어긋난다(10-28: 이력 긴 종목 P 구간 91% → 시작점 맞추면 100%).
+# 화면 flow-map.js _FM_OSC_DAYS와 같게 — 바꾸면 둘 다.
+OSC_DAYS = 77
 # 수급 위치(퍼센타일) — 원본 「1400종목 수급오실레이터 퍼센타일」(2026-10-28, config.js FLOW_POS와 같게).
 #   현재 오실레이터의 최근 60개 관측치 안 위치 P0~P100 = Excel PERCENTRANK.INC(같은 값은 가운데 순위),
 #   관측치 20개부터, 5거래일 변화(%p). 원본 종목별데이터 73,269점을 이 계산으로 재현해 전부 일치(차 1e-16).
@@ -152,6 +157,14 @@ def _macd_hist(ser: list) -> list:
         sg = macd if sg is None else sg + kg * (macd - sg)
         out.append((d, macd - sg))
     return out
+
+
+def _osc_window(base: list, dates: list) -> list:
+    """5일 비율 [(date, x)] → 수급 오실레이터. 원본처럼 dates의 최근 OSC_DAYS거래일 자료만 쓴다 —
+    창 안에서 5일 합이 처음 생기는 날(창의 OSC_N번째 날)부터 EMA를 시작한다. dates는 그날까지의 거래일."""
+    i = max(0, len(dates) - OSC_DAYS) + OSC_N - 1
+    start = dates[min(i, len(dates) - 1)]
+    return _macd_hist([o for o in base if start <= o[0] <= dates[-1]])
 
 
 def _pctrank(win: list) -> float:
@@ -661,7 +674,7 @@ def _stat(days: dict, dates: list, cut_date: str):
     avg = 5일 수급 비율의 평균(가로축 '공급강도' 순위용).
     """
     base = _osc_series(days, dates)
-    hist = _macd_hist(base)
+    hist = _osc_window(base, dates)   # 최근 77거래일로 계산(원본과 같은 시작점)
     ser = [o for o in hist[OSC_WARMUP:] if o[0] >= cut_date]
     if len(ser) < MIN_SER:
         return None, 'short'
