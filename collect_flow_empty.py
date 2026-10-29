@@ -73,6 +73,9 @@ OSC_WARMUP = 10  # EMA가 막 시작한 앞쪽 점(0 근처로 쏠림)은 비교
 #   관측치 20개부터, 5거래일 변화(%p). 원본 종목별데이터 73,269점을 이 계산으로 재현해 전부 일치(차 1e-16).
 #   원본은 EMA 앞쪽 점을 빼지 않는다 — 위치만 원본대로, 칸(lv)은 기존 창·워밍업 그대로.
 POS_WIN, POS_MIN, POS_D = 60, 20, 5
+# 빈집·단계 = 원본 가로바 색 구간(10-29 사용자 결정 — 빈집 = 파란 칸 P25 미만). config.js FLOW_EMPTY_P 등과 같게.
+#   다 찼다 P90 이상(빨간 칸) · 꺾임 P75 이상(주황·빨간 칸)에서 내려옴 · 이제 시작 P25 미만에서 오름
+POS_EMPTY, POS_TURN, POS_TOP = 25, 75, 90
 
 # ── 이 모듈 고유 ─────────────────────────────────────────────────────────────
 MIN_PEERS = 10        # 순위를 매길 최소 집단 크기 — 이보다 작으면 한 단계 위 분류로
@@ -687,16 +690,25 @@ def _stat(days: dict, dates: list, cut_date: str):
 
 
 def _stage(g: dict | None) -> str | None:
-    """수급 칸 단계 — 화면 config.js flowGauge와 같은 규칙(바꾸면 둘 다)."""
+    """수급 단계 — 화면 config.js flowGauge와 같은 규칙(바꾸면 둘 다).
+
+    수급 위치(p)가 있으면 원본 가로바 구간(POS_*), 없는 옛 행만 칸 수(5칸·4칸 이상·2칸 이하)로 본다.
+    방향(up)은 오늘 오실레이터가 어제보다 올랐나.
+    """
     if not g:
         return None
-    fill = sum(1 for v in g['lv'] if g['cur'] >= v)
     up = g['cur'] > g['prev']
-    if fill >= 4 and not up:
+    p = g.get('p')
+    if p is not None:
+        hi, top, low = p >= POS_TURN, p >= POS_TOP, p < POS_EMPTY
+    else:
+        fill = sum(1 for v in g['lv'] if g['cur'] >= v)
+        hi, top, low = fill >= 4, fill == 5, fill <= 2
+    if hi and not up:
         return 'turn'
-    if fill == 5:
+    if top:
         return 'top'
-    if fill <= 2 and up:
+    if low and up:
         return 'start'
     return 'fill' if up else 'drain'
 
