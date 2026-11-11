@@ -36,7 +36,7 @@ from jobs_collect import (
     job_collect_new_high, job_collect_us_etf, job_collect_market,
     job_collect_market_closing, job_short_surge, job_collect_investor_trend,
     job_collect_investor_trend_ranked,
-    job_flow_empty,
+    job_flow_empty, job_krx_buy,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
     job_daily_summary, job_collect_credit_balance, job_collect_wics,
     job_collect_investor_market, job_collect_fear_greed, job_retry_failed, job_collect_active_etf, job_portfolio_nav,
@@ -169,6 +169,8 @@ def run_scheduler():
     schedule.every().day.at("18:35").do(_threaded(job_collect_analyst_opinions))  # 투자의견 (장후)
     schedule.every().day.at("18:40").do(job_collect_estimates)        # 종목추정실적 (미래 매출/영업이익 + 상향감지)
     schedule.every().day.at("18:50").do(_threaded(job_flow_empty))  # 전종목 수급 정산(30일)+빈집 판정 — 약 10분, KIS 한가한 18:48~19:25
+    schedule.every().day.at("18:42").do(_threaded(job_krx_buy))  # KRX 당일 투자자별 매수대금 → market_data (18:50 컨셉 계산 앞, 약 10초)
+    schedule.every().day.at("20:40").do(_threaded(job_krx_buy))  # 한 번 더 — 시간외·대량매매 반영 뒤 값 (다른 행만 씀)
     schedule.every().day.at("08:40").do(_threaded(job_snapshot_qtr_consensus))  # 분기 컨센 스냅샷 (어닝 서프라이즈용, 장전)
     schedule.every().day.at("19:05").do(_threaded(job_earnings_reconcile))  # 재무 확정치 기반 어닝 서프라이즈/영업익 폭증 재조정 (19:10 브리핑 前)
     schedule.every().day.at("19:10").do(_threaded(job_earnings_surprise_briefing))  # 어닝 서프라이즈 리스트 → 메인채널

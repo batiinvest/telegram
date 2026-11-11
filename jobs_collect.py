@@ -1138,6 +1138,22 @@ def job_flow_empty():
 
 
 @_job(holiday=True)
+def job_krx_buy():
+    """평일 18:42 · 20:40 — KRX 당일 투자자별 매수대금(사모·투신·연기금·외국인) → market_data 매수대금 컬럼.
+
+    KIS는 전일까지만 줘서(18:50 sync_buy) 화면 '일별 수급'과 공급 컨셉이 하루 늦었다. KRX 로그인 세션으로
+    당일분을 먼저 채운다(값이 다른 행만 써서 멱등). 18:42 = 빈집·컨셉 계산(18:50) 앞, 20:40 = 시간외 반영 뒤 한 번 더."""
+    try:
+        logging.info("💰 [당일매수대금] collect_krx_buy 실행 시작")
+        import collect_krx_buy
+        r = collect_krx_buy.run()
+        logging.info(f"=== [당일매수대금] 완료: {r['date']} 변경 {r['changed']}행 · 기록 {r['written']}행 ===")
+    except Exception as e:
+        logging.error(f"❌ [당일매수대금] 오류: {e}")
+        mark_failed(e)
+
+
+@_job(holiday=True)
 def job_sector_summary():
     """평일 장 마감 후 (17:15) — 산업별 일별 요약 집계 (sector_daily_summary)"""
     try:
@@ -1406,6 +1422,7 @@ _RETRYABLE_JOBS = {
     'job_collect_investor_market':  job_collect_investor_market,
     'job_collect_fear_greed':       job_collect_fear_greed,
     'job_flow_empty':               job_flow_empty,
+    'job_krx_buy':                  job_krx_buy,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
