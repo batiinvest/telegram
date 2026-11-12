@@ -36,7 +36,7 @@ from jobs_collect import (
     job_collect_new_high, job_collect_us_etf, job_collect_market,
     job_collect_market_closing, job_short_surge, job_collect_investor_trend,
     job_collect_investor_trend_ranked,
-    job_flow_empty, job_krx_buy, job_sio,
+    job_flow_empty, job_krx_buy, job_sio, job_us_index, job_us_liquidity,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
     job_daily_summary, job_collect_credit_balance, job_collect_wics,
     job_collect_investor_market, job_collect_fear_greed, job_retry_failed, job_collect_active_etf, job_portfolio_nav,
@@ -173,6 +173,10 @@ def run_scheduler():
     schedule.every().day.at("18:46").do(_threaded(job_sio))  # 한 번 더 — 수집값이 고쳐졌으면 반영(upsert)
     schedule.every().day.at("18:42").do(_threaded(job_krx_buy))  # KRX 당일 투자자별 매수대금 → market_data (18:50 컨셉 계산 앞, 약 10초)
     schedule.every().day.at("20:40").do(_threaded(job_krx_buy))  # 한 번 더 — 시간외·대량매매 반영 뒤 값 (다른 행만 씀)
+    schedule.every().day.at("06:50").do(_threaded(job_us_index))  # 미국 지수·ETF 종가 → 미국 위험신호·피어앤그리드 원재료 (06:35 US ETF 수집 뒤, 약 5초)
+    schedule.every().day.at("08:10").do(_threaded(job_us_index))  # 한 번 더 — 야후 값이 늦게 굳은 날 (다른 날만 씀)
+    schedule.every().day.at("07:10").do(_threaded(job_us_liquidity))  # 미국 유동성 체크(FRED 15종, 약 15초) — 금리 갱신(미국 16:15) 뒤
+    schedule.every().day.at("12:10").do(_threaded(job_us_liquidity))  # 한 번 더 — 아침 실패·늦은 갱신 대비 (같은 날은 덮어씀)
     schedule.every().day.at("08:40").do(_threaded(job_snapshot_qtr_consensus))  # 분기 컨센 스냅샷 (어닝 서프라이즈용, 장전)
     schedule.every().day.at("19:05").do(_threaded(job_earnings_reconcile))  # 재무 확정치 기반 어닝 서프라이즈/영업익 폭증 재조정 (19:10 브리핑 前)
     schedule.every().day.at("19:10").do(_threaded(job_earnings_surprise_briefing))  # 어닝 서프라이즈 리스트 → 메인채널

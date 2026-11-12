@@ -1169,6 +1169,37 @@ def job_sio():
         mark_failed(e)
 
 
+@_job()
+def job_us_index():
+    """매일 06:50 · 08:10 — 미국 지수·ETF 종가(yfinance) → us_index_daily (미국 위험신호 · 미국 피어앤그리드 원재료).
+
+    한국 휴장일에도 돈다(미국 장은 열린다). 저장값과 다른 날만 써서 주말·미국 휴장일엔 쓰는 줄이 없다."""
+    try:
+        logging.info("🗽 [미국지수] collect_us_index 실행 시작")
+        import collect_us_index
+        r = collect_us_index.run()
+        logging.info(f"=== [미국지수] 완료: {r.get('last')} · 쓴 {r.get('written', 0)}일 ===")
+    except Exception as e:
+        logging.error(f"❌ [미국지수] 오류: {e}")
+        mark_failed(e)
+
+
+@_job()
+def job_us_liquidity():
+    """매일 07:10 · 12:10 — 미국 유동성 체크(FRED 15종) → us_liquidity_daily (하루 한 줄, 같은 날은 덮어씀).
+
+    금리·Fed 자산·TGA·RRP·은행대출·M2·엔캐리 점검을 원본 식 그대로 계산한다. FRED는 미국 영업일 저녁에 갱신된다."""
+    try:
+        logging.info("💧 [미국유동성] collect_us_liquidity 실행 시작")
+        import collect_us_liquidity
+        r = collect_us_liquidity.run()
+        logging.info(f"=== [미국유동성] 완료: {r.get('date')} 자료 {r.get('data_date')} · "
+                     f"Liquidity {r.get('score')}/4 · Credit {r.get('credit')}/2 ===")
+    except Exception as e:
+        logging.error(f"❌ [미국유동성] 오류: {e}")
+        mark_failed(e)
+
+
 @_job(holiday=True)
 def job_sector_summary():
     """평일 장 마감 후 (17:15) — 산업별 일별 요약 집계 (sector_daily_summary)"""
@@ -1440,6 +1471,8 @@ _RETRYABLE_JOBS = {
     'job_flow_empty':               job_flow_empty,
     'job_krx_buy':                  job_krx_buy,
     'job_sio':                      job_sio,
+    'job_us_index':                 job_us_index,
+    'job_us_liquidity':             job_us_liquidity,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
