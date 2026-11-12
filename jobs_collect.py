@@ -1200,6 +1200,22 @@ def job_us_liquidity():
         mark_failed(e)
 
 
+@_job(weekday_only=True)
+def job_jp_tw():
+    """평일 16:40 · 18:20 — 일본·대만 AI·반도체 공급망 97종목 시세 점검(Yahoo 일봉) → market_snapshot(kind='jp_tw').
+
+    일본 15:30 · 대만 14:30(한국 시각) 마감 뒤 끝난 일봉만으로 일간·5일·20일 수익률, 테마 Breadth·Strength Score, 신호를 계산한다.
+    한국 휴장일에도 돈다(두 나라 장은 열린다). 같은 기준일은 덮어쓴다."""
+    try:
+        logging.info("🗾 [일본대만] collect_jp_tw 실행 시작")
+        import collect_jp_tw
+        r = collect_jp_tw.run()
+        logging.info(f"=== [일본대만] 완료: {r.get('date')} 유효 {r.get('valid')}/{r.get('total')}종목 ===")
+    except Exception as e:
+        logging.error(f"❌ [일본대만] 오류: {e}")
+        mark_failed(e)
+
+
 @_job()
 def job_tw_revenue():
     """매일 21:10 — 대만 AI·반도체 공급망 월매출(MOPS 공식 공시) → tw_monthly_revenue.
@@ -1490,6 +1506,7 @@ _RETRYABLE_JOBS = {
     'job_us_index':                 job_us_index,
     'job_us_liquidity':             job_us_liquidity,
     'job_tw_revenue':               job_tw_revenue,
+    'job_jp_tw':                    job_jp_tw,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
