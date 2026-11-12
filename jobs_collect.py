@@ -1154,6 +1154,22 @@ def job_krx_buy():
 
 
 @_job(holiday=True)
+def job_sio():
+    """평일 16:02 · 18:46 — SIO(코스피200·코스닥150·코스피대형주 시장 내부 강도) → sio_daily.
+
+    구성종목은 KRX(로그인), 시세·거래량은 15:45 전 종목 마감 수집분(market_data). 최근 10거래일 중 빠진 날을
+    채우고 오늘은 늘 다시 계산한다(upsert라 멱등). 표가 비어 있으면 남아 있는 날짜 전부(약 4분)."""
+    try:
+        logging.info("📐 [SIO] collect_sio 실행 시작")
+        import collect_sio
+        r = collect_sio.run()
+        logging.info(f"=== [SIO] 완료: {len(r.get('dates', []))}일 · {r.get('rows', 0)}행 ===")
+    except Exception as e:
+        logging.error(f"❌ [SIO] 오류: {e}")
+        mark_failed(e)
+
+
+@_job(holiday=True)
 def job_sector_summary():
     """평일 장 마감 후 (17:15) — 산업별 일별 요약 집계 (sector_daily_summary)"""
     try:
@@ -1423,6 +1439,7 @@ _RETRYABLE_JOBS = {
     'job_collect_fear_greed':       job_collect_fear_greed,
     'job_flow_empty':               job_flow_empty,
     'job_krx_buy':                  job_krx_buy,
+    'job_sio':                      job_sio,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,

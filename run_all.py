@@ -36,7 +36,7 @@ from jobs_collect import (
     job_collect_new_high, job_collect_us_etf, job_collect_market,
     job_collect_market_closing, job_short_surge, job_collect_investor_trend,
     job_collect_investor_trend_ranked,
-    job_flow_empty, job_krx_buy,
+    job_flow_empty, job_krx_buy, job_sio,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
     job_daily_summary, job_collect_credit_balance, job_collect_wics,
     job_collect_investor_market, job_collect_fear_greed, job_retry_failed, job_collect_active_etf, job_portfolio_nav,
@@ -169,6 +169,8 @@ def run_scheduler():
     schedule.every().day.at("18:35").do(_threaded(job_collect_analyst_opinions))  # 투자의견 (장후)
     schedule.every().day.at("18:40").do(job_collect_estimates)        # 종목추정실적 (미래 매출/영업이익 + 상향감지)
     schedule.every().day.at("18:50").do(_threaded(job_flow_empty))  # 전종목 수급 정산(30일)+빈집 판정 — 약 10분, KIS 한가한 18:48~19:25
+    schedule.every().day.at("16:02").do(_threaded(job_sio))  # SIO 과매도·과매수(코스피200·코스닥150·코스피대형주) — 15:45 전 종목 마감 수집(~15:55) 뒤
+    schedule.every().day.at("18:46").do(_threaded(job_sio))  # 한 번 더 — 수집값이 고쳐졌으면 반영(upsert)
     schedule.every().day.at("18:42").do(_threaded(job_krx_buy))  # KRX 당일 투자자별 매수대금 → market_data (18:50 컨셉 계산 앞, 약 10초)
     schedule.every().day.at("20:40").do(_threaded(job_krx_buy))  # 한 번 더 — 시간외·대량매매 반영 뒤 값 (다른 행만 씀)
     schedule.every().day.at("08:40").do(_threaded(job_snapshot_qtr_consensus))  # 분기 컨센 스냅샷 (어닝 서프라이즈용, 장전)
