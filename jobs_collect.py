@@ -1200,6 +1200,22 @@ def job_us_liquidity():
         mark_failed(e)
 
 
+@_job()
+def job_tw_revenue():
+    """매일 21:10 — 대만 AI·반도체 공급망 월매출(MOPS 공식 공시) → tw_monthly_revenue.
+
+    대만 기업은 매달 10일까지 전달 매출을 신고한다. 평소엔 최근 3개월만 다시 받아 값이 다른 줄만 쓰고(약 1분),
+    표가 비었거나 종목이 바뀌면 최근 4개 연도를 전부 받는다(약 12분)."""
+    try:
+        logging.info("🏭 [대만월매출] collect_tw_revenue 실행 시작")
+        import collect_tw_revenue
+        r = collect_tw_revenue.run()
+        logging.info(f"=== [대만월매출] 완료: 최신 {str(r.get('latest'))[:7]} {r.get('latest_count')}종목 · 쓴 {r.get('written', 0)}줄 ===")
+    except Exception as e:
+        logging.error(f"❌ [대만월매출] 오류: {e}")
+        mark_failed(e)
+
+
 @_job(holiday=True)
 def job_sector_summary():
     """평일 장 마감 후 (17:15) — 산업별 일별 요약 집계 (sector_daily_summary)"""
@@ -1473,6 +1489,7 @@ _RETRYABLE_JOBS = {
     'job_sio':                      job_sio,
     'job_us_index':                 job_us_index,
     'job_us_liquidity':             job_us_liquidity,
+    'job_tw_revenue':               job_tw_revenue,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
