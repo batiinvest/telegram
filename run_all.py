@@ -36,7 +36,7 @@ from jobs_collect import (
     job_collect_new_high, job_collect_us_etf, job_collect_market,
     job_collect_market_closing, job_short_surge, job_collect_investor_trend,
     job_collect_investor_trend_ranked,
-    job_flow_empty, job_krx_buy, job_sio, job_us_index, job_us_liquidity, job_tw_revenue, job_jp_tw,
+    job_flow_empty, job_krx_buy, job_sio, job_us_index, job_us_liquidity, job_tw_revenue, job_jp_tw, job_ai_hw,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
     job_daily_summary, job_collect_credit_balance, job_collect_wics,
     job_collect_investor_market, job_collect_fear_greed, job_retry_failed, job_collect_active_etf, job_portfolio_nav,
@@ -180,6 +180,8 @@ def run_scheduler():
     schedule.every().day.at("21:10").do(_threaded(job_tw_revenue))  # 대만 AI·반도체 공급망 월매출(MOPS, 매달 10일까지 신고) — 최근 3개월 재확인, 약 1분
     schedule.every().day.at("16:40").do(_threaded(job_jp_tw))  # 일본·대만 공급망 97종목 시세 점검 — 일본 15:30·대만 14:30 마감 뒤(약 40초)
     schedule.every().day.at("18:20").do(_threaded(job_jp_tw))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
+    schedule.every().day.at("07:00").do(_threaded(job_ai_hw))  # AI 하드웨어 41종목 Breadth·피크아웃 점검 — 미국 마감 뒤(약 20초)
+    schedule.every().day.at("08:20").do(_threaded(job_ai_hw))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
     schedule.every().day.at("08:40").do(_threaded(job_snapshot_qtr_consensus))  # 분기 컨센 스냅샷 (어닝 서프라이즈용, 장전)
     schedule.every().day.at("19:05").do(_threaded(job_earnings_reconcile))  # 재무 확정치 기반 어닝 서프라이즈/영업익 폭증 재조정 (19:10 브리핑 前)
     schedule.every().day.at("19:10").do(_threaded(job_earnings_surprise_briefing))  # 어닝 서프라이즈 리스트 → 메인채널

@@ -1217,6 +1217,21 @@ def job_jp_tw():
 
 
 @_job()
+def job_ai_hw():
+    """매일 07:00 · 08:20 — AI 하드웨어 41종목 Breadth · 피크아웃 점검(Yahoo 수정 종가 3년) → market_snapshot(kind='ai_hw').
+
+    미국 장 마감 뒤 계산한다(미국 26 · 한국 3 · 일본 8 · 대만/ADR 4). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다."""
+    try:
+        logging.info("🧠 [AI하드웨어] collect_ai_hw 실행 시작")
+        import collect_ai_hw
+        r = collect_ai_hw.run()
+        logging.info(f"=== [AI하드웨어] 완료: {r.get('date')} 종목 {r.get('n')} · Breadth MA5 {r.get('ma5')} · 단계 {r.get('risk')} ===")
+    except Exception as e:
+        logging.error(f"❌ [AI하드웨어] 오류: {e}")
+        mark_failed(e)
+
+
+@_job()
 def job_tw_revenue():
     """매일 21:10 — 대만 AI·반도체 공급망 월매출(MOPS 공식 공시) → tw_monthly_revenue.
 
@@ -1507,6 +1522,7 @@ _RETRYABLE_JOBS = {
     'job_us_liquidity':             job_us_liquidity,
     'job_tw_revenue':               job_tw_revenue,
     'job_jp_tw':                    job_jp_tw,
+    'job_ai_hw':                    job_ai_hw,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
