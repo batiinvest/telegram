@@ -14,6 +14,7 @@ import datetime
 import stock_api
 from managers import market_timer
 from db_utils import fetch_all_pages
+from disclosure_store import store_daily_disclosures
 from format_utils import fmt_change_pct
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, CHAT_IDS_BY_CODE
@@ -375,6 +376,8 @@ def job_collect_financials():
         if disc_all is not None and not disc_all.empty:
             for _, row in disc_all.iterrows():
                 rno = row.get('rcept_no', '')
+                if rno and rno in seen_rcept:
+                    continue   # 같은 접수번호는 한 번만(100건씩 나눠 받는 목록이라 겹칠 수 있음 — 저장 쪽도 한 번 더 거름)
                 seen_rcept.add(rno)
                 all_disc_records.append({
                     'corp_name': row.get('corp_name', ''),
@@ -543,31 +546,18 @@ def job_collect_financials():
 
             # 공시 0건이면 삭제 스킵 — DART 빈 응답(장애/수동 트리거) 시
             # delete→insert가 그날 저장분을 통째로 지우는 것 방지
+            _stored = ''
             if not rows_to_insert:
                 logging.warning("⚠️ [공시저장] 오늘 공시 0건 — 기존 daily_disclosures 보존(삭제 스킵)")
             else:
-                sb.table('daily_disclosures').delete().eq('base_date', _today_str).execute()
-
-                # 청크별 2회 재시도 — 부분 저장(중간 실패로 일부 공시 유실) 감지·복구
-                _failed_chunks = 0
-                for i in range(0, len(rows_to_insert), 100):
-                    _chunk_rows = rows_to_insert[i:i + 100]
-                    for _attempt in (1, 2):
-                        try:
-                            sb.table('daily_disclosures').insert(_chunk_rows).execute()
-                            break
-                        except Exception as _ins_e:
-                            if _attempt == 2:
-                                _failed_chunks += 1
-                                logging.error(f"❌ [공시저장] 청크 {i // 100} 삽입 실패(2회): {_ins_e}")
-                            else:
-                                time.sleep(2)
-                if _failed_chunks:
-                    logging.error(f"❌ [공시저장] {_failed_chunks}개 청크 유실 — daily_disclosures 부분 저장 상태")
+                # 삭제 → 100건 묶음 삽입 → 표를 다시 읽어 빠진 것만 다시 넣기(묶음 → 한 건씩).
+                # 예전엔 오류 난 묶음을 그대로 다시 넣어, 응답만 잃고 저장된 묶음이 중복 키로 실패해 '유실'로 적혔다(11-13).
+                _res = store_daily_disclosures(sb, _today_str, rows_to_insert)
+                _stored = f" (저장 {_res['saved']}/{_res['want']}건{'' if _res['verified'] else ', 확인 조회 실패'})"
 
             logging.info(
                 f"📊 [공시저장] 실적공시 {len(today_corps)}건 / "
-                f"전체공시 {len(all_disc_records)}→{len(processed_disclosures)}건 "
+                f"전체공시 {len(all_disc_records)}→{len(processed_disclosures)}건{_stored} "
                 f"daily_disclosures 저장 완료"
             )
 
