@@ -42,6 +42,20 @@ except ImportError:
 SB_URL = os.getenv("SB_URL", "")
 SB_KEY = os.getenv("SB_SERVICE_KEY", "")  # service_role 키
 
+# run_disclosure_flag(공시수집 수동 실행) — 프로세스가 뜬 뒤 아직 한 번도 읽지 못한 상태
+_UNSEEN = object()
+_FLAG_FRESH_SEC = 300   # 뜬 뒤 첫 확인에서 이보다 최근에 눌린 값(밀리초 타임스탬프)만 '재시작 중 누름'으로 실행
+
+
+def _is_recent_ms(val, within_sec: float) -> bool:
+    """val이 밀리초 타임스탬프(프론트 String(Date.now()))이고 지금부터 within_sec 안이면 True."""
+    try:
+        ms = int(str(val).strip())
+    except (TypeError, ValueError):
+        return False
+    age = datetime.now(timezone.utc).timestamp() - ms / 1000
+    return -60 <= age <= within_sec   # 누른 쪽 시계가 조금 빠른 경우까지 받는다
+
 
 class SupabaseBridge:
     def __init__(self):
@@ -50,7 +64,7 @@ class SupabaseBridge:
         self._cache_ts = None
         self._cache_ttl = 300  # 5분 캐시
         self._last_reload_flag      = None  # 마지막으로 확인한 reload_flag 값
-        self._last_disclosure_flag  = None  # 마지막으로 확인한 run_disclosure_flag 값
+        self._last_disclosure_flag  = _UNSEEN  # 마지막으로 확인한 run_disclosure_flag 값 (_UNSEEN = 아직 못 읽음)
 
     def _get_client(self) -> Optional[Client]:
         if not _SUPABASE_AVAILABLE:
@@ -374,15 +388,26 @@ class SupabaseBridge:
         """
         봇에서 호출 — run_disclosure_flag가 마지막 체크 이후 변경됐으면 True 반환.
         True 반환 시 공시 수집 job을 즉시 실행해야 합니다.
+
+        프로세스가 뜬 뒤 처음 읽은 값은 기준으로만 삼는다. 예전엔 기준이 None이라 봇이 뜰 때마다
+        (기동 약 70초 뒤 첫 워치독) 몇 달 전 값을 '방금 누름'으로 읽어 재무수집 전체를 한 번 더 돌렸다
+        (2026-11-11~11-17 기동 9번 모두. 마감일 11-16엔 1,400곳·약 1시간이 18:30 정규 실행과 겹쳤다).
+        첫 값이 _FLAG_FRESH_SEC 안의 밀리초 타임스탬프면 재시작 중에 누른 것으로 보고 실행한다.
         """
         client = self._get_client()
         if not client:
             return False
         try:
             res = client.table("app_config").select("value").eq("key", "run_disclosure_flag").execute()
-            if not res.data:
+            flag_val = res.data[0]["value"] if res.data else None
+            if self._last_disclosure_flag is _UNSEEN:
+                self._last_disclosure_flag = flag_val
+                if _is_recent_ms(flag_val, _FLAG_FRESH_SEC):
+                    logging.info("[Bridge] 공시수집 수동 트리거 감지 (재시작 직전에 누름)")
+                    return True
                 return False
-            flag_val = res.data[0]["value"]
+            if flag_val is None:
+                return False
             if flag_val != self._last_disclosure_flag:
                 self._last_disclosure_flag = flag_val
                 logging.info("[Bridge] 공시수집 수동 트리거 감지")
