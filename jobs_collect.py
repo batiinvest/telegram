@@ -1218,6 +1218,22 @@ def job_jp_tw():
 
 
 @_job()
+def job_us_etf_rs():
+    """매일 07:20 · 08:30 — 미국 업종 ETF 99개 상대강도 · 소르티노 점검(Yahoo 수정 종가 3년) → market_snapshot(kind='us_etf').
+
+    SPY 대비 Mansfield RS, 변동성 조정 모멘텀 · 소르티노 최근 10거래일 상위 20, 30일 이격도 과열 점검, 이동평균 정배열.
+    한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다."""
+    try:
+        logging.info("📊 [미국ETF] collect_us_etf_rs 실행 시작")
+        import collect_us_etf_rs
+        r = collect_us_etf_rs.run()
+        logging.info(f"=== [미국ETF] 완료: {r.get('date')} ETF {r.get('n')} · RS 70 이상 {r.get('strong')}개 · 완전 정배열 {r.get('full')}개 ===")
+    except Exception as e:
+        logging.error(f"❌ [미국ETF] 오류: {e}")
+        mark_failed(e)
+
+
+@_job()
 def job_ai_hw():
     """매일 07:00 · 08:20 — AI 하드웨어 41종목 Breadth · 피크아웃 점검(Yahoo 수정 종가 3년) → market_snapshot(kind='ai_hw').
 
@@ -1528,6 +1544,7 @@ _RETRYABLE_JOBS = {
     'job_tw_revenue':               job_tw_revenue,
     'job_jp_tw':                    job_jp_tw,
     'job_ai_hw':                    job_ai_hw,
+    'job_us_etf_rs':                job_us_etf_rs,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
