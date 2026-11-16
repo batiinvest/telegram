@@ -17,7 +17,7 @@ from db_utils import fetch_all_pages
 from format_utils import fmt_change_pct
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, CHAT_IDS_BY_CODE
-from job_infra import _job, _is_enabled, _log_notice, _send_logged, _bridge, _BRIDGE_OK, mark_failed, get_missing_jobs, is_dart_maintenance
+from job_infra import _job, _is_enabled, _log_notice, _send_logged, _bridge, _BRIDGE_OK, mark_failed, get_missing_jobs, get_active_jobs, is_dart_maintenance
 
 # ✅ 재무/시장 데이터 수집 + 상장사 동기화
 try:
@@ -1098,8 +1098,9 @@ def job_flow_empty():
     기업분석 표의 '수급빈집' 칩이 이 컬럼만 읽는다(화면 계산 시 로딩 2배).
     ③ 태린이아빠 전략 조건(collect_leading) — 주도 업종 보드·RS·후보 조건(lead_flags).
     ④ 업종 수급 오실레이터(collect_sector_flow) — WICS 중분류 × 시장, KIS 호출 없음(DB 합산).
-    약 12~14분 걸려 스레드로 돈다(run_all). 18:40 추정실적(KIS 약 8분)이 끝난 뒤 19:25 재처리
-    전까지 KIS를 쓰는 대량 잡이 없는 구간이다."""
+    25~35분 걸려 스레드로 돈다(run_all). 18:40 추정실적(KIS 약 9분)이 끝난 뒤 19:25 재처리
+    전까지 KIS를 쓰는 대량 잡이 없는 구간이다. run_all이 18:42 당일 매수대금·18:40 추정실적의
+    '완료'에 묶어 띄운다(_after) — 두 잡이 늦게 끝난 날엔 그만큼 늦게 시작한다."""
     failed = None
     try:
         import collect_flow_empty
@@ -1289,7 +1290,10 @@ def job_earnings_reconcile():
     실시간 잠정공시 훅에만 의존하던 종전 구조는 훅 누락(2026-08 리팩토링으로 소실) 시
     적재가 0이 됐다. 이 잡은 financials 확정치를 스캔해 컨센 +10%↑·흑자전환·영업익
     YoY/QoQ +100%↑ 폭증을 earnings_surprise에 신규만 멱등 적재한다(각 종목 1회).
-    19:10 브리핑이 당일 적재분을 메인채널로 발송한다."""
+    19:10 브리핑이 당일 적재분을 메인채널로 발송한다.
+    순서는 run_all이 '완료'로 묶는다(_after): 18:30 재무수집 완료 → 이 잡 → 브리핑. 브리핑은 그날
+    base_date 행만 읽고 이 잡은 새 (종목, 분기)만 넣으므로, 브리핑이 먼저 나가면 그날 새로 잡힌 종목은
+    다음 날에도 실리지 않는다(2026-11-13 17건)."""
     if not _COLLECTOR_OK:
         logging.warning("[어닝재조정] auto_detect_quarter 불가 — 스킵")
         return
@@ -1488,7 +1492,8 @@ def job_market_summary():
 def job_daily_summary():
     """평일 18:55 — 종목별 저녁 요약 생성 (daily_summaries).
 
-    18:30 job_collect_financials가 daily_disclosures를 채운 뒤 실행해야 한다.
+    18:30 job_collect_financials가 daily_disclosures를 채운 뒤 실행해야 한다 — run_all이 재무수집의
+    '완료'에 묶어 띄운다(_after). 재무수집이 18:55를 넘기는 실적 마감 주간엔 그만큼 늦게 시작한다.
     뉴스는 뉴스봇이 발송 시점에 적재한 daily_news를 읽는다(재조회 불가).
     """
     try:
@@ -1561,6 +1566,14 @@ def job_retry_failed():
     missing, _disabled = get_missing_jobs(set(last))
     unrun = [n for n, _at in missing if n in _RETRYABLE_JOBS]
     targets = list(dict.fromkeys(failed + unrun))  # 순서 보존 dedup
+    # 지금 돌고 있거나 선행 잡을 기다리는 잡은 건드리지 않는다 — 겹쳐 돌리면 둘 다 느려지고
+    # 이 잡(스케줄 루프)이 그동안 막힌다. ②는 get_missing_jobs가 이미 빼지만 ①(앞 회차 실패 뒤
+    # 다음 회차가 도는 중)도 같은 이유로 뺀다.
+    _running, _waiting = get_active_jobs()
+    busy = [n for n in targets if n in _running or n in _waiting]
+    if busy:
+        logging.info("[재처리] 진행 중이라 건너뜀: " + ", ".join(busy))
+        targets = [n for n in targets if n not in busy]
     if not targets:
         logging.info("[재처리] 재실행 대상 없음")
         return

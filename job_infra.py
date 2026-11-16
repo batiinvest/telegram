@@ -13,6 +13,7 @@ import threading
 import functools
 
 import stock_api
+import job_state
 from managers import market_timer
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, INDUSTRY_CHAT_IDS, COMPANY_CHAT_IDS, COMPANY_CODES
@@ -185,9 +186,35 @@ def set_expected_jobs(jobs):
     logging.info(f"🗓 [스케줄] 기대 잡 {len(_EXPECTED_JOBS)}개 등록 (미실행 탐지용)")
 
 
+def get_active_jobs() -> tuple:
+    """(도는 중, 선행 잡 완료 대기 중) 잡 이름 목록 — 아직 실행 기록(job_runs)이 없을 뿐 '미실행'이 아니다."""
+    return job_state.active()
+
+
+def wait_for_jobs(waiter: str, deps, timeout_min: float = 120.0) -> bool:
+    """순서가 중요한 잡을 예약 시각이 아니라 선행 잡의 '완료'에 묶는다(run_all._after가 부른다).
+
+    deps = [(선행 잡 이름, 'HH:MM' 그 잡의 예약 시각), ...]. 선행 잡이 끝나면(성공·실패·가드 스킵 무관) True.
+    선행 잡이 시작한 흔적이 없거나 timeout_min을 넘기면 False — 그래도 호출부는 본 잡을 실행한다.
+    시간 초과는 관리자 방에 알린다(순서가 어긋난 채 나갔을 수 있다는 뜻이므로)."""
+    def _on_timeout(dep, waited):
+        try:
+            target = _get_admin_chat_id()
+            if target:
+                stock_api.send_telegram(
+                    target,
+                    f"⏳ <b>[순서 대기 초과] {waiter}</b>\n"
+                    f"선행 {dep}이 {waited / 60:.0f}분째 끝나지 않아 먼저 실행합니다.")
+        except Exception:
+            pass
+    return job_state.wait_for(waiter, deps, timeout_sec=timeout_min * 60, on_timeout=_on_timeout)
+
+
 def get_missing_jobs(ran) -> tuple:
     """(미실행, 비활성) — 오늘 예정시각이 지났는데 실행 기록이 없는 잡.
-    가드(주말/휴장일/DB토글)는 데코레이터 등록값으로 판정 — 재시작에 영향받지 않는다."""
+    가드(주말/휴장일/DB토글)는 데코레이터 등록값으로 판정 — 재시작에 영향받지 않는다.
+    지금 돌고 있거나 선행 잡을 기다리는 잡은 뺀다 — 실행 기록은 끝나야 남는데, 그걸 미실행으로 보면
+    19:25 재처리가 아직 도는 잡을 한 번 더 겹쳐 돌린다(job_flow_empty, 11월에만 4번)."""
     if not _EXPECTED_JOBS:
         return [], []
     now = datetime.datetime.now()
@@ -198,9 +225,11 @@ def get_missing_jobs(ran) -> tuple:
         holiday = market_timer.is_kr_holiday()
     except Exception:
         holiday = False
+    _running, _waiting = job_state.active()
+    in_progress = set(_running) | set(_waiting)
     missing, disabled = [], []
     for name, meta in sorted(_EXPECTED_JOBS.items()):
-        if name in ran:
+        if name in ran or name in in_progress:
             continue
         if meta['day'] != 'every' and meta['day'] != wd:
             continue
@@ -288,14 +317,19 @@ def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
+            # 가드로 건너뛴 것도 이 잡을 기다리는 후행 잡(wait_for_jobs)에겐 '끝난 것'이다
             if weekday_only and datetime.datetime.now().weekday() >= 5:
+                job_state.skipped(fn.__name__)
                 return
             if holiday and market_timer.is_kr_holiday():
+                job_state.skipped(fn.__name__)
                 return
             if key is not None and not _is_enabled(key):
                 logging.info(f"⏸ [{key}] 비활성화 (DB 설정)")
+                job_state.skipped(fn.__name__)
                 return
             start = time.time()
+            began = job_state.enter(fn.__name__)   # 진행 중 표시 — finally에서 '끝남'으로 바꾼다
             # 잡 안에서 다른 잡을 부르는 중첩이 생길 수 있으므로
             # 바깥 잡의 실패 목록을 보존했다가 finally에서 되돌린다.
             prev = getattr(_JOB_LOCAL, 'failures', None)
@@ -317,6 +351,7 @@ def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
                 _notify_job_failure(fn.__name__, e)
             finally:
                 _JOB_LOCAL.failures = prev
+                job_state.leave(fn.__name__, began)
         return wrapper
     return decorator
 

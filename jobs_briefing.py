@@ -12,7 +12,7 @@ from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, COMMON_BUTTON
 from job_infra import (_job, _log_notice, _send_logged, _bridge, _JOB_RESULTS,
                        _broadcast_to_industries, _broadcast_to_companies,
-                       mark_failed, get_missing_jobs)
+                       mark_failed, get_missing_jobs, get_active_jobs)
 from managers import pop_send_failures
 
 # ✅ 프로 채널 관리 모듈
@@ -266,6 +266,13 @@ def job_daily_ops_summary():
         lines.append(f"🐢 {v['time']} {k}: {v['elapsed']:.0f}초 소요")
     for cid, rec in sorted(send_fails.items(), key=lambda x: -x[1]['count']):
         lines.append(f"📵 발송실패 {cid} ×{rec['count']} — {rec['reason']}")
+    # 아직 도는 잡·선행 잡을 기다리는 잡 — 실행 기록이 없을 뿐 미실행이 아니다.
+    # 이 요약 뒤에 실패하면 [잡 실패] 알림이 따로 간다.
+    running, waiting = get_active_jobs()
+    in_progress = ([k for k in running if k != 'job_daily_ops_summary']
+                   + [f"{k}(선행 잡 대기)" for k in waiting])
+    if in_progress:
+        lines.append("⏳ 진행 중: " + ", ".join(in_progress))
     if disabled:
         lines.append("⏸ 비활성: " + ", ".join(disabled))
     if not fails and not slows and not recov and not missing and not send_fails:
