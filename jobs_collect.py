@@ -22,7 +22,7 @@ from job_infra import _job, _is_enabled, _log_notice, _send_logged, _bridge, _BR
 
 # ✅ 재무/시장 데이터 수집 + 상장사 동기화
 try:
-    from collect_financials        import run as run_financials, auto_detect_quarter
+    from collect_financials        import run as run_financials, auto_detect_quarter, fin_report_rows
     # run_financials(year, quarter, monitored_only=True) 형태로 호출 가능
     from collect_market            import run as run_market
     from collect_listed_companies  import run as run_sync_companies
@@ -33,7 +33,7 @@ try:
     _COLLECTOR_OK = True
 except ImportError as _ie:
     _COLLECTOR_OK = False
-    run_financials = auto_detect_quarter = run_market = run_sync_companies = None
+    run_financials = auto_detect_quarter = fin_report_rows = run_market = run_sync_companies = None
     _save_grade_history = _save_trend_flags = _collect_insider = None
     _collect_company_one = run_short = _check_short_surge = _format_surge_msg = None
     logging.warning(f"수집 모듈 없음 (무시): {_ie}")
@@ -415,11 +415,11 @@ def job_collect_financials():
 
         today_corps    = []
         quarter_groups = {}  # {(year, quarter): [corp_code]} — 정기보고서 없는 날 NameError 방지
-        if disc_fin is not None and not disc_fin.empty:
-            filtered = disc_fin[
-                disc_fin['report_nm'].str.contains('|'.join(target_types), na=False) &
-                ~disc_fin['report_nm'].str.contains('정정|기재정정', na=False)  # ✅ 정정 공시 제외
-            ]
+        _lists = [x for x in (disc_all, disc_fin) if x is not None and not x.empty]
+        if _lists:
+            # 원본 정기보고서만(정정 제외). 최종본(final=True)만 보면 같은 날 정정이 올라온 회사는 정정본만 남아
+            # 통째로 빠진다(2026-11-16 종근당 등 7곳) → 전체 목록(final=False)의 원본도 함께 본다.
+            filtered = fin_report_rows(*_lists)
             if not filtered.empty:
                 # 종목별로 report_nm에서 실제 분기 파싱 → 분기별 그룹핑
                 from collect_financials import run_by_corp_codes

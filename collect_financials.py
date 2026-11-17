@@ -1207,6 +1207,9 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
 
     ok, fail = 0, 0
     collected = []
+    # 공시는 목록에 떴는데 DART 재무 API(fnlttSinglAcntAll)엔 아직 없는 회사(013) — 저장 안 됐으니 '성공'으로 세지 않는다.
+    # 예전엔 ok에 넣어 '성공 809 / 실패 0'인데 실제 저장은 700이었다(2026-11-13; 11-16은 1,429 중 1,081).
+    nodata = []
     for i, t in enumerate(targets, 1):
         corp_code  = t.get('corp_code', '')
         stock_code = (t.get('code', '') or '').replace('.KS', '').replace('.KQ', '')
@@ -1216,7 +1219,9 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
                 log.info(f"[{i}/{len(targets)}] {corp_name}" + (" (재시도)" if attempt else ""))
                 row = collect_one(dart, corp_code, stock_code, corp_name,
                                   year=year, quarter=quarter)
-                if row:
+                if not row:
+                    nodata.append(corp_name)
+                else:
                     # ── Q4 누적→단독 변환 ──────────────────────────
                     if quarter == "Q4":
                         fs_div_row = row.get("fs_div", "CFS")
@@ -1248,7 +1253,7 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
                         prev_row = cumulative_prev_cf(sb, row.get("stock_code"), year, quarter, fs_div_row)
                         row = convert_to_pure_quarter(row, prev_row)
                     collected.append(row)
-                ok += 1
+                    ok += 1
                 break
             except Exception as e:
                 if attempt == 0:
@@ -1300,7 +1305,12 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
                      "corp_code,bsns_year,quarter,fs_div",
                      chunk=50, progress_label="DB 저장")
 
-    log.info(f"=== 공시 기반 수집 완료: 성공 {ok} / 실패 {fail} ===")
+    if nodata:
+        # 오후 늦게 낸 보고서는 그날 저녁엔 재무 API에 없고 다음 날 새벽쯤 들어온다(11-16 저녁 132곳 → 11-17 아침 있음).
+        # 이 실행은 다시 보지 않으니 이름을 남긴다 — 토요일 02:00 재무백필이 채울 때까지 빈칸.
+        log.warning(f"[DART 재무 없음] {year} {quarter} {len(nodata)}곳 — 공시는 떴지만 재무 API에 아직 없어 저장 못 함: "
+                    + ", ".join(nodata[:40]) + (f" 외 {len(nodata) - 40}곳" if len(nodata) > 40 else ""))
+    log.info(f"=== 공시 기반 수집 완료: 성공 {ok} / DART 재무 없음 {len(nodata)} / 실패 {fail} ===")
     return ok, fail
 
 
@@ -1371,6 +1381,31 @@ def auto_detect_quarter() -> tuple:
 def _is_spac(name):
     """스팩(SPAC)은 표준 재무가 없어 재무수집 대상에서 제외."""
     return '스팩' in (name or '')
+
+
+FIN_REPORT_TYPES = ('분기보고서', '반기보고서', '사업보고서')
+
+
+def fin_report_rows(*frames):
+    """재무수집을 일으키는 정기보고서 행 — DART 목록 여러 개(final=False 전체·final=True 최종본)를 합쳐
+    원본 보고서만, 접수번호당 한 번. 반환은 원래 칸 그대로의 DataFrame(없으면 빈 DataFrame).
+
+    정정본(기재정정·첨부정정 등)은 예전처럼 트리거로 쓰지 않는다. 다만 원본을 최종본 목록에서만 찾으면
+    같은 날 정정이 올라온 회사는 최종본 목록에 정정본만 남아 그날 수집에서 통째로 빠진다
+    (2026-11-16 종근당·한국가스공사·화승코퍼레이션 등 7곳 3분기 재무 없음) → 전체 목록의 원본도 함께 본다."""
+    import pandas as pd
+    parts = []
+    for df in frames:
+        if df is None or df.empty or 'report_nm' not in df.columns:
+            continue
+        nm = df['report_nm'].astype(str)
+        parts.append(df[nm.str.contains('|'.join(FIN_REPORT_TYPES), na=False) & ~nm.str.contains('정정', na=False)])
+    if not parts:
+        return pd.DataFrame()
+    out = pd.concat(parts, ignore_index=True)
+    if 'rcept_no' in out.columns:
+        out = out.drop_duplicates(subset='rcept_no', keep='first')
+    return out.reset_index(drop=True)
 
 
 def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,
