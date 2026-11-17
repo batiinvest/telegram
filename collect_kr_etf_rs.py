@@ -137,9 +137,48 @@ def _krx_fill(px, codes):
     return filled
 
 
+def _krx_bench(px, kst):
+    """야후 코스피 지수에 빠진 거래일을 KRX 코스피 지수 종가로 채운다(없는 날이면 줄을 새로 만든다). 반환: (px, 채운 날 수).
+    야후는 코스피 지수 · 일부 종목 일봉을 하루 넘게 늦게 올리는 날이 있다(2026-11-18 06시에도 11-17 봉 없음 — 일부 ETF만 있음).
+    대상 = 종목 절반 이상은 값이 있는데 코스피만 빈 날 + 야후 마지막 코스피 날 뒤 평일 ~ 마지막 마감일(15:45 전이면 어제).
+    휴장일은 KRX 응답에 없으므로 저절로 빠진다. 종목 칸은 뒤이은 _krx_fill이 그날 KRX 전종목 종가로 채운다."""
+    import pandas as pd
+    from collect_active_etf import Krx
+
+    b = px[BENCH]
+    cover = px.drop(columns=[BENCH]).notna().mean(axis=1)
+    need = list(px.index[b.isna() & (cover >= 0.5)])
+    last_done = kst.date() if (kst.hour, kst.minute) >= (15, 45) else kst.date() - timedelta(days=1)
+    lastb = b.last_valid_index()
+    d = lastb.date() + timedelta(days=1) if lastb is not None else last_done + timedelta(days=1)
+    while d <= last_done:
+        if d.weekday() < 5:
+            need.append(pd.Timestamp(d))
+        d += timedelta(days=1)
+    need = sorted(set(need))
+    if not need:
+        return px, 0
+    krx = Krx()
+    krx.login()
+    r = krx.get('dbms/MDC/STAT/standard/MDCSTAT00301', indIdx='1', indIdx2='001', strtDd=min(need).strftime('%Y%m%d'),
+                endDd=max(need).strftime('%Y%m%d'), share='2', money='3', csvxls_isNo='false')
+    got = {}
+    for x in r.get('output') or []:
+        v = (x.get('CLSPRC_IDX') or '').replace(',', '')
+        if x.get('TRD_DD') and v not in ('', '-'):
+            got[pd.Timestamp(x['TRD_DD'].replace('/', '-'))] = float(v)
+    n = 0
+    for dd in need:
+        if dd in got:
+            px.loc[dd, BENCH] = got[dd]
+            n += 1
+    return px.sort_index(), n
+
+
 def fetch_prices(start=DATA_START, now_utc=None, adjust_until=None):
     """야후 종가 → DataFrame(날짜 × 이름 + '코스피').
     · 거래일 = 코스피 종가가 있는 날(원본 엑셀의 DATE). 장 마감(15:45 KST) 전이면 오늘 봉은 버린다.
+    · 야후 코스피가 늦게 올라온 최근 거래일 · 가운데 빈 날은 KRX 지수로 채운다(_krx_bench).
     · 야후에 빈 날은 KRX 그날 종가로 채운다(2025-09-19 주식 4종목이 비어 있어 52주 신고가가 1년간 막혔던 것).
     · ETF는 분배금을 반영한 수정 종가(분배락일 전 가격 × (1 − 분배금 ÷ 직전 종가)), 주식 4종목 · 코스피는 수정 전 종가 — 원본과 같은 조합.
       adjust_until을 주면 그날까지의 분배금만 반영한다(원본 엑셀 재현 시험용)."""
@@ -160,6 +199,9 @@ def fetch_prices(start=DATA_START, now_utc=None, adjust_until=None):
     px = px.sort_index()
     if len(px) and px.index[-1].date() == kst.date() and (kst.hour, kst.minute) < (15, 45):
         px = px.iloc[:-1]
+    px, nb = _krx_bench(px, kst)
+    if nb:
+        log.info(f'[한국ETF] 야후에 없는 코스피 {nb}일을 KRX 지수로 채움')
     px = px[px[BENCH].notna()]
     cols = [n for n in UNIVERSE if n in px.columns]
     filled = _krx_fill(px, {n: UNIVERSE[n].split('.')[0] for n in cols})
