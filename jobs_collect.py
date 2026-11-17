@@ -1238,6 +1238,23 @@ def job_us_etf_rs():
         mark_failed(e)
 
 
+@_job(holiday=True)
+def job_kr_etf_rs():
+    """평일 16:50 · 19:20 — 한국 업종 ETF 38개 + 대형주 4종목 상대강도 · 시장 폭 · 52주 신고가 전략 → market_snapshot(kind='kr_etf').
+
+    코스피 대비 Mansfield RS, 모멘텀 · 소르티노 · ETR 최근 10거래일 상위 20, 쏠림지수 · Breadth, 30일 이격도 과열 점검, 정배열,
+    52주 신고가 전략 백테스트(2025-01-21부터). 야후 종가(빈 날은 KRX로 채움), 약 15초. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다."""
+    try:
+        logging.info("🧭 [한국ETF] collect_kr_etf_rs 실행 시작")
+        import collect_kr_etf_rs
+        r = collect_kr_etf_rs.run()
+        p = r.get('payload') or {}
+        logging.info(f"=== [한국ETF] 완료: {r.get('date')} 종목 {p.get('n')} · 쏠림 {(p.get('crowd') or {}).get('value')} ===")
+    except Exception as e:
+        logging.error(f"❌ [한국ETF] 오류: {e}")
+        mark_failed(e)
+
+
 @_job()
 def job_ai_hw():
     """매일 07:00 · 08:20 — AI 하드웨어 41종목 Breadth · 피크아웃 점검(Yahoo 수정 종가 3년) → market_snapshot(kind='ai_hw').
@@ -1551,6 +1568,7 @@ _RETRYABLE_JOBS = {
     'job_ai_hw':                    job_ai_hw,
     'job_us_etf_rs':                job_us_etf_rs,
     'job_us_52w':                   job_us_52w,
+    'job_kr_etf_rs':                job_kr_etf_rs,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
