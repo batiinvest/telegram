@@ -7,7 +7,23 @@ run_all.py — 통합 시스템 엔트리포인트
   - jobs_briefing.py  : 브리핑·발송·운영 잡 본문
   - watchdog_flags.py : 수동 트리거 플래그·재로드·bot_requests
 """
+import os
 import sys
+
+# ── 메모리 할당자: 파이썬 객체 풀을 끄고 glibc 아레나를 2개로 묶어 같은 PID로 다시 실행 ──
+# 봇이 잡을 끝내도 메모리를 OS에 못 돌려줘(객체 풀 조각·스레드마다 생긴 아레나 17개) 하루 새
+# 236MB→707MB로 불었고, 대부분 스왑에 밀려 있다가 다음 잡이 다시 쓸 때 디스크에서 읽혀 봇 전체가
+# 3~5분 멈췄다(2026-11-17 19:00·20:10 실측). 객체 풀을 끄면 잡 뒤 malloc_trim으로 돌려받는 양이
+# 크게 는다(같은 계산 뒤 잔류 175MB→88MB). 잡마다 돌려주는 곳은 job_infra._job → mem_release.release.
+# 환경변수를 이미 정해 두었으면(디버깅 등) 손대지 않는다. 실패하면 기본 할당자로 그대로 기동한다.
+if __name__ == "__main__" and sys.platform.startswith("linux") and "PYTHONMALLOC" not in os.environ:
+    _env = dict(os.environ, PYTHONMALLOC="malloc")
+    _env.setdefault("MALLOC_ARENA_MAX", "2")
+    try:
+        os.execve(sys.executable, sys.orig_argv, _env)
+    except Exception as _e:
+        print(f"⚠️ [메모리] 할당자 설정 재실행 실패 — 기본값으로 계속: {_e}", file=sys.stderr)
+
 import time
 import logging
 import functools
@@ -326,6 +342,8 @@ def restart_thread(target_func, name):
 
 def main():
     logging.info("📢 바티인베스트 통합 시스템 가동 (Schedule Mode)")
+    logging.info(f"🧠 [메모리] 할당자 PYTHONMALLOC={os.environ.get('PYTHONMALLOC', '기본')} · "
+                 f"아레나 최대 {os.environ.get('MALLOC_ARENA_MAX', '기본')} · 잡 끝마다 malloc_trim")
 
     t_scanner   = threading.Thread(target=run_scanner_bot, name="Thread-Price", daemon=True)
     t_news      = threading.Thread(target=run_news_bot,    name="Thread-News",  daemon=True)

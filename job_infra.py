@@ -14,6 +14,7 @@ import functools
 
 import stock_api
 import job_state
+import mem_release
 from managers import market_timer
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, INDUSTRY_CHAT_IDS, COMPANY_CHAT_IDS, COMPANY_CODES
@@ -352,6 +353,10 @@ def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
             finally:
                 _JOB_LOCAL.failures = prev
                 job_state.leave(fn.__name__, began)
+                # 잡이 쓰고 남은 메모리를 OS에 돌려준다 — 안 돌려주면 스왑에 쌓였다가 다음 잡이
+                # 다시 쓸 때 디스크에서 읽혀 봇 전체가 몇 분씩 멈췄다(2026-11-17 실측, mem_release.py).
+                # leave 뒤라 이 잡을 기다리는 후행 잡(wait_for_jobs)은 이것을 기다리지 않는다.
+                mem_release.release(fn.__name__)
         return wrapper
     return decorator
 
