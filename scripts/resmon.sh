@@ -15,6 +15,7 @@
 #   YYYYMMDD.csv          표본마다 한 줄 — 시스템 메모리·스왑·PSI·CPU(steal)·디스크·봇 프로세스(RSS·스왑·폴트·디스크 읽기)·bati.log 크기
 #   YYYYMMDD_threads.csv  표본마다 봇 스레드별 상태(R 실행·S 대기·D 디스크 대기)·CPU 틱·폴트·스레드 시작 틱(잡 스레드는 시작 시각으로 잡과 맞춘다)
 #   YYYYMMDD_procs.csv    표본마다 RSS 10MB 이상인 모든 프로세스(cron으로 뜨는 check_alive 등 포함)
+#   YYYYMMDD_wchan.csv    표본마다 봇 스레드 전부의 tid:상태:커널 대기 위치(wchan) — 멈춤이 디스크 대기인지 GIL 독점인지 가른다
 #   CPU·폴트·PSI·디스크 값은 누적값 그대로 적는다 — 구간 차이는 분석 때 계산한다.
 # 표본 하나에 bash 내장 명령만 쓰고 외부 명령은 stat·sleep뿐이라 부담이 거의 없다(RSS 약 4MB).
 
@@ -88,10 +89,11 @@ while :; do
 
     printf -v day '%(%Y%m%d)T' "$now"
     printf -v hms '%(%H:%M:%S)T' "$now"
-    F_MAIN="$OUT/$day.csv"; F_THR="$OUT/${day}_threads.csv"; F_PRC="$OUT/${day}_procs.csv"
+    F_MAIN="$OUT/$day.csv"; F_THR="$OUT/${day}_threads.csv"; F_PRC="$OUT/${day}_procs.csv"; F_WCH="$OUT/${day}_wchan.csv"
     if [ "$day" != "$day_cur" ]; then
         [ -s "$F_MAIN" ] || echo "$MAIN_HDR" > "$F_MAIN"
         [ -s "$F_THR" ] || echo "ts,pid,tid,state,utime,stime,minflt,majflt,starttime" > "$F_THR"
+        [ -s "$F_WCH" ] || echo "ts,pid,tid:state:wchan ..." > "$F_WCH"
         [ -s "$F_PRC" ] || echo "ts,pid,comm,rss_kb" > "$F_PRC"
         day_cur=$day
     fi
@@ -115,13 +117,19 @@ while :; do
         while read -r k v; do
             [ "$k" = "read_bytes:" ] && { p_rb=$v; break; }
         done < "/proc/$BOTPID/io"
-        # 스레드별 (상태 R/S/D, 누적 CPU 틱, 폴트, 시작 틱)
+        # 스레드별 (상태 R/S/D, 누적 CPU 틱, 폴트, 시작 틱) + 커널 대기 위치(wchan) 한 줄
+        #   메모리 부족 멈춤 = GIL 쥔 스레드가 D(페이지 폴트 디스크 대기), 나머지는 futex(GIL 대기)
+        #   GIL 독점 = 한 스레드 R(실행) + CPU 100%, 나머지 futex
+        wl=""
         {
             for t in /proc/$BOTPID/task/*; do
                 read -r -a T < "$t/stat" || continue
                 echo "$now,$BOTPID,${T[0]},${T[2]},${T[13]},${T[14]},${T[9]},${T[11]},${T[21]}"
+                w=""; read -r w < "$t/wchan" || true
+                wl="$wl ${T[0]}:${T[2]}:${w:-0}"
             done
         } >> "$F_THR"
+        echo "$now,$BOTPID,${wl# }" >> "$F_WCH"
     fi
 
     # ── 메모리 ──
