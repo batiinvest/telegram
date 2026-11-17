@@ -1208,6 +1208,21 @@ def job_jp_tw():
 
 
 @_job()
+def job_us_52w():
+    """매일 07:30 · 08:40 — 미국 52주 신고가 전략(52W FIXED + Rotation_B) 백테스트·현재 포트 → market_snapshot(kind='us_52w').
+
+    SPY·QQQ·업종 ETF 57개 3년 수정 종가로 원본 백테스트를 그대로 돌린다(약 15초). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓴다."""
+    try:
+        logging.info("🏁 [미국52주] collect_us_52w 실행 시작")
+        import collect_us_52w
+        r = collect_us_52w.run()
+        logging.info(f"=== [미국52주] 완료: {r.get('date')} {r.get('status')} · {r.get('regime')} ===")
+    except Exception as e:
+        logging.error(f"❌ [미국52주] 오류: {e}")
+        mark_failed(e)
+
+
+@_job()
 def job_us_etf_rs():
     """매일 07:20 · 08:30 — 미국 업종 ETF 99개 상대강도 · 소르티노 점검(Yahoo 수정 종가 3년) → market_snapshot(kind='us_etf').
 
@@ -1535,6 +1550,7 @@ _RETRYABLE_JOBS = {
     'job_jp_tw':                    job_jp_tw,
     'job_ai_hw':                    job_ai_hw,
     'job_us_etf_rs':                job_us_etf_rs,
+    'job_us_52w':                   job_us_52w,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
