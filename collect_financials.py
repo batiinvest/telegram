@@ -1306,8 +1306,8 @@ def run_by_corp_codes(corp_codes: list, year: str, quarter: str, max_workers: in
                      chunk=50, progress_label="DB 저장")
 
     if nodata:
-        # 오후 늦게 낸 보고서는 그날 저녁엔 재무 API에 없고 다음 날 새벽쯤 들어온다(11-16 저녁 132곳 → 11-17 아침 있음).
-        # 이 실행은 다시 보지 않으니 이름을 남긴다 — 토요일 02:00 재무백필이 채울 때까지 빈칸.
+        # 오후 늦게 낸 보고서는 그날 저녁엔 재무 API에 없고 다음 날쯤 들어온다(11-16 저녁 132곳 → 11-17 있음).
+        # 이 실행은 다시 보지 않으니 이름을 남긴다 — 매일 07:30 재무 보충(run_catchup)이 최근 7일분을 다시 본다.
         log.warning(f"[DART 재무 없음] {year} {quarter} {len(nodata)}곳 — 공시는 떴지만 재무 API에 아직 없어 저장 못 함: "
                     + ", ".join(nodata[:40]) + (f" 외 {len(nodata) - 40}곳" if len(nodata) > 40 else ""))
     log.info(f"=== 공시 기반 수집 완료: 성공 {ok} / DART 재무 없음 {len(nodata)} / 실패 {fail} ===")
@@ -1406,6 +1406,103 @@ def fin_report_rows(*frames):
     if 'rcept_no' in out.columns:
         out = out.drop_duplicates(subset='rcept_no', keep='first')
     return out.reset_index(drop=True)
+
+
+_REPORT_PERIOD = re.compile(r'\((\d{4})\.(\d{2})\)')
+_PERIOD_QUARTER = {3: 'Q1', 6: 'Q2', 9: 'Q3', 12: 'Q4'}
+_DEC_FY_MONTHS = {'분기보고서': (3, 9), '반기보고서': (6,), '사업보고서': (12,)}   # 12월 결산 회사의 보고서 종류↔결산 달
+
+
+def report_quarter(report_nm):
+    """정기보고서 이름 → (연도, 분기). '분기보고서 (2026.09)' → ('2026', 'Q3'). 매일 18:30 재무수집과 07:30 재무 보충이 같이 쓴다.
+
+    12월 결산 회사의 짝(분기보고서 3·9월, 반기보고서 6월, 사업보고서 12월)만 분기로 본다. 짝이 안 맞으면 결산월이 다른
+    회사라 (None, None) — 3월 결산의 '반기보고서 (2026.09)'는 DART에선 2026 반기(11012)인데 달로 정하면 3분기(11014)를
+    찾게 돼 늘 '없음'(013)이었다(2026-11 메이슨캐피탈 등 11곳). 이런 회사는 토요일 재무백필이 DART 사업연도 기준으로 받는다
+    (2026 Q1·Q2 = 4~6월·4~9월). 6월 결산의 '분기보고서 (2026.09)'처럼 짝이 맞아 보이는 경우는 가려내지 못한다(드묾)."""
+    nm = report_nm or ''
+    m = _REPORT_PERIOD.search(nm)
+    if not m:
+        return None, None
+    mo = int(m.group(2))
+    kind = next((k for k in _DEC_FY_MONTHS if k in nm), None)
+    if kind is None or mo not in _DEC_FY_MONTHS[kind]:
+        return None, None
+    return m.group(1), _PERIOD_QUARTER[mo]
+
+
+CATCHUP_DAYS = 7     # 재무 보충이 다시 보는 기간(어제까지 며칠)
+CATCHUP_MAX = 500    # 한 번에 다시 받는 회사 상한 — 넘으면 오래된 공시부터 이만큼, 나머지는 다음 날
+
+
+def catchup_candidates(df, active):
+    """재무 보충 후보 — DART 정기공시 목록(df)의 원본 정기보고서 중 상장(Y/K)·비스팩·active 회사를 결산 분기별로.
+    active = companies.active인 corp_code 집합. 반환 {(연도, 분기): [corp_code, …]} — 오래된 공시 먼저, 회사당 한 번."""
+    rows = fin_report_rows(df)
+    out = {}
+    if rows.empty:
+        return out
+    if 'rcept_no' in rows.columns:
+        rows = rows.sort_values('rcept_no', kind='stable')
+    has_cls = 'corp_cls' in rows.columns
+    for r in rows.to_dict('records'):
+        cc = r.get('corp_code') or ''
+        if cc not in active or (has_cls and r.get('corp_cls') not in ('Y', 'K')) or _is_spac(r.get('corp_name')):
+            continue
+        y, q = report_quarter(r.get('report_nm'))
+        if not q:
+            continue
+        lst = out.setdefault((y, q), [])
+        if cc not in lst:
+            lst.append(cc)
+    return out
+
+
+def run_catchup(days: int = CATCHUP_DAYS, max_corps: int = CATCHUP_MAX, today=None):
+    """늦게 뜬 재무 보충 — 최근 days일(어제까지) 정기보고서 중 financials에 그 분기가 아직 없는 상장사만 다시 받는다.
+
+    매일 18:30 재무수집은 그날 목록을 한 번만 본다. 오후 늦게 낸 보고서는 그날 저녁 DART 재무 API(fnlttSinglAcntAll)에
+    아직 없고(013) 다음 날쯤 들어오며, 18:30 뒤에야 목록에 뜨는 보고서도 있다 → 3분기 마감 주간 139곳이 빈칸으로
+    남았다(2026-11-12~16, 다음 안전망은 토요일 02:00 백필뿐이었다). 이미 있는 분기는 건드리지 않는다(정정 반영은 이 일이 아님).
+    아직 DART에 없으면 다음 날 같은 기간을 다시 본다.
+    반환 {'reports': 후보 회사 수, 'missing': 그 분기 재무가 없던 수, 'tried': 이번에 받은 수,
+          'quarters': {(연도, 분기): (성공, 실패)}} — 성공·실패 밖의 나머지(tried 기준)는 'DART 재무 아직 없음'."""
+    import datetime as _dt
+    from db_utils import fetch_all_pages
+    today = today or _dt.date.today()
+    start = (today - _dt.timedelta(days=days)).isoformat()
+    end = (today - _dt.timedelta(days=1)).isoformat()
+    sb = _get_sb()
+    df = OpenDartReader(DART_API_KEY).list(start=start, end=end, kind='A', final=False)
+    active = {r['corp_code'] for r in fetch_all_pages(
+        sb.table('companies').select('corp_code').eq('active', True).order('code')) if r.get('corp_code')}
+
+    todo, n_cand = {}, 0
+    for (y, q), ccs in catchup_candidates(df, active).items():
+        n_cand += len(ccs)
+        have = set()
+        for i in range(0, len(ccs), 100):
+            have |= {r['corp_code'] for r in fetch_all_pages(
+                sb.table('financials').select('corp_code').in_('corp_code', ccs[i:i + 100])
+                  .eq('bsns_year', y).eq('quarter', q).order('id'))}
+        miss = [c for c in ccs if c not in have]
+        if miss:
+            todo[(y, q)] = miss
+    n_miss = sum(len(v) for v in todo.values())
+    log.info(f"=== [재무 보충] {start}~{end} 정기보고서 상장사 {n_cand}곳 · 그 분기 재무 없음 {n_miss}곳 ===")
+    if n_miss > max_corps:
+        log.warning(f"[재무 보충] 대상 {n_miss}곳 — 상한 {max_corps}곳만(오래된 공시부터), 나머지는 다음 날")
+
+    out = {'reports': n_cand, 'missing': n_miss, 'tried': 0, 'quarters': {}}
+    left = max_corps
+    for (y, q), miss in todo.items():
+        part = miss[:left]
+        if not part:
+            break
+        left -= len(part)
+        out['tried'] += len(part)
+        out['quarters'][(y, q)] = run_by_corp_codes(part, y, q)
+    return out
 
 
 def run(year: str, quarter: str, all_listed: bool = False, max_workers: int = 3,

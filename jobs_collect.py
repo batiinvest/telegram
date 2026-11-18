@@ -5,7 +5,6 @@ run_all.py 물리 분할 (2026-07): 재무·시장·수급·신고가·공매도
 스케줄 수집 잡 본문. 공통 인프라는 job_infra.py.
 """
 import os
-import re
 import json
 import time
 import logging
@@ -22,7 +21,7 @@ from job_infra import _job, _is_enabled, _log_notice, _send_logged, _bridge, _BR
 
 # ✅ 재무/시장 데이터 수집 + 상장사 동기화
 try:
-    from collect_financials        import run as run_financials, auto_detect_quarter, fin_report_rows
+    from collect_financials        import run as run_financials, auto_detect_quarter, fin_report_rows, report_quarter
     # run_financials(year, quarter, monitored_only=True) 형태로 호출 가능
     from collect_market            import run as run_market
     from collect_listed_companies  import run as run_sync_companies
@@ -33,7 +32,7 @@ try:
     _COLLECTOR_OK = True
 except ImportError as _ie:
     _COLLECTOR_OK = False
-    run_financials = auto_detect_quarter = fin_report_rows = run_market = run_sync_companies = None
+    run_financials = auto_detect_quarter = fin_report_rows = report_quarter = run_market = run_sync_companies = None
     _save_grade_history = _save_trend_flags = _collect_insider = None
     _collect_company_one = run_short = _check_short_surge = _format_surge_msg = None
     logging.warning(f"수집 모듈 없음 (무시): {_ie}")
@@ -405,14 +404,7 @@ def job_collect_financials():
                     seen_rcept.add(rno)
 
         # ── 분기/반기/사업보고서만 필터 (재무수집 + 실적공시 카드용) ──
-        def _parse_quarter(report_nm: str):
-            """report_nm에서 실제 분기 파싱. 예: '사업보고서 (2025.12)' → ('2025', 'Q4')"""
-            m = re.search(r'\((\d{4})\.(\d{2})\)', report_nm)
-            if not m:
-                return None, None
-            y, mo = m.group(1), int(m.group(2))
-            return y, {3:'Q1', 6:'Q2', 9:'Q3', 12:'Q4'}.get(mo)
-
+        # 보고서 이름 → 실제 분기는 report_quarter('사업보고서 (2025.12)' → ('2025', 'Q4')) — 07:30 재무 보충과 같은 규칙
         today_corps    = []
         quarter_groups = {}  # {(year, quarter): [corp_code]} — 정기보고서 없는 날 NameError 방지
         _lists = [x for x in (disc_all, disc_fin) if x is not None and not x.empty]
@@ -430,7 +422,7 @@ def job_collect_financials():
                     code  = row['corp_code']
                     nm    = row.get('report_nm', '')
                     is_amended = '정정' in nm or '기재정정' in nm
-                    y, q  = _parse_quarter(nm)
+                    y, q  = report_quarter(nm)
 
                     # 동일 corp_code 중복 제거 (정정 우선)
                     if code not in seen or (is_amended and not seen[code]['is_amended']):
@@ -603,6 +595,38 @@ def job_backfill_financials():
         logging.info("📊 [재무백필] 완료")
     except Exception as e:
         logging.error(f"❌ [재무백필] 실패: {e}")
+        mark_failed(e)
+
+
+@_job(key='collect_financials')
+def job_financials_catchup():
+    """매일 07:30 — 늦게 뜬 재무 보충(collect_financials.run_catchup). 최근 7일(어제까지) 정기보고서 중 financials에
+    그 분기가 아직 없는 상장사만 다시 받고, 채운 분기는 18:30 재무수집처럼 등급 이력·추세 신호를 다시 계산한다.
+    오후 늦게 낸 보고서는 그날 저녁 DART 재무 API에 아직 없어 18:30 수집이 놓친다(2026-11-12~16 3분기 139곳).
+    실패해도 다음 날 같은 7일을 다시 보므로 19:25 재처리 목록엔 넣지 않는다(저녁 재무수집과 겹치지 않게).
+    07:40 실적 국면 보정은 이 잡이 끝난 뒤 돈다(_after)."""
+    if not _COLLECTOR_OK:
+        logging.warning("collect_financials.py 없음 — 재무 보충 스킵")
+        return
+    try:
+        from collect_financials import run_catchup
+        res = run_catchup()
+        qs = res['quarters']
+        ok = sum(v[0] for v in qs.values())
+        fail = sum(v[1] for v in qs.values())
+        filled = [k for k, v in qs.items() if v[0] > 0]
+        for (y, q) in filled:
+            job_save_grade_history(y, q)
+            job_save_trend_flags(y, q)
+        logging.info(f"=== [재무 보충] 완료: 후보 {res['reports']}곳 · 그 분기 재무 없음 {res['missing']}곳 → "
+                     f"채움 {ok} · DART 재무 아직 없음 {res['tried'] - ok - fail} · 실패 {fail} ===")
+        if ok:
+            _log_notice("system", f"[재무 보충] 늦게 뜬 재무 {ok}곳 채움 ({', '.join(f'{y} {q}' for y, q in filled)})")
+    except Exception as e:
+        if is_dart_maintenance(e):
+            logging.warning(f"⏸ [재무 보충] DART 점검(800) — 다음 날 같은 7일을 다시 봄: {e}")
+            return
+        logging.error(f"❌ [재무 보충] 오류: {e}")
         mark_failed(e)
 
 
