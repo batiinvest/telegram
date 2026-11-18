@@ -53,7 +53,7 @@ from jobs_collect import (
     job_collect_new_high, job_collect_us_etf, job_collect_market,
     job_collect_market_closing, job_short_surge, job_collect_investor_trend,
     job_collect_investor_trend_ranked,
-    job_flow_empty, job_krx_buy, job_sio, job_us_index, job_us_liquidity, job_tw_revenue, job_jp_tw, job_ai_hw, job_us_etf_rs, job_us_52w, job_kr_etf_rs,
+    job_flow_empty, job_krx_buy, job_sio, job_us_index, job_us_liquidity, job_tw_revenue, job_jp_tw, job_ai_hw, job_us_etf_rs, job_us_52w, job_kr_etf_rs, job_kr_monthly,
     job_sector_summary, job_collect_estimates, job_leading_stocks, job_market_summary,
     job_daily_summary, job_collect_credit_balance, job_collect_wics,
     job_collect_investor_market, job_collect_fear_greed, job_retry_failed, job_collect_active_etf, job_portfolio_nav,
@@ -262,6 +262,8 @@ def run_scheduler():
     schedule.every().day.at("08:40").do(_threaded(job_us_52w))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
     schedule.every().day.at("16:50").do(_threaded(job_kr_etf_rs))  # 한국 업종 ETF 38 + 대형주 4 상대강도·시장 폭·52주 전략(약 15초) — 장 마감 뒤
     schedule.every().day.at("19:20").do(_threaded(job_kr_etf_rs))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
+    schedule.every().day.at("20:50").do(_threaded(job_kr_monthly))  # 국내 월 리밸런싱 V2.3(WICS 업종지수 26 · 코스피, 약 20초) — wiseindex가 저녁에 그날 값을 올린 뒤
+    schedule.every().day.at("07:50").do(_threaded(job_kr_monthly))  # 한 번 더 — 전날 값이 늦게 올라온 날 (같은 기준일은 덮어씀)
     schedule.every().day.at("08:40").do(_threaded(job_snapshot_qtr_consensus))  # 분기 컨센 스냅샷 (어닝 서프라이즈용, 장전)
     schedule.every().day.at("19:05").do(_threaded(_after(job_earnings_reconcile, (job_collect_financials, "18:30"))))  # 재무 확정치 기반 어닝 서프라이즈/영업익 폭증 재조정 — 재무수집이 끝난 뒤
     schedule.every().day.at("19:10").do(_threaded(_after(job_earnings_surprise_briefing, (job_earnings_reconcile, "19:05"))))  # 어닝 서프라이즈 리스트 → 메인채널 — 재조정이 끝난 뒤에만

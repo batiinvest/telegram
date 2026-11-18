@@ -1255,6 +1255,24 @@ def job_kr_etf_rs():
         mark_failed(e)
 
 
+@_job(holiday=True)
+def job_kr_monthly():
+    """평일 20:50 · 07:50 — 국내 월 리밸런싱 V2.3(WICS 업종지수 26개 Breadth · 코스피 상대강도 · 회복 · 역추세 · 가격 기반 F&G)
+    → market_snapshot(kind='kr_monthly').
+
+    wiseindex 업종지수(장 마감 뒤 저녁에 그날 값이 올라옴) + 코스피를 2015-12-30부터 받아 원본 백테스트(V2 · V2.1 · V2.3)와
+    이번 달 확정 · 다음 달 예상 포지션을 계산한다(약 20초). 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다."""
+    try:
+        logging.info("📅 [국내월간] collect_kr_monthly 실행 시작")
+        import collect_kr_monthly
+        r = collect_kr_monthly.run()
+        v = (r.get('payload') or {}).get('preview') or {}
+        logging.info(f"=== [국내월간] 완료: {r.get('date')} 다음 달 예상 {v.get('mode')} {v.get('exp')} ===")
+    except Exception as e:
+        logging.error(f"❌ [국내월간] 오류: {e}")
+        mark_failed(e)
+
+
 @_job()
 def job_ai_hw():
     """매일 07:00 · 08:20 — AI 하드웨어 41종목 Breadth · 피크아웃 점검(Yahoo 수정 종가 3년) → market_snapshot(kind='ai_hw').
@@ -1569,6 +1587,7 @@ _RETRYABLE_JOBS = {
     'job_us_etf_rs':                job_us_etf_rs,
     'job_us_52w':                   job_us_52w,
     'job_kr_etf_rs':                job_kr_etf_rs,
+    'job_kr_monthly':               job_kr_monthly,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
