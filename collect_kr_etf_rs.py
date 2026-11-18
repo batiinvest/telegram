@@ -160,13 +160,19 @@ def _krx_bench(px, kst):
         return px, 0
     krx = Krx()
     krx.login()
-    r = krx.get('dbms/MDC/STAT/standard/MDCSTAT00301', indIdx='1', indIdx2='001', strtDd=min(need).strftime('%Y%m%d'),
-                endDd=max(need).strftime('%Y%m%d'), share='2', money='3', csvxls_isNo='false')
     got = {}
-    for x in r.get('output') or []:
-        v = (x.get('CLSPRC_IDX') or '').replace(',', '')
-        if x.get('TRD_DD') and v not in ('', '-'):
-            got[pd.Timestamp(x['TRD_DD'].replace('/', '-'))] = float(v)
+    i = 0
+    while i < len(need):          # KRX는 2년 넘는 기간을 400으로 거절 — 700일 안쪽 묶음으로 나눠 묻는다(10년치 빈 날이 흩어진 경우)
+        j = i
+        while j + 1 < len(need) and (need[j + 1] - need[i]).days <= 700:
+            j += 1
+        r = krx.get('dbms/MDC/STAT/standard/MDCSTAT00301', indIdx='1', indIdx2='001', strtDd=need[i].strftime('%Y%m%d'),
+                    endDd=need[j].strftime('%Y%m%d'), share='2', money='3', csvxls_isNo='false')
+        for x in r.get('output') or []:
+            v = (x.get('CLSPRC_IDX') or '').replace(',', '')
+            if x.get('TRD_DD') and v not in ('', '-'):
+                got[pd.Timestamp(x['TRD_DD'].replace('/', '-'))] = float(v)
+        i = j + 1
     n = 0
     for dd in need:
         if dd in got:
