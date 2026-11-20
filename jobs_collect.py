@@ -1298,6 +1298,24 @@ def job_kr_monthly():
 
 
 @_job()
+def job_us_monthly():
+    """매일 07:45 · 08:50 — 미국 월 리밸런싱 V8.1 · SUPER70(ETF 52개 Breadth · QQQ/SPY 상대강도 · 업종 모멘텀 · 금속)
+    → market_snapshot(kind='us_monthly').
+
+    야후 수정 종가 52개(2020-10-27~)로 원본 신호 · 다음 거래일 종가 체결 백테스트 · 최근 2년 SPY · QQQ 비교와
+    이번 달 확정 · 다음 달 예상 포지션을 계산한다(약 15초). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다."""
+    try:
+        logging.info("🗽 [미국월간] collect_us_monthly 실행 시작")
+        import collect_us_monthly
+        r = collect_us_monthly.run()
+        v = (r.get('payload') or {}).get('preview') or {}
+        logging.info(f"=== [미국월간] 완료: {r.get('date')} 다음 달 예상 {v.get('mode')} {v.get('exp')} ===")
+    except Exception as e:
+        logging.error(f"❌ [미국월간] 오류: {e}")
+        mark_failed(e)
+
+
+@_job()
 def job_ai_hw():
     """매일 07:00 · 08:20 — AI 하드웨어 41종목 Breadth · 피크아웃 점검(Yahoo 수정 종가 3년) → market_snapshot(kind='ai_hw').
 
@@ -1612,6 +1630,7 @@ _RETRYABLE_JOBS = {
     'job_us_52w':                   job_us_52w,
     'job_kr_etf_rs':                job_kr_etf_rs,
     'job_kr_monthly':               job_kr_monthly,
+    'job_us_monthly':               job_us_monthly,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
