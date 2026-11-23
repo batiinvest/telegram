@@ -1,7 +1,9 @@
 """미국 업종 ETF 소르티노 · 상대강도 → market_snapshot(kind='us_etf')
 
-[원본] 태린이아빠 Market Dashboard '미국 ETF 소라티노 및 상대강도'(공개 소스 app.py US_SECTOR_SRC).
-  · 종목 = SPY(기준) + 업종 · 테마 ETF 99개(12묶음). Yahoo 일봉 3년, 수정 종가.
+[원본] 태린이아빠 Market Dashboard '미국 ETF 소라티노 및 상대강도'(공개 소스 app.py US_ETF_RELATIVE_FILE_SRC · v11.57 11-18판).
+  · 종목 = SPY(기준) + 미국 업종 ETF 57개 — 원본이 v11.57부터 52주 전략과 같은 공통 HTS 엑셀을 읽어 대상이 99개 → 57개로 바뀌었다
+    (계산식 · 설정은 옛 US_SECTOR_SRC와 같고 설명문만 바뀜, 11-23 확인). 목록 · 이름은 collect_us_52w.ETFS 하나로 같이 쓴다.
+    묶음(섹터 · 테크 등 11개)은 화면에서 거르기 위해 여기서 붙인 것. Yahoo 일봉 3년, 수정 종가.
   · ① Mansfield RS(6개월 = 126거래일)
         상대값 = ETF ÷ SPY,  RS = (상대값 ÷ 상대값의 126일 평균 − 1) × 100
         정규화 = 100 ÷ (1 + e^(−RS ÷ 12))  → 70 이상을 강한 것으로 본다.
@@ -18,9 +20,10 @@
         이평 정배열 = 20일선 > 65일선 > 130일선 > 260일선,  완전 정배열 = 종가 > 20일선 그리고 이평 정배열
         시작일 · 연속 유지 거래일, 강도 = 네 간격(%)의 합
 
-[원본 대조 — 2026-11-16, 원본 화면 11-13 미국 종가 기준]
+[원본 대조 — 2026-11-16, 원본 화면 11-13 미국 종가 기준(옛 99개판)]
   순위표 7종(모멘텀 4 · 소르티노 3)의 최신일 상위 20이 순서까지 모두 같음. 과열 점검 20줄도 같음(SEA · INCO만 0.04%p 차이).
   Mansfield RS는 전 종목이 0.02쯤 낮게 나온다(XLV 14.26 → 14.24) — 원본이 마감 27분 뒤 SPY 값으로 계산한 차이, 순서와 70 이상 3종목은 같음.
+  11-23(57개판, 11-20 종가): 같은 ETF의 RS가 0.05 이내(XLP 16.59 · 원본 16.54) — 원본은 HTS 수정종가.
 
 [원본과 다른 점] 원본은 관리자가 돌릴 때만 갱신된다. 여기서는 미국 장이 끝난 아침에 돌리고, 장중이면 오늘 봉을 버린다.
   숫자와 순위만 저장하고 표 · 그림은 화면(js/us-etf.js)이 그린다.
@@ -58,41 +61,31 @@ GAP_MA, GAP_LOOKBACK, GAP_PCT = 30, 247, 0.97
 MA_4W, MA_13W, MA_26W, MA_52W = 20, 65, 130, 260
 NY_CLOSE = (16, 15)
 
-# 원본 industry_etfs — (묶음, {티커: 이름}) 순서 그대로
-GROUPS = [
-    ('섹터', {'XLK': 'Technology', 'VOX': 'Communication Services', 'XLY': 'Consumer Discretionary', 'XLP': 'Consumer Staples',
-              'XLI': 'Industrials', 'XLB': 'Materials', 'XLE': 'Energy', 'XLF': 'Financials', 'XLV': 'Health Care', 'XLU': 'Utilities'}),
-    ('테크·반도체·인터넷', {'IGV': 'Software', 'SOXX': 'Semiconductors', 'XSD': 'Semiconductors - Equal Weight', 'PSI': 'Semiconductors - Dynamic',
-                           'SKYY': 'Cloud Computing', 'FDN': 'Internet', 'PNQI': 'Internet NASDAQ', 'SOCL': 'Social Media',
-                           'QTEC': 'Tech - NASDAQ Equal Weight', 'TDIV': 'Tech Dividend'}),
-    ('에너지·원전', {'XOP': 'Oil & Gas Exploration', 'OIH': 'Oil Services', 'IEZ': 'Oil Equipment & Services', 'XES': 'Oil & Gas Services',
-                     'FCG': 'Natural Gas', 'AMLP': 'MLP Energy Infrastructure', 'MLPX': 'MLP & Energy Infra',
-                     'EMLP': 'North American Energy Infra', 'ENFR': 'Energy Infrastructure', 'URA': 'Uranium', 'NLR': 'Nuclear Energy'}),
-    ('금융', {'KBE': 'Banks', 'KRE': 'Regional Banks', 'IAI': 'Broker-Dealers & Exchanges', 'KIE': 'Insurance',
-              'IXG': 'Global Financials', 'BIZD': 'Business Development Companies', 'PSP': 'Listed Private Equity'}),
-    ('헬스케어·바이오', {'XBI': 'Biotech Equal Weight', 'IBB': 'Biotechnology', 'IHI': 'Medical Devices', 'XHE': 'Health Care Equipment',
-                         'IHF': 'Health Care Providers', 'XHS': 'Health Care Services', 'IHE': 'Pharmaceuticals', 'PJP': 'Pharma Dynamic',
-                         'ARKG': 'Genomic Revolution', 'GNOM': 'Genomics & Biotechnology'}),
-    ('소비·주택·레저', {'XRT': 'Retail', 'XHB': 'Homebuilders', 'ITB': 'Home Construction', 'PEJ': 'Leisure & Entertainment',
-                        'PBJ': 'Food & Beverage', 'RXI': 'Global Consumer Discretionary', 'CHIQ': 'China Consumer',
-                        'ECON': 'Emerging Markets Consumer', 'INCO': 'India Consumer'}),
-    ('산업·방산·운송', {'ITA': 'Aerospace & Defense', 'PPA': 'Defense & Aerospace', 'XAR': 'Aerospace & Defense Equal Weight',
-                        'IYT': 'Transportation', 'XTN': 'Transportation Equal Weight', 'TOLZ': 'Global Infrastructure',
-                        'GII': 'Global Infrastructure SPDR', 'EMIF': 'Emerging Markets Infrastructure', 'CGW': 'Global Water',
-                        'FIW': 'Water Resources', 'AIRR': 'American Industrial Renaissance'}),
-    ('소재·자원·금속', {'GNR': 'Natural Resources', 'GUNR': 'Global Upstream Natural Resources', 'HAP': 'Natural Resources Producers',
-                        'GDX': 'Gold Miners', 'GDXJ': 'Junior Gold Miners', 'SGDM': 'Gold Miners - Sprott', 'SIL': 'Silver Miners',
-                        'SILJ': 'Junior Silver Miners', 'SLVP': 'Global Silver Miners', 'SLX': 'Steel', 'COPX': 'Copper Miners',
-                        'REMX': 'Rare Earth & Strategic Metals', 'PICK': 'Global Metal & Mining', 'MOO': 'Agribusiness',
-                        'VEGI': 'Agriculture Producers', 'WOOD': 'Global Timber Forestry', 'CUT': 'Timber & Forestry'}),
-    ('클린에너지·그리드', {'ICLN': 'Global Clean Energy', 'PBW': 'Clean Energy - WilderHill', 'PBD': 'Global Clean Energy', 'TAN': 'Solar Energy',
-                           'FAN': 'Wind Energy', 'QCLN': 'Clean Energy NASDAQ', 'GRID': 'Smart Grid'}),
-    ('통신', {'IYZ': 'Telecom', 'XTL': 'Telecom SPDR', 'IXP': 'Global Communication Services'}),
-    ('기타 테마', {'LIT': 'Lithium & Battery Tech', 'SEA': 'Shipping & Cargo', 'CARZ': 'Global Auto', 'UFO': 'Space & Satellite'}),
-]
-NAMES = {t: n for _, m in GROUPS for t, n in m.items()}
-GROUP_OF = {t: g for g, m in GROUPS for t in m}
-ETFS = list(NAMES)
+# 원본 v11.57 — 52주 전략과 같은 공통 엑셀(SPY + 57). 순서 · 이름은 collect_us_52w.ETFS 그대로(원본 shared_names)
+from collect_us_52w import ETFS as _SHARED_ETFS
+# 화면 거르기용 묶음(원본에는 없음) — 순서는 묶음 표시 순서
+GROUP_ORDER = ['섹터', '테크·반도체·인터넷', '에너지·원전', '금융', '헬스케어·바이오', '소비·주택·레저', '산업·방산·운송',
+               '소재·자원·금속', '클린에너지·그리드', '통신', '기타 테마']
+_GROUP_MEMBERS = {
+    '섹터': ['XLK', 'XLC', 'XLY', 'XLP', 'XLI', 'XLB', 'XLE', 'XLF', 'XLV', 'XLU', 'XLRE'],
+    '테크·반도체·인터넷': ['SOXX', 'IGV', 'SKYY', 'FDN', 'BUG', 'ROBO'],
+    '에너지·원전': ['XOP', 'OIH', 'CRAK', 'AMLP', 'URA'],
+    '금융': ['KRE', 'IAI', 'KIE', 'BIZD'],
+    '헬스케어·바이오': ['IBB', 'IHI', 'IHF', 'IHE', 'ARKG', 'GNOM'],
+    '소비·주택·레저': ['XRT', 'XHB', 'PEJ', 'PBJ'],
+    '산업·방산·운송': ['ITA', 'IYT', 'TOLZ', 'CGW', 'AIRR'],
+    '소재·자원·금속': ['GDX', 'SIL', 'SLX', 'COPX', 'REMX', 'MOO', 'WOOD'],
+    '클린에너지·그리드': ['ICLN', 'TAN', 'FAN', 'GRID'],
+    '통신': ['IYZ'],
+    '기타 테마': ['LIT', 'SEA', 'CARZ', 'UFO'],
+}
+GROUP_OF = {t: g for g, ts in _GROUP_MEMBERS.items() for t in ts}
+ETFS = [t for t in _SHARED_ETFS if t != BENCH]                      # 원본 엑셀 열 순서
+NAMES = {t: _SHARED_ETFS[t] for t in ETFS}
+_missing = [t for t in ETFS if t not in GROUP_OF]
+if _missing:
+    raise RuntimeError(f'묶음이 없는 ETF: {_missing}')
+GROUPS = [(g, {t: NAMES[t] for t in ETFS if GROUP_OF[t] == g}) for g in GROUP_ORDER]
 
 
 def _has_schema(sb) -> bool:
