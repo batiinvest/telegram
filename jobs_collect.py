@@ -1233,14 +1233,15 @@ def job_jp_tw():
 
 @_job()
 def job_us_52w():
-    """매일 07:30 · 08:40 — 미국 52주 신고가 전략(52W FIXED + Rotation_B) 백테스트·현재 포트 → market_snapshot(kind='us_52w').
+    """매일 07:30 · 08:40 — 미국 52주 신고가 전략(원본 v11.63 개선 52W + 성장 ETF + MA40 2일) → market_snapshot(kind='us_52w').
 
-    SPY·QQQ·업종 ETF 57개 3년 수정 종가로 원본 백테스트를 그대로 돌린다(약 15초). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓴다."""
+    SPY·QQQ·업종 ETF 57개 수정 종가(2018-12-07~, 2000거래일)로 옛 52W FIXED · Rotation_B와 개선 전략 백테스트,
+    다음 거래일 목표 비중을 계산한다(약 25초). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓴다."""
     try:
         logging.info("🏁 [미국52주] collect_us_52w 실행 시작")
         import collect_us_52w
         r = collect_us_52w.run()
-        logging.info(f"=== [미국52주] 완료: {r.get('date')} {r.get('status')} · {r.get('regime')} ===")
+        logging.info(f"=== [미국52주] 완료: {r.get('date')} 개선 {r.get('mode')} · 52W 안 {r.get('regime')} ===")
     except Exception as e:
         logging.error(f"❌ [미국52주] 오류: {e}")
         mark_failed(e)

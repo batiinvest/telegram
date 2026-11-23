@@ -258,7 +258,7 @@ def run_scheduler():
     schedule.every().day.at("08:20").do(_threaded(job_ai_hw))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
     schedule.every().day.at("07:20").do(_threaded(job_us_etf_rs))  # 미국 업종 ETF 99개 상대강도·소르티노·정배열 — 미국 마감 뒤(약 30초)
     schedule.every().day.at("08:30").do(_threaded(job_us_etf_rs))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
-    schedule.every().day.at("07:30").do(_threaded(job_us_52w))  # 미국 52주 신고가 전략 백테스트·현재 포트(ETF 57개, 약 15초) — 미국 마감 뒤
+    schedule.every().day.at("07:30").do(_threaded(job_us_52w))  # 미국 52주 개선 전략(52W + 성장 ETF) 백테스트·다음 거래일 목표(ETF 57개, 약 25초) — 미국 마감 뒤
     schedule.every().day.at("08:40").do(_threaded(job_us_52w))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
     schedule.every().day.at("16:50").do(_threaded(job_kr_etf_rs))  # 한국 업종 ETF 38 + 대형주 4 상대강도·시장 폭·52주 전략(약 15초) — 장 마감 뒤
     schedule.every().day.at("19:20").do(_threaded(job_kr_etf_rs))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)

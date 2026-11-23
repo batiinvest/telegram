@@ -1,7 +1,20 @@
-"""미국 52주 신고가 전략(52W FIXED + Rotation_B) → market_snapshot(kind='us_52w')
+"""미국 52주 신고가 전략(개선 52W + 성장 ETF + MA40 2일) → market_snapshot(kind='us_52w')
 
-[원본] 태린이아빠 Market Dashboard '미국 52주 신고가 전략 점검'(공개 소스 app.py ROT_SRC · run_rotation).
-  · 종목 = SPY(기준) + 미국 업종 ETF 57개 + QQQ(약세 판정에만). Yahoo 일봉 3년, 수정 종가.
+[원본 v11.63 · 11-21] 태린이아빠 Market Dashboard '미국 52주 신고가 전략'(공개 소스 app.py US_ETF_52W_FILE_SRC · run_enhanced_52w_growth).
+  원본 화면은 이제 '개선 52W + 성장 ETF + MA40(2일)' 전략만 보인다(아래 옛 52W FIXED · 52W + Rotation_B는 그 안에서 재료로만 쓴다).
+  · 시장 모드: QQQ 90일 수익 > SPY 90일 ∧ (업종 60일선 위 비율 Breadth60 < 65% ∨ QQQ 60일 − 순수 52W 60일 > +5%p) → GROWTH, 아니면 52W.
+      모드는 최소 15거래일 유지.
+  · GROWTH: QQQ · SOXX · XLK · XLC 중 60일 수익이 QQQ보다 5%p 넘게 높고 60일선 위인 것 1위(없으면 QQQ) 100%.
+      60거래일마다 다시 고르고, 고른 ETF(QQQ 말고)가 40일선 아래 종가 2일 연속이면 바꾼다(대체 후보는 40일선 위도 요구).
+      성장 ETF 4개 중 2개 이상이 20일 변동성 ≥ 각자 과거 3년(최근 63일 뺀 756일) 중앙값 × 2면 고른 ETF 50% + QQQ 50%.
+  · 52W: 옛 52W + Rotation_B(20일선 매도)를 '그림자 포트'로 매일 따라가고, 남는 비중은 QQQ로 채운다.
+      QQQ 20일 변동성 ≥ 과거 3년 중앙값 × 2면 남는 비중의 절반만 QQQ(나머지 현금).
+  · 체결: t−1 종가 신호 → t 종가 주문 → t+1일부터 수익. 목표 비중 차가 1.5%p 미만이면 매매 생략(모드 전환 · 청산은 예외). 편도 0.1%.
+  · 성과: 252거래일 준비 뒤 첫 운용일부터, QQQ · SPY와 비교(원본 화면은 옛 52W + Rotation_B 줄을 뺀다).
+  · 자료: 원본은 HTS 수정종가 엑셀(2000거래일, 59티커). 여기서는 야후 수정 종가, 같은 시작일 2018-12-07부터.
+
+[옛 전략 — 개선 전략의 재료] 원본 ROT_SRC · run_rotation(11-17 이식).
+  · 종목 = SPY(기준) + 미국 업종 ETF 57개 + QQQ(약세 판정에만). 수정 종가.
   · 지표(전일 종가 신호 → 그날 종가 체결 가정, 수익은 다음 거래일부터)
       RS(6개월)     = (ETF ÷ SPY) ÷ 126거래일 전 (ETF ÷ SPY) − 1
       52주 돌파      = 종가 > 직전 252거래일 종가 최고
@@ -67,6 +80,19 @@ KNOWN_FORWARD_SPLITS = {'SOXX': ('2026-11-05', 3.0), 'ITA': ('2026-11-05', 3.0)}
 SPLIT_SCAN_DAYS_BEFORE, SPLIT_SCAN_DAYS_AFTER, SPLIT_RATIO_TOLERANCE = 14, 7, (0.65, 1.35)
 ABNORMAL_DAILY_RETURN_LIMIT = 0.50
 RECENT_TRADES = 30
+DATA_START = '2018-12-07'      # 원본 HTS 엑셀 DB와 같은 시작(2000거래일)
+
+# 개선 52W + 성장 ETF(원본 run_enhanced_52w_growth)
+GROWTH_ETFS = ['QQQ', 'SOXX', 'XLK', 'XLC']
+BREADTH_MA, BREADTH_THRESHOLD = 60, 0.65
+QQQ_52W_RS_LOOKBACK, QQQ_52W_RS_THRESHOLD = 60, 0.05
+GROWTH_RS_LOOKBACK, GROWTH_RANK_LOOKBACK, GROWTH_EXCESS_MARGIN = 90, 60, 0.05
+GROWTH_REVIEW_INTERVAL, GROWTH_EXIT_MA, GROWTH_EXIT_CONFIRM = 60, 40, 2
+MODE_MIN_HOLD_DAYS, REBALANCE_BAND = 15, 0.015
+VOL_WINDOW, VOL_BASE_LOOKBACK, VOL_SKIP_RECENT, VOL_MIN_HISTORY = 20, 756, 63, 252
+QQQ_FILL_VOL_SHOCK, QQQ_FILL_ON_SHOCK = 2.0, 0.50
+GROWTH_VOL_SHOCK, GROWTH_VOL_SHOCK_MIN_COUNT, GROWTH_VOL_ON_SHOCK = 2.0, 2, 0.50
+ENH_RECENT_TRADES = 15
 
 # 원본 industry_etfs — 순서 그대로(SPY는 기준)
 ETFS = {
@@ -113,11 +139,11 @@ def _num(v, nd=4):
 # ── 가격 ──────────────────────────────────────────────────────────────
 
 def fetch_prices(now_utc=None):
-    """Yahoo 수정 종가 3년(SPY · QQQ · ETF 57). 미국 장중이면 오늘 봉은 버린다."""
+    """Yahoo 수정 종가(SPY · QQQ · ETF 57, 2018-12-07~). 미국 장중이면 오늘 봉은 버린다."""
     import pandas as pd
     import yfinance as yf
 
-    raw = yf.download(ALL_TICKERS, period='3y', interval='1d', auto_adjust=True, progress=False, threads=False, group_by='column')
+    raw = yf.download(ALL_TICKERS, start=DATA_START, interval='1d', auto_adjust=True, progress=False, threads=False, group_by='column')
     if raw is None or raw.empty:
         raise RuntimeError('야후 일봉을 받지 못했습니다')
     prices = raw['Close'].copy()
@@ -201,6 +227,274 @@ def audit_all_etf_prices(price_data, preblocked=None):
 
 
 # ── 계산 ──────────────────────────────────────────────────────────────
+
+def _enhanced(prices, dates, cols, sp, spy, qqq, rs, brk, rot_sig, improve, rs5, rank20, sec_ret, sell_ma,
+              base_eq, final_eq, stats, yearly) -> dict:
+    """원본 run_enhanced_52w_growth — 52W 그림자 포트 + 남는 비중 QQQ(52W 모드) / 성장 ETF 1개(GROWTH 모드)."""
+    import numpy as np
+    import pandas as pd
+
+    T = len(dates)
+    growth_names = [t for t in GROWTH_ETFS if t in prices.columns]
+    if 'QQQ' not in growth_names:
+        raise RuntimeError('성장 ETF 전략은 QQQ 가격이 필요합니다')
+    gp = prices.reindex(columns=growth_names)
+    assets = list(dict.fromkeys(cols + growth_names))
+    adr = prices.reindex(columns=assets).pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
+    ma60 = sp.rolling(BREADTH_MA, min_periods=BREADTH_MA).mean()
+    bvalid = ma60.notna() & sp.notna()
+    breadth60 = ((sp > ma60) & bvalid).sum(axis=1) / bvalid.sum(axis=1).replace(0, np.nan)
+    rs90 = (qqq / qqq.shift(GROWTH_RS_LOOKBACK) - 1) - (spy / spy.shift(GROWTH_RS_LOOKBACK) - 1)
+    g_ret60 = gp / gp.shift(GROWTH_RANK_LOOKBACK) - 1
+    g_ma60 = gp.rolling(60, min_periods=60).mean()
+    g_ma40 = gp.rolling(GROWTH_EXIT_MA, min_periods=GROWTH_EXIT_MA).mean()
+
+    def shock(px):
+        """20일 연율 변동성 ÷ (최근 63일 뺀) 과거 756일 중앙값 — 252일 미만이면 계산 안 함."""
+        v = px.pct_change(fill_method=None).rolling(VOL_WINDOW, min_periods=VOL_WINDOW).std() * np.sqrt(252)
+        med = v.shift(VOL_SKIP_RECENT).rolling(VOL_BASE_LOOKBACK, min_periods=VOL_MIN_HISTORY).median()
+        return v / med.replace(0.0, np.nan)
+    qqq_shock, g_shock = shock(qqq), shock(gp)
+    qqq_vs_52w = (qqq / qqq.shift(QQQ_52W_RS_LOOKBACK) - 1) - (base_eq / base_eq.shift(QQQ_52W_RS_LOOKBACK) - 1)
+    pure20 = base_eq / base_eq.shift(WEAK_LOOKBACK) - 1
+    weak_spy = pure20 - (spy / spy.shift(WEAK_LOOKBACK) - 1)
+    weak_qqq = pure20 - (qqq / qqq.shift(WEAK_LOOKBACK) - 1)
+
+    def target_growth(sd, sel):
+        cnt = int((g_shock.loc[sd].reindex(GROWTH_ETFS) >= GROWTH_VOL_SHOCK).sum())
+        t = pd.Series(0.0, index=assets, dtype=float)
+        if sel != 'QQQ' and cnt >= GROWTH_VOL_SHOCK_MIN_COUNT:
+            t.at[sel] = GROWTH_VOL_ON_SHOCK
+            t.at['QQQ'] = 1.0 - GROWTH_VOL_ON_SHOCK
+        else:
+            t.at[sel] = 1.0
+        return t, cnt
+
+    def growth_signal(sd):
+        r9, br, r6 = rs90.at[sd], breadth60.at[sd], qqq_vs_52w.at[sd]
+        return bool(pd.notna(r9) and r9 > 0 and ((pd.notna(br) and br < BREADTH_THRESHOLD)
+                                                 or (pd.notna(r6) and r6 > QQQ_52W_RS_THRESHOLD)))
+
+    def choose(sd, excluded=None, extra_ma40=False):
+        excluded = set(excluded or [])
+        qret = g_ret60.at[sd, 'QQQ']
+        if pd.isna(qret):
+            return 'QQQ'
+        c = []
+        for nm in growth_names:
+            if nm == 'QQQ' or nm in excluded:
+                continue
+            r, px, m60 = g_ret60.at[sd, nm], gp.at[sd, nm], g_ma60.at[sd, nm]
+            if pd.isna(r) or pd.isna(px) or pd.isna(m60) or r <= qret + GROWTH_EXCESS_MARGIN or px <= m60:
+                continue
+            if extra_ma40:
+                m40 = g_ma40.at[sd, nm]
+                if pd.isna(m40) or px <= m40:
+                    continue
+            c.append((float(r), nm))
+        return max(c)[1] if c else 'QQQ'
+
+    def ma40_exit(nm, pos):
+        if nm not in growth_names or nm == 'QQQ' or pos < 2:
+            return False
+        for k in range(GROWTH_EXIT_CONFIRM):
+            dt = dates[pos - k]
+            px, m = gp.at[dt, nm], g_ma40.at[dt, nm]
+            if pd.isna(px) or pd.isna(m) or not (px < m):
+                return False
+        return True
+
+    def shadow_step(sd, shadow, origin):
+        """옛 52W + Rotation_B 한 번(20일선 아래 매도 → 빈 자리 매수). shadow · origin은 그 자리에서 바뀐다."""
+        sold = [t for t in shadow.index[shadow > EPS] if pd.notna(sell_ma.at[sd, t]) and sp.at[sd, t] < sell_ma.at[sd, t]]
+        for t in sold:
+            shadow.at[t] = 0.0
+            origin.pop(t, None)
+        remaining = list(shadow.index[shadow > EPS])
+        weak = bool(pd.notna(weak_spy.at[sd]) and pd.notna(weak_qqq.at[sd])
+                    and weak_spy.at[sd] <= WEAK_THRESHOLD and weak_qqq.at[sd] <= WEAK_THRESHOLD)
+        if weak:
+            cands = [t for t in cols if t not in remaining and t not in sold and bool(rot_sig.at[sd, t])]
+            cands.sort(key=lambda t: (-float(improve.at[sd, t]), -float(rs5.at[sd, t]), float(rank20.at[sd, t])))
+            org = 'ROTATION_B'
+        else:
+            ranked = rs.loc[sd].dropna().sort_values(ascending=False)
+            cands = [t for t in ranked.head(RS_TOP_N).index if t not in remaining and t not in sold and bool(brk.at[sd, t])]
+            org = '52W'
+        used = {GROUP_MAP[t] for t in remaining}
+        slots = MAX_HOLDINGS - len(remaining)
+        for t in cands:
+            if slots <= 0:
+                break
+            if USE_GROUP_LIMIT and GROUP_MAP[t] in used:
+                continue
+            nw = min(MAX_WEIGHT, max(0.0, 1.0 - float(shadow.sum())))
+            if nw <= EPS:
+                break
+            shadow.at[t] = nw
+            origin[t] = org
+            used.add(GROUP_MAP[t])
+            slots -= 1
+        if float(shadow.sum()) > 1.0 + 1e-8:
+            raise RuntimeError('52W 그림자 포트 비중 100% 초과')
+        return weak
+
+    def fill_52w(sd, shadow):
+        d = pd.Series(0.0, index=assets, dtype=float)
+        d.loc[cols] = shadow
+        resid = max(0.0, 1.0 - float(shadow.sum()))
+        vr = qqq_shock.at[sd]
+        fill = QQQ_FILL_ON_SHOCK if pd.notna(vr) and vr >= QQQ_FILL_VOL_SHOCK else 1.0
+        d.at['QQQ'] = resid * fill
+        return d, fill < 1.0 and resid > EPS
+
+    shadow = pd.Series(0.0, index=cols, dtype=float)
+    s_origin = {}
+    actual = pd.Series(0.0, index=assets, dtype=float)
+    equity = np.ones(T)
+    mode, g_hold, last_switch, last_pick = 'WARMUP', 'QQQ', -999999, -999999
+    trades, modes, expo = [], ['WARMUP'] * T, [0.0] * T
+    first = max(HIGH_LOOKBACK, RS_LOOKBACK, SELL_MA_DAYS)
+    for i in range(1, T):
+        date, sd = dates[i], dates[i - 1]
+        dr = adr.loc[date].reindex(assets).fillna(0.0)
+        gross = 1.0 + float((actual * dr).sum())                 # 오늘 수익은 어제까지 들고 있던 비중으로
+        if gross <= 0:
+            raise RuntimeError(f'전략 NAV 오류: {date.date()}')
+        equity[i] = equity[i - 1] * gross
+        actual = actual * (1.0 + dr) / gross
+        sr = sec_ret.loc[date].reindex(cols).fillna(0.0)
+        sg = 1.0 + float((shadow * sr).sum())
+        if sg <= 0:
+            raise RuntimeError(f'52W 그림자 NAV 오류: {date.date()}')
+        shadow = shadow * (1 + sr) / sg
+        reason, switched = '유지', False
+        if i - 1 >= first:
+            shadow_step(sd, shadow, s_origin)                     # t−1 종가 신호를 t 종가에 그림자 포트에 체결
+            want = 'GROWTH' if growth_signal(sd) else '52W'
+            if mode == 'WARMUP' or (want != mode and i - last_switch >= MODE_MIN_HOLD_DAYS):
+                switched = mode != want
+                mode, last_switch = want, i
+                reason = '시장 모드 전환' if switched else '시장 모드 시작'
+                if mode == 'GROWTH':
+                    g_hold, last_pick = choose(sd), i
+            if mode == 'GROWTH':
+                if not switched:
+                    if ma40_exit(g_hold, i - 1):
+                        old = g_hold
+                        g_hold, last_pick = choose(sd, excluded={old}, extra_ma40=True), i
+                        reason = f'{old} MA40 2일 이탈 교체'
+                    elif i - last_pick >= GROWTH_REVIEW_INTERVAL:
+                        g_hold, last_pick = choose(sd), i
+                        reason = '성장 ETF 60거래일 정기 재선정'
+                desired, cnt = target_growth(sd, g_hold)
+                if g_hold != 'QQQ' and cnt >= GROWTH_VOL_SHOCK_MIN_COUNT:
+                    reason = f'성장 ETF 변동성 충격 {cnt}/4: {g_hold} 50% + QQQ 50%'
+            else:
+                desired, capped = fill_52w(sd, shadow)
+                if capped and reason == '유지':
+                    reason = '52W QQQ 변동성 충격 제한'
+            delta = desired - actual
+            must_sell = any(actual.at[t] > EPS and desired.at[t] <= EPS for t in assets)
+            if switched or must_sell or float(delta.abs().max()) >= REBALANCE_BAND:
+                amt = float(delta.abs().sum())
+                if amt > EPS:
+                    equity[i] *= max(0.0, 1.0 - COST * amt)      # t 종가 거래비용
+                    for t in assets:
+                        a = float(desired.at[t] - actual.at[t])
+                        if abs(a) > EPS:
+                            trades.append({'sd': sd, 'ed': date, 'mode': mode, 't': t, 'a': 'BUY' if a > 0 else 'SELL', 'w': a,
+                                           'reason': reason if reason != '유지' else '52W/QQQ 구성 변경',
+                                           'b60': breadth60.at[sd], 'rs90': rs90.at[sd]})
+                    actual = desired
+        ex = float(actual.sum())
+        if ex > 1.0 + 1e-8 or ex < -1e-8:
+            raise RuntimeError(f'전략 비중 오류: {date.date()} {ex:.4f}')
+        modes[i], expo[i] = mode, ex
+    eq = pd.Series(equity, index=dates)
+
+    # 성과 — 252거래일 준비 뒤 첫 운용일부터(그 전날 종가 = 1)
+    ev = first + 1
+    new_c = eq.iloc[ev:] / eq.iat[first]
+    spy_c = spy.iloc[ev:] / float(spy.iat[first])
+    qqq_c = qqq.iloc[ev:] / float(qqq.iat[first])
+    orig_c = final_eq.iloc[ev:] / float(final_eq.iat[first])
+    yr = pd.concat([yearly(new_c), yearly(orig_c), yearly(qqq_c), yearly(spy_c)], axis=1)
+
+    # 다음 거래일 주문 — 마지막 종가 신호를 같은 규칙으로(미래 값은 안 씀)
+    last = dates[-1]
+    nxt = T
+    l_shadow, l_origin = shadow.copy(), dict(s_origin)
+    l_weak = shadow_step(last, l_shadow, l_origin)
+    g_sig = growth_signal(last)
+    l_want = 'GROWTH' if g_sig else '52W'
+    l_mode, l_reason, l_switched = mode, '기존 포지션 유지', False
+    if mode == 'WARMUP' or (l_want != mode and nxt - last_switch >= MODE_MIN_HOLD_DAYS):
+        l_mode = l_want
+        l_switched = l_mode != mode
+        l_reason = '시장 모드 전환' if l_switched else '시장 모드 시작'
+    l_growth = g_hold
+    l_cnt = 0
+    if l_mode == 'GROWTH':
+        if l_switched:
+            l_growth = choose(last)
+        elif ma40_exit(l_growth, T - 1):
+            old = l_growth
+            l_growth = choose(last, excluded={old}, extra_ma40=True)
+            l_reason = f'{old} MA40 2일 연속 이탈: {l_growth} 후보'
+        elif nxt - last_pick >= GROWTH_REVIEW_INTERVAL:
+            l_growth = choose(last)
+            l_reason = '성장 ETF 60거래일 정기 재선정'
+        l_des, l_cnt = target_growth(last, l_growth)
+        if l_growth != 'QQQ' and l_cnt >= GROWTH_VOL_SHOCK_MIN_COUNT:
+            l_reason = f'성장 ETF 변동성 충격 {l_cnt}/4: {l_growth} 50% + QQQ 50%'
+    else:
+        l_des, capped = fill_52w(last, l_shadow)
+        if capped:
+            l_reason = '52W QQQ 변동성 충격 제한'
+    l_delta = l_des - actual
+    l_must = any(actual.at[t] > EPS and l_des.at[t] <= EPS for t in assets)
+    l_req = bool(l_switched or l_must or float(l_delta.abs().max()) >= REBALANCE_BAND)
+    l_exec = l_des if l_req else actual.copy()
+    pct = lambda v: _num(float(v) * 100, 2)
+    orders = [{'t': t, 'a': 'BUY' if l_exec.at[t] > actual.at[t] else 'SELL', 'cur': pct(actual.at[t]), 'tgt': pct(l_exec.at[t]),
+               'w': pct(l_exec.at[t] - actual.at[t]), 'reason': l_reason}
+              for t in assets if abs(float(l_exec.at[t] - actual.at[t])) > EPS]
+    positions = sorted([{'t': t, 'cur': pct(actual.at[t]), 'sig': pct(l_des.at[t]), 'exec': pct(l_exec.at[t]),
+                         'o': ('QQQ 채움' if t == 'QQQ' and l_mode != 'GROWTH' else '성장 ETF' if l_mode == 'GROWTH' else l_origin.get(t, ''))}
+                        for t in assets if max(abs(actual.at[t]), abs(l_des.at[t]), abs(l_exec.at[t])) > EPS],
+                       key=lambda x: -(x['cur'] or 0))
+    iso = lambda d: pd.Timestamp(d).date().isoformat()
+    g_now = []
+    for nm in growth_names:
+        px = gp.at[last, nm]
+        g_now.append({'t': nm, 'ret60': pct(g_ret60.at[last, nm]) if pd.notna(g_ret60.at[last, nm]) else None,
+                      'ma60': pct(px / g_ma60.at[last, nm] - 1) if pd.notna(px) and pd.notna(g_ma60.at[last, nm]) else None,
+                      'ma40': pct(px / g_ma40.at[last, nm] - 1) if pd.notna(px) and pd.notna(g_ma40.at[last, nm]) else None,
+                      'shock': _num(g_shock.at[last, nm], 2), 'held': nm == g_hold and mode == 'GROWTH'})
+    win = modes[ev:]
+    return {
+        'status': {'asof': iso(last), 'mode': mode, 'next_mode': l_mode, 'next_growth': l_growth if l_mode == 'GROWTH' else '',
+                   'growth_signal': g_sig, 'breadth60': pct(breadth60.at[last]), 'rs90': pct(rs90.at[last]),
+                   'rs60_52w': pct(qqq_vs_52w.at[last]), 'weak': bool(l_weak), 'reason': l_reason, 'has_order': bool(orders),
+                   'qqq_shock': _num(qqq_shock.at[last], 2), 'growth_shock_cnt': int((g_shock.loc[last].reindex(GROWTH_ETFS) >= GROWTH_VOL_SHOCK).sum()),
+                   'held_growth': g_hold if mode == 'GROWTH' else ''},
+        'positions': positions, 'orders': orders,
+        'shadow': sorted([{'t': t, 'w': pct(l_shadow.at[t]), 'o': l_origin.get(t, '')} for t in cols if l_shadow.at[t] > EPS], key=lambda x: -x['w']),
+        'growth_now': g_now,
+        'perf': {'enh': stats(new_c), 'orig': stats(orig_c), 'qqq': stats(qqq_c), 'spy': stats(spy_c)},
+        'yearly': {'years': [int(y) for y in yr.index], **{k: [_num(v * 100, 2) for v in yr.iloc[:, n]] for n, k in enumerate(('enh', 'orig', 'qqq', 'spy'))}},
+        'eval_start': iso(dates[ev]),
+        'mode_days': {k: win.count(k) for k in ('52W', 'GROWTH')},
+        'curve': {'dates': [iso(d) for d in dates[ev:]], 'enh': [_num(v, 4) for v in new_c], 'qqq': [_num(v, 4) for v in qqq_c],
+                  'spy': [_num(v, 4) for v in spy_c], 'growth': [1 if m == 'GROWTH' else 0 for m in win],
+                  'expo': [_num(x * 100, 1) for x in expo[ev:]]},
+        'trades': [{'sd': iso(x['sd']), 'ed': iso(x['ed']), 'mode': x['mode'], 't': x['t'], 'a': x['a'], 'w': pct(x['w']),
+                    'reason': x['reason'], 'b60': pct(x['b60']) if pd.notna(x['b60']) else None, 'rs90': pct(x['rs90']) if pd.notna(x['rs90']) else None}
+                   for x in trades[-ENH_RECENT_TRADES:]],
+        'n_trades': len(trades),
+    }
+
 
 def compute(raw_prices) -> dict:
     import numpy as np
@@ -393,7 +687,12 @@ def compute(raw_prices) -> dict:
                     and ex_spy[live] <= WEAK_THRESHOLD and ex_qqq[live] <= WEAK_THRESHOLD)
     status = '판정 대기' if np.isnan(ex_spy[live]) or np.isnan(ex_qqq[live]) else ('안통함' if weak_now else '통함')
 
+    # ③ 개선 52W + 성장 ETF + MA40(2일) — 원본 run_enhanced_52w_growth와 같은 순서 · 같은 식(원본 화면에 나오는 전략)
+    enh = _enhanced(prices, dates, cols, sp, spy, qqq, rs, brk, rot_sig, improve, rs5, rank20, sec_ret, sell_ma,
+                    base['equity'], final['equity'], stats, yearly)
+
     return {
+        'enh': enh, 'data_start': iso(dates[0]), 'n_days': int(T),
         'asof': iso(dates[live]),
         'status': status, 'regime': final['regime'], 'buy_mode': final['origin'],
         'ex_spy': _num(ex_spy[live] * 100, 2), 'ex_qqq': _num(ex_qqq[live] * 100, 2), 'threshold': WEAK_THRESHOLD * 100,
@@ -439,12 +738,15 @@ def run(dry: bool = False) -> dict:
                                 'updated_at': datetime.now(timezone.utc).isoformat()}, on_conflict='kind,base_date').execute()
         cutoff = (datetime.fromisoformat(p['asof']) - timedelta(days=KEEP_DAYS)).date().isoformat()
         sb.table(TABLE).delete().eq('kind', KIND).lt('base_date', cutoff).execute()
-    port = ', '.join(f"{x['t']} {x['w']:.0f}%" for x in p['portfolio']) or '현금 100%'
-    acts = ', '.join(f"{a['a']} {a['t']}" for a in p['actions']) or '없음'
-    log.info(f"[미국52주] {'dry-run ' if dry else ''}{p['asof']} {p['status']}({p['regime']}) · SPY 대비 {p['ex_spy']:+.2f}%p · "
-             f"QQQ 대비 {p['ex_qqq']:+.2f}%p · 포트 {port} · 오늘 {acts}"
+    e = p['enh']
+    st = e['status']
+    port = ', '.join(f"{x['t']} {x['cur']:.0f}%" for x in e['positions'] if (x['cur'] or 0) > 0) or '현금 100%'
+    acts = ', '.join(f"{o['a']} {o['t']} {o['w']:+.1f}%p" for o in e['orders']) or '없음'
+    log.info(f"[미국52주] {'dry-run ' if dry else ''}{p['asof']} 개선 {st['mode']}→{st['next_mode']}{' ' + st['next_growth'] if st['next_growth'] else ''}"
+             f" · 보유 {port} · 다음 매매 {acts} · {st['reason']} · 52W 안 {p['regime']}"
+             f" · 연 {e['perf']['enh']['cagr']}% {e['perf']['enh']['mult']}배"
              f"{' · 격리 ' + ', '.join(p['quarantined']) if p['quarantined'] else ''}")
-    return {'date': p['asof'], 'status': p['status'], 'regime': p['regime'], 'payload': p}
+    return {'date': p['asof'], 'status': p['status'], 'regime': p['regime'], 'mode': st['mode'], 'payload': p}
 
 
 if __name__ == '__main__':
