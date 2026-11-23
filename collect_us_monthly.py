@@ -1,22 +1,23 @@
 """
-collect_us_monthly.py — 미국 월 리밸런싱 V8.1 (ETF 52개 · SUPER70) → market_snapshot(kind='us_monthly')
+collect_us_monthly.py — 미국 월 리밸런싱 V8.2 · 개선 2조건(RESEARCH_TWO, ETF 52개) → market_snapshot(kind='us_monthly')
 
-[원본] 태린이아빠 Market Dashboard '미국시장 월단위 리밸런싱 투자전략'(공개 소스 app.py US_MONTHLY_REBALANCE_SRC, V8.1)
+[원본] 태린이아빠 Market Dashboard '미국 월단위 리밸런싱 투자전략'(공개 소스 app.py US_MONTHLY_REBALANCE_SRC, v11.67 · 11-22판)
   매달 마지막 거래일 종가로 업종 ETF의 120일선 위 비율(Breadth)과 NASDAQ100 · S&P500 상대강도를 보고 다음 달 자산을 정한다.
-  · 나스닥 독주(QQQ > 200일선 ∧ QQQ/SPY 6개월 RS > +5%): 나스닥 세부(KRE · KBWB · IYF · IBB · IYW) 중 QQQ 대비 6개월 RS 1위 100%
+  · 나스닥 독주(QQQ > 200일선 ∧ QQQ/SPY 6개월 RS > +3.5%): 나스닥 세부(KRE · KBWB · IYF · IBB · IYW) 중 QQQ 대비 6개월 RS 1위 100%
       (Breadth < 30%면 50%)
-  · 초광범위 강세(Breadth ≥ 70%, SUPER70): SPY와 QQQ 중 1 · 3 · 6개월 절대수익 평균이 높은 쪽 100%
+  · 초광범위 강세(Breadth ≥ 70%): SPY와 QQQ 중 1 · 3 · 6개월 절대수익 평균이 높은 쪽 100%
   · 선택적 강세(60 ~ 70%): 적격 업종(종가 > 120일선 ∧ 6개월 SPY 대비 RS > 0) 중 3개월 SPY 대비 RS 상위 2 균등
   · 비추세(40 ~ 60%): 적격 업종 중 '최근 1개월 뺀 6개월 일별 횡단면 순위 평균' 상위 3, 비중은 그 3개의 6개월 RS 평균
-      <5% · 5~12% · 12~22% · ≥22% → 25 · 50 · 75 · 100%(최대 50%). 25%면 금속 1위 50% 추가
+      <5% · 5~12% · 12~22% · ≥22% → 25 · 50 · 75 · 100%(개선안 최대 25%). 25% 이하면 금속 1위 50% 추가(최대 75%)
   · 회복(30 ~ 40%): 최근 6개 월말 6개월 RS 상위 3에 들었던 업종 중 20일 고점 대비 −15 ~ −5% 눌린 것 최대 3개에 50%, 없으면 금속 50%
   · 깊은 약세(< 30%): SPY 252일 고점 대비 −12 · −18 · −24% 이하 → 50 · 75 · 100% SPY, 0%면 금속 50%
   · 금속(XME · PICK · SIL): 120일선 위 ∧ 6개월 SPY 대비 RS > 0 중 1위
-  · 백테스트: 월말 종가 신호 → 다음 거래일 종가 체결 → 그다음 날부터 수익, 편도 0.1%, 비중은 매일 가격대로. 최근 2년 SPY · QQQ 비교.
+  · 백테스트: 준비 200거래일 뒤 첫 월말부터 신호 → 다음 거래일 종가 체결 → 그다음 날부터 수익, 편도 0.1%, 비중은 매일 가격대로.
+      성과는 첫 투자 체결 전날부터 전체 기간 SPY · QQQ와 비교(V8.1의 '최근 2년'은 원본에서 폐지).
   · '이번 달 확정' = 직전 월말 신호, '다음 달 예상' = 최신 거래일을 월말로 친 신호(아직 적용 전).
-[자료] 야후 수정 종가(auto_adjust=True — 분할 · 배당 반영) 52개, 원본과 같은 2020-10-27부터. 원본 HTS 종가도 배당 반영(SPY 2025 +17.72% 일치).
-  ※ 원본 사이트의 HTS 종가는 SOXX · ITA의 2026-11-05 3:1 분할을 반영하지 않아 SOXX는 '비정상 단절'로 빠지고 ITA는
-     분할 하락이 그대로 들어가 있다. 여기서는 분할을 반영한 종가라 SOXX가 업종 후보에 들어간다(같은 '비정상 단절' 규칙은 그대로 둠).
+  · 가격 점검: 하루 +200% 초과 · −70% 미만 · 0 이하 가격이 하나라도 있으면 계산을 멈춘다(V8.2 — 예전처럼 그 ETF를 빼지 않는다).
+[자료] 야후 수정 종가(auto_adjust=True — 분할 · 배당 반영) 52개, 원본과 같은 2018-12-07부터. 원본 HTS 종가도 배당 반영(SPY 2025 +17.72% 일치).
+  원본은 상대강도 PDF 전용으로 XLV · XLY · XLC · IWM · RSP 5개를 더 읽지만 매매 · Breadth에 안 쓰고 대시보드에도 안 나와 받지 않는다.
 [돌리는 때] 매일 아침(미국 장 마감 뒤) 두 번 — 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다.
 """
 import argparse
@@ -33,9 +34,10 @@ log = logging.getLogger(__name__)
 TABLE = 'market_snapshot'
 KIND = 'us_monthly'
 KEEP_DAYS = 10
-DATA_START = '2020-10-27'      # 원본 HTS 엑셀 시작일
+DATA_START = '2018-12-07'      # 원본 HTS 엑셀 시작일(v11.65부터 — 그전 판은 2020-10-27)
+VERSION = 'V8.2'
 
-# ── 원본 0. 설정 (V8.1 · SUPER70) ───────────────────────────────────────
+# ── 원본 0. 설정 (V8.2 · RESEARCH_TWO) ──────────────────────────────────
 TRANSACTION_COST = 0.001
 MOMENTUM_1M, MOMENTUM_3M, MOMENTUM_6M = 21, 63, 126
 NON_TREND_RANK_LOOKBACK = MOMENTUM_6M - MOMENTUM_1M
@@ -51,12 +53,13 @@ RECOVERY_EXPOSURE = 0.50
 RECOVERY_HIGH_DAYS = 20
 RECOVERY_DD_MIN, RECOVERY_DD_MAX = -0.15, -0.05
 REAL_ASSET_RS_THRESHOLD = 0.00
-PARAM_SET = 'SUPER70'
+PARAM_SET = 'RESEARCH_TWO'     # 원본 개선안 기본값(기존 V8.2 비교는 'SUPER70')
 TUNING_PROFILES = {
-    'ORIGINAL':   {'superbull': .80, 'nasdaq_rs': .05,  'nontrend_max': .50, 'metal': .50},
-    'SUPER70':    {'superbull': .70, 'nasdaq_rs': .05,  'nontrend_max': .50, 'metal': .50},
-    'BALANCED':   {'superbull': .80, 'nasdaq_rs': .035, 'nontrend_max': .25, 'metal': .75},
-    'RESEARCH70': {'superbull': .70, 'nasdaq_rs': .035, 'nontrend_max': .25, 'metal': .75},
+    'ORIGINAL':     {'superbull': .80, 'nasdaq_rs': .05,  'nontrend_max': .50, 'metal': .50},
+    'SUPER70':      {'superbull': .70, 'nasdaq_rs': .05,  'nontrend_max': .50, 'metal': .50},
+    'BALANCED':     {'superbull': .80, 'nasdaq_rs': .035, 'nontrend_max': .25, 'metal': .75},
+    'RESEARCH70':   {'superbull': .70, 'nasdaq_rs': .035, 'nontrend_max': .25, 'metal': .75},
+    'RESEARCH_TWO': {'superbull': .70, 'nasdaq_rs': .035, 'nontrend_max': .25, 'metal': .50},
 }
 _T = TUNING_PROFILES[PARAM_SET]
 BREADTH_SUPER_BULL = _T['superbull']
@@ -75,8 +78,8 @@ ETFS = BASE_ETFS + ADDED_ETFS
 SECTOR_ETFS = ['SOXX', 'IGV', 'FDN', 'GDX', 'IYZ', 'FINX', 'KCE', 'XLE', 'KIE', 'XLI', 'IHI', 'IHF', 'IYT', 'ITA', 'XLB', 'BOAT', 'PPH',
                'PPA', 'OIH', 'PEJ', 'PHO', 'XHB', 'IYR', 'PBJ', 'XLP', 'CARZ'] + ADDED_ETFS
 MIN_HISTORY_ROWS = 127
-WARMUP = 504
-EVAL_YEARS = 2
+WARMUP = 200                   # V8.2: 504 → 200거래일
+MAX_DAILY_GAIN, MAX_DAILY_LOSS = 2.00, -0.70
 RECENT_SIGNALS = 15
 
 
@@ -121,8 +124,8 @@ def fetch_prices(start=DATA_START, now_utc=None):
     return px[cols]
 
 
-def compute(raw, exclude=()) -> dict:
-    """raw: 날짜 × 티커 종가. 원본 V8.1 코드와 같은 순서 · 같은 식. exclude는 대조 시험용(원본 사이트처럼 SOXX 빼기 등)."""
+def compute(raw) -> dict:
+    """raw: 날짜 × 티커 종가. 원본 V8.2 코드와 같은 순서 · 같은 식."""
     import numpy as np
     import pandas as pd
 
@@ -138,15 +141,18 @@ def compute(raw, exclude=()) -> dict:
     real_names = [x for x in REAL_ASSET_NAMES if x in data.columns]
     if not nas_names or not real_names:
         raise RuntimeError('NASDAQ 내부지수 · 금속이 없습니다')
-    # 4. 일반 업종 — 비정상 가격 단절(하루 +200% 초과 · −70% 미만) 제외, 금속 제외
-    sector_cols = [c for c in data.columns if c in SECTOR_ETFS]
-    bad = []
-    for c in sector_cols:
-        ret = data[c].pct_change(fill_method=None)
-        if ret.max(skipna=True) > 2.0 or ret.min(skipna=True) < -0.70:
-            bad.append(c)
-    forced = [c for c in exclude if c in sector_cols and c not in bad]
-    sector_cols = [c for c in sector_cols if c not in bad and c not in forced and c not in real_names]
+    # 4. 가격 점검(V8.2) — 모든 ETF에서 0 이하 · 하루 +200% 초과 · −70% 미만이 있으면 빼지 않고 멈춘다
+    events = []
+    for c in data.columns:
+        s = data[c]
+        bad_px = s.notna() & ((s <= 0) | ~np.isfinite(s))
+        events += [f'{c} {d.date()} 가격 {s.loc[d]}' for d in s.index[bad_px]]
+        r = s.pct_change(fill_method=None)
+        events += [f'{c} {d.date()} {ch:+.1%}' for d, ch in r[(r > MAX_DAILY_GAIN) | (r < MAX_DAILY_LOSS)].items()]
+    if events:
+        raise RuntimeError(f'ETF 가격 이상 {len(events)}건 — 분할 · 수정종가 확인 필요: ' + '; '.join(events[:10]))
+    # 일반 업종 — 금속은 따로 쓰므로 뺀다
+    sector_cols = [c for c in data.columns if c in SECTOR_ETFS and c not in real_names]
     if len(sector_cols) < ATTACK_TOP_N:
         raise RuntimeError('일반 업종 수가 부족합니다')
 
@@ -371,14 +377,14 @@ def compute(raw, exclude=()) -> dict:
     hold_now = [{'t': c, 'w': _num(w * 100, 1)} for c, w in list(zip(sector_cols, ws)) + list(zip(nas_names, wn)) + list(zip(real_names, wr))
                 + [(SP500_NAME, wsp), (NASDAQ100_NAME, wnd)] if w > 1e-9]
 
-    # 11. 평가 시작일 — 최근 2년(첫 체결 전날보다 앞서지 않게)
+    # 11. 평가 시작일 — 첫 투자 체결 전날부터 전체 기간(V8.2: 최근 2년 제한 폐지)
     active = sorted(r['ed'] for r in rows if r['exp'] > 0 and r['ed'] is not None)
     if not active:
         raise RuntimeError('투자 신호 없음')
     first_loc = eq.index.get_loc(pd.Timestamp(active[0]))
-    req = dates[-1] - pd.DateOffset(years=EVAL_YEARS)
-    valid_starts = dates[(dates >= req) & (dates >= eq.index[first_loc - 1])]
-    live_start = valid_starts[0]
+    if first_loc < 1:
+        raise RuntimeError('첫 투자 체결일 이전의 공통 기준일이 없습니다')
+    live_start = eq.index[first_loc - 1]
     strat = eq.loc[live_start:] / eq.loc[live_start]
     spy_c = sp500.loc[live_start:] / sp500.loc[live_start]
     qqq_c = nasdaq100.loc[live_start:] / nasdaq100.loc[live_start]
@@ -446,14 +452,13 @@ def compute(raw, exclude=()) -> dict:
     gd = strat.index
     return {
         'asof': last.date().isoformat(), 'start': dates[0].date().isoformat(), 'n_etf': int(data.shape[1]),
-        'param': {'set': PARAM_SET, **_T}, 'sectors': sector_cols, 'nasdaq': nas_names, 'metals': real_names,
-        'excluded': bad, 'forced_out': forced,
+        'version': VERSION, 'param': {'set': PARAM_SET, **_T}, 'sectors': sector_cols, 'nasdaq': nas_names, 'metals': real_names,
         'confirmed': sig(confirmed), 'preview': sig(preview), 'signals': [sig(r) for r in rows[-RECENT_SIGNALS:]],
         'live_start': live_start.date().isoformat(),
-        'perf': {'v81': stats(strat, to_ser), 'spy': stats(spy_c), 'qqq': stats(qqq_c)},
-        'yearly': {'years': years, 'v81': [_num(ys.get(y)) for y in years], 'spy': [_num(yp.get(y)) for y in years],
+        'perf': {'strat': stats(strat, to_ser), 'spy': stats(spy_c), 'qqq': stats(qqq_c)},
+        'yearly': {'years': years, 'strat': [_num(ys.get(y)) for y in years], 'spy': [_num(yp.get(y)) for y in years],
                    'qqq': [_num(yq.get(y)) for y in years]},
-        'curve': {'dates': [d.date().isoformat() for d in gd], 'v81': [_num(v) for v in strat], 'spy': [_num(v) for v in spy_c.reindex(gd)],
+        'curve': {'dates': [d.date().isoformat() for d in gd], 'strat': [_num(v) for v in strat], 'spy': [_num(v) for v in spy_c.reindex(gd)],
                   'qqq': [_num(v) for v in qqq_c.reindex(gd)]},
         'hold': hold_now, 'now': now, 'metals_now': metals, 'nasdaq_now': nas_now,
         'index_now': {'spy_dd': _num(sp500_dd252.iloc[-1]), 'ndx_rs': _num(nasdaq_vs_sp_rs_6m.iloc[-1]),
@@ -462,23 +467,22 @@ def compute(raw, exclude=()) -> dict:
     }
 
 
-def run(dry: bool = False, exclude=()) -> dict:
+def run(dry: bool = False) -> dict:
     sb = None if dry else get_supabase_client()
     if not dry and not _has_schema(sb):
         log.warning(f'[미국월간] {TABLE} 테이블 없음 — sql/market_snapshot.sql을 먼저 실행하세요 (건너뜀)')
         return {'date': None, 'skipped': 'no_table'}
     df = fetch_prices()
-    p = compute(df, exclude=exclude)
+    p = compute(df)
     if not dry:
         sb.table(TABLE).upsert({'kind': KIND, 'base_date': p['asof'], 'payload': p,
                                 'updated_at': datetime.now(timezone.utc).isoformat()}, on_conflict='kind,base_date').execute()
         cutoff = (date.fromisoformat(p['asof']) - timedelta(days=KEEP_DAYS)).isoformat()
         sb.table(TABLE).delete().eq('kind', KIND).lt('base_date', cutoff).execute()
     c, v = p['confirmed'], p['preview']
-    log.info(f"[미국월간] {'dry-run ' if dry else ''}{p['asof']} ETF {p['n_etf']} · 업종 {len(p['sectors'])}"
-             f"{' · 제외 ' + ','.join(p['excluded'] + p['forced_out']) if p['excluded'] or p['forced_out'] else ''}"
+    log.info(f"[미국월간] {'dry-run ' if dry else ''}{p['asof']} {VERSION} ETF {p['n_etf']} · 업종 {len(p['sectors'])}"
              f" · 확정 {c['sd']} {c['mode']} {c['exp']} {','.join(c['sel']) or '-'} · 예상 {v['mode']} {v['exp']} {','.join(v['sel']) or '-'}"
-             f" · 2년 {p['perf']['v81']['mult']}배")
+             f" · {p['live_start']}부터 {p['perf']['strat']['mult']}배")
     return {'date': p['asof'], 'payload': p}
 
 
@@ -487,10 +491,8 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry', action='store_true', help='쓰지 않고 계산만')
     ap.add_argument('--dump', help='계산 결과를 이 경로에 JSON으로 저장')
-    ap.add_argument('--exclude', default='', help='대조 시험용으로 업종에서 뺄 티커(쉼표) — 원본 사이트처럼 SOXX 빼기')
     a = ap.parse_args()
-    ex = tuple(x.strip().upper() for x in a.exclude.split(',') if x.strip())
-    r = run(dry=a.dry or bool(ex), exclude=ex)
+    r = run(dry=a.dry)
     if a.dump and r.get('payload'):
         with open(a.dump, 'w', encoding='utf-8') as f:
             json.dump(r['payload'], f, ensure_ascii=False)
