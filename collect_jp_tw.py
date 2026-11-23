@@ -1,7 +1,8 @@
 """일본·대만 AI·반도체 공급망 시세 점검 → market_snapshot(kind='jp_tw', 하루 한 줄)
 
-[원본] 태린이아빠 Market Dashboard '일본과 대만 시세점검'(공개 소스 app.py JP_TW_MARKET_SRC, v6 DAILY-FIRST).
-  · 종목 97개 = 일본 40(.T) + 대만 57(.TW 상장 · .TWO 장외), 나라별 업종 27개 · 글로벌 테마 16개.
+[원본] 태린이아빠 Market Dashboard '일본과 대만 시세점검'(공개 소스 app.py JP_TW_MARKET_SRC, v6.1 DAILY-FIRST + PEER GROUP EXPANSION · 11-18).
+  · 종목 112개 = 일본 47(.T) + 대만 65(.TW 상장 · .TWO 장외), 나라별 업종 30개 · 글로벌 테마 18개.
+    (v6 → v6.1: 15종목과 BBU/배터리 · AI 전력 · 검사/계측 업종, 'BBU / AI Server Battery' · 'Inspection / Measurement' 테마 추가)
   · 시세 = Yahoo 일봉 Close(auto_adjust=False), 최근 4개월.
   · 종목별
       일간 % = 기준일 종가 ÷ 직전 거래일 종가 − 1
@@ -64,13 +65,14 @@ STOCKS = {
     'Japan - Semiconductor Materials': {'Shin-Etsu Chemical': '4063.T', 'SUMCO': '3436.T', 'Resonac': '4004.T',
                                         'Mitsui Mining & Smelting': '5706.T', 'Tokyo Ohka Kogyo': '4186.T',
                                         'JX Advanced Metals': '5016.T', 'MEC': '4971.T', 'MARUWA': '5344.T',
-                                        'Sumitomo Bakelite': '4203.T'},
-    'Japan - AI Substrate / PCB': {'Ibiden': '4062.T', 'Ajinomoto': '2802.T', 'Meiko Electronics': '6787.T'},
+                                        'Sumitomo Bakelite': '4203.T', 'Tri Chemical Laboratories': '4369.T', 'Central Glass': '4044.T'},
+    'Japan - AI Substrate / PCB': {'Ibiden': '4062.T', 'Ajinomoto': '2802.T', 'Meiko Electronics': '6787.T',
+                                   'Mitsubishi Gas Chemical': '4182.T', 'Nitto Boseki': '3110.T'},
     'Japan - Memory': {'Kioxia': '285A.T'},
     'Japan - ASIC / SoC': {'Socionext': '6526.T'},
     'Japan - Power Semiconductor': {'ROHM': '6963.T', 'Mitsubishi Electric': '6503.T', 'Fuji Electric': '6504.T', 'Renesas': '6723.T'},
     'Japan - Data Center Power / Cooling': {'Hitachi': '6501.T', 'Daikin': '6367.T', 'Nidec': '6594.T'},
-    'Taiwan - Foundry / IC': {'TSMC': '2330.TW', 'UMC': '2303.TW', 'MediaTek': '2454.TW'},
+    'Taiwan - Foundry / IC': {'TSMC': '2330.TW', 'UMC': '2303.TW', 'MediaTek': '2454.TW', 'PSMC': '6770.TW'},
     'Taiwan - Memory': {'Nanya Technology': '2408.TW', 'Winbond': '2344.TW', 'Macronix': '2337.TW'},
     'Taiwan - OSAT / Packaging': {'ASE Technology': '3711.TW', 'ChipMOS': '8150.TW', 'Powertech': '6239.TW'},
     'Taiwan - AI Server ODM': {'Quanta': '2382.TW', 'Wiwynn': '6669.TW', 'Wistron': '3231.TW', 'Hon Hai': '2317.TW',
@@ -83,36 +85,47 @@ STOCKS = {
                                'Browave': '3163.TWO', 'EZconn': '6442.TW'},
     'Taiwan - Server Power': {'Delta Electronics': '2308.TW', 'Lite-On': '2301.TW', 'Chicony Power': '6412.TW', 'AcBel': '6282.TW'},
     'Taiwan - Advanced Cooling': {'Auras Technology': '3324.TWO', 'Asia Vital Components': '3017.TW', 'Jentech Precision': '3653.TW',
-                                  'Fositek': '6805.TW', 'Sunon': '2421.TW', 'Kaori': '8996.TW'},
-    'Taiwan - Semiconductor Equipment': {'Gudeng Precision': '3680.TWO', 'Scientech': '3583.TW', 'Grand Process': '3131.TWO'},
+                                  'Fositek': '6805.TW', 'Sunon': '2421.TW', 'Kaori': '8996.TW', 'Kenmec': '6125.TWO'},
+    'Taiwan - Semiconductor Equipment': {'Gudeng Precision': '3680.TWO', 'Scientech': '3583.TW', 'Grand Process': '3131.TWO',
+                                         'GPM': '5443.TWO'},
     'Taiwan - Semiconductor Test': {'WinWay': '6515.TW', 'MPI': '6223.TWO', 'CHPT': '6510.TWO',
                                     'CCP Contact Probes': '6217.TWO', 'KYEC': '2449.TW'},
-    'Taiwan - ASIC / Custom Silicon': {'Global Unichip': '3443.TW', 'Alchip': '3661.TW', 'Faraday Technology': '3035.TW', 'ASPEED': '5274.TWO'},
-    'Taiwan - MLCC / Components': {'Yageo': '2327.TW', 'Walsin Technology': '2492.TW'},
+    'Taiwan - ASIC / Custom Silicon': {'Global Unichip': '3443.TW', 'Alchip': '3661.TW', 'Faraday Technology': '3035.TW', 'ASPEED': '5274.TWO',
+                                       'Realtek': '2379.TW', 'Novatek': '3034.TW'},
+    'Taiwan - MLCC / Components': {'Yageo': '2327.TW', 'Walsin Technology': '2492.TW', 'Holy Stone': '3026.TW'},
     'Taiwan - Server Components': {'Lotes': '3533.TW', 'King Slide': '2059.TW'},
+    'Japan - BBU / Battery': {'Panasonic Holdings': '6752.T'},
+    'Japan - AI Power': {'Shindengen Electric': '6844.T'},
+    'Japan - Inspection / Measurement': {'Keyence': '6861.T'},
+    'Taiwan - BBU / Battery': {'Dynapack': '3211.TWO'},
+    'Taiwan - Inspection / Measurement': {'Chroma ATE': '2360.TW'},
 }
 
 GLOBAL_THEMES = {
-    'MLCC / Electronic Components': ['Murata', 'TDK', 'Taiyo Yuden', 'Kyocera', 'Yageo', 'Walsin Technology'],
+    'MLCC / Electronic Components': ['Murata', 'TDK', 'Taiyo Yuden', 'Kyocera', 'Yageo', 'Walsin Technology', 'Holy Stone'],
     'Wafer Fab Equipment': ['Tokyo Electron', 'SCREEN Holdings', 'Kokusai Electric', 'Shibaura Mechatronics', 'Lasertec',
                             'Gudeng Precision', 'Scientech', 'Grand Process'],
     'AI Semiconductor Test': ['Advantest', 'Micronics Japan', 'WinWay', 'MPI', 'CHPT', 'CCP Contact Probes', 'KYEC'],
-    'Advanced Packaging / Back-End': ['DISCO', 'TOWA', 'Tokyo Seimitsu', 'ASE Technology', 'ChipMOS', 'Powertech'],
+    'Advanced Packaging / Back-End': ['DISCO', 'TOWA', 'Tokyo Seimitsu', 'ASE Technology', 'ChipMOS', 'Powertech',
+                                      'Shibaura Mechatronics', 'KYEC', 'Scientech', 'GPM', 'Grand Process'],
     'Memory': ['Kioxia', 'Nanya Technology', 'Winbond', 'Macronix'],
-    'Custom ASIC / SoC': ['Socionext', 'Global Unichip', 'Alchip', 'Faraday Technology', 'ASPEED', 'MediaTek'],
+    'Custom ASIC / SoC': ['Socionext', 'Global Unichip', 'Alchip', 'Faraday Technology', 'ASPEED', 'MediaTek', 'Realtek', 'Novatek'],
     'AI Server': ['Quanta', 'Wiwynn', 'Wistron', 'Hon Hai', 'Inventec', 'Gigabyte'],
     'PCB / Substrate': ['Ibiden', 'Ajinomoto', 'Meiko Electronics', 'Unimicron', 'Kinsus', 'Zhen Ding', 'Compeq', 'Tripod',
-                        'Elite Material', 'Gold Circuit Electronics', 'Nan Ya PCB'],
+                        'Elite Material', 'Gold Circuit Electronics', 'Nan Ya PCB', 'Mitsubishi Gas Chemical', 'Nitto Boseki'],
     'Optical / CPO': ['Fujikura', 'Furukawa Electric', 'Sumitomo Electric', 'SEIKOH GIKEN', 'Kohoku Kogyo',
                       'LandMark Optoelectronics', 'LuxNet', 'FOCI', 'Browave', 'EZconn'],
     'Network': ['Accton', 'Wistron NeWeb', 'Sercomm'],
     'Power Semiconductor': ['ROHM', 'Mitsubishi Electric', 'Fuji Electric', 'Renesas'],
-    'Data Center Power': ['Hitachi', 'Nidec', 'Delta Electronics', 'Lite-On', 'Chicony Power', 'AcBel'],
-    'Data Center Cooling': ['Daikin', 'Auras Technology', 'Asia Vital Components', 'Jentech Precision', 'Fositek', 'Sunon', 'Kaori'],
-    'Foundry / IC': ['TSMC', 'UMC', 'MediaTek'],
+    'Data Center Power': ['Hitachi', 'Nidec', 'Delta Electronics', 'Lite-On', 'Chicony Power', 'AcBel', 'Shindengen Electric'],
+    'Data Center Cooling': ['Daikin', 'Auras Technology', 'Asia Vital Components', 'Jentech Precision', 'Fositek', 'Sunon', 'Kaori',
+                            'Kenmec'],
+    'Foundry / IC': ['TSMC', 'UMC', 'MediaTek', 'PSMC'],
     'Semiconductor Materials': ['Shin-Etsu Chemical', 'SUMCO', 'Resonac', 'Mitsui Mining & Smelting', 'Tokyo Ohka Kogyo',
-                                'JX Advanced Metals', 'MEC', 'MARUWA', 'Sumitomo Bakelite'],
+                                'JX Advanced Metals', 'MEC', 'MARUWA', 'Sumitomo Bakelite', 'Tri Chemical Laboratories', 'Central Glass'],
     'Server Components': ['Lotes', 'King Slide'],
+    'BBU / AI Server Battery': ['Panasonic Holdings', 'Murata', 'TDK', 'Dynapack', 'Delta Electronics'],
+    'Inspection / Measurement': ['Lasertec', 'Keyence', 'Chroma ATE'],
 }
 
 # 원본 KOREA_WATCHLIST — 테마가 움직일 때 같이 볼 한국 관련주(원본 영문 표기를 한글 종목명으로)
@@ -135,6 +148,8 @@ KOREA_WATCHLIST = {
     'Foundry / IC': ['삼성전자', 'DB하이텍'],
     'Semiconductor Materials': ['이엔에프테크놀로지', '솔브레인', '한솔케미칼', '동진쎄미켐'],
     'Server Components': ['삼성전기', '대덕전자', '이수페타시스'],
+    'BBU / AI Server Battery': ['삼성SDI', 'LG에너지솔루션', '솔루엠', '상신이디피', '신흥에스이씨', '파워넷', 'LS머트리얼즈', '비나텍'],
+    'Inspection / Measurement': ['파크시스템스', '고영', '넥스틴'],
 }
 
 SPECIAL_WATCH = {

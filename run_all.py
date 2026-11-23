@@ -252,7 +252,7 @@ def run_scheduler():
     schedule.every().day.at("07:10").do(_threaded(job_us_liquidity))  # 미국 유동성 체크(FRED 15종, 약 15초) — 금리 갱신(미국 16:15) 뒤
     schedule.every().day.at("12:10").do(_threaded(job_us_liquidity))  # 한 번 더 — 아침 실패·늦은 갱신 대비 (같은 날은 덮어씀)
     schedule.every().day.at("21:10").do(_threaded(job_tw_revenue))  # 대만 AI·반도체 공급망 월매출(MOPS, 매달 10일까지 신고) — 최근 3개월 재확인, 약 1분
-    schedule.every().day.at("16:40").do(_threaded(job_jp_tw))  # 일본·대만 공급망 97종목 시세 점검 — 일본 15:30·대만 14:30 마감 뒤(약 40초)
+    schedule.every().day.at("16:40").do(_threaded(job_jp_tw))  # 일본·대만 공급망 112종목 시세 점검 — 일본 15:30·대만 14:30 마감 뒤(약 40초)
     schedule.every().day.at("18:20").do(_threaded(job_jp_tw))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
     schedule.every().day.at("07:00").do(_threaded(job_ai_hw))  # AI 하드웨어 41종목 Breadth·피크아웃 점검 — 미국 마감 뒤(약 20초)
     schedule.every().day.at("08:20").do(_threaded(job_ai_hw))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)

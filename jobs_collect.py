@@ -1217,7 +1217,7 @@ def job_us_liquidity():
 
 @_job(weekday_only=True)
 def job_jp_tw():
-    """평일 16:40 · 18:20 — 일본·대만 AI·반도체 공급망 97종목 시세 점검(Yahoo 일봉) → market_snapshot(kind='jp_tw').
+    """평일 16:40 · 18:20 — 일본·대만 AI·반도체 공급망 112종목(원본 v6.1) 시세 점검(Yahoo 일봉) → market_snapshot(kind='jp_tw').
 
     일본 15:30 · 대만 14:30(한국 시각) 마감 뒤 끝난 일봉만으로 일간·5일·20일 수익률, 테마 Breadth·Strength Score, 신호를 계산한다.
     한국 휴장일에도 돈다(두 나라 장은 열린다). 같은 기준일은 덮어쓴다."""
