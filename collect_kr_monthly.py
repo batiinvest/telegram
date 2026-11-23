@@ -1,18 +1,23 @@
 """
-collect_kr_monthly.py — 국내 월 리밸런싱 V2.3 (업종지수 Breadth · 코스피 상대강도 · 회복 · 역추세 · 가격 기반 F&G)
-→ market_snapshot(kind='kr_monthly')
+collect_kr_monthly.py — 국내 월 리밸런싱 V2.6 (업종지수 Breadth · 코스피 상대강도 · 주간 순위 가점 · 회복 · 역추세 · 가격 기반 F&G
+· 적응형 고변동성 제한) → market_snapshot(kind='kr_monthly')
 
-[원본] 태린이아빠 Market Dashboard '국내시장 월단위 리밸런싱 투자전략'(공개 소스 app.py KR_MONTHLY_REBALANCE_SRC, V2.3)
+[원본] 태린이아빠 Market Dashboard '한국 월단위 리밸런싱 투자전략'(공개 소스 app.py KR_MONTHLY_REBALANCE_SRC, V2.6 · v11.59 11-20판)
   매달 마지막 거래일 종가로 업종 26개의 120일선 위 비율(Breadth)을 보고 구간을 나눈다. 다음 거래일부터 적용.
-  · 추세(Breadth ≥ 60%): 적격 업종(종가 > 120일선 ∧ 6개월 코스피 대비 상대모멘텀 > 0) RS 상위 3 — 기존 보유는 5위까지 유지, 100%
+  · 업종 순위(V2.4): 적격 업종(종가 > 120일선 ∧ 6개월 코스피 대비 상대모멘텀 > 0)을
+      '6개월 RS + 0.10 × (최근 26주 중 주간 수익률 상위 30%에 든 횟수 ÷ 26)' 순으로(26주 자료가 모자라면 가점 0)
+  · 추세(Breadth ≥ 60%): 순위 상위 3 — 기존 보유는 5위까지 유지, 100%
+      V2.6: Breadth 60 ~ 75%에서는 3개월(63거래일) 코스피 대비 RS 순서로 고른다
   · 비추세(40 ~ 60%): 같은 방식으로 고르되 비중은 상위 3 평균 RS <5%·5~12%·12~22%·≥22% → 25·50·75·100%
       V2.3 보정: 코스피 < 200일선 ∧ 6개월 절대모멘텀 < −5% ∧ 252일 고점 대비 ≤ −15%면 −75%p
   · 회복(30 ~ 40%): 직전 6개 월말 상위 3에 들었던 업종 중 지금도 적격이고 20일 고점 대비 −15 ~ −5% 눌린 것 최대 3개에 50%
   · 역추세(< 30%): 코스피 252일 고점 대비 −12·−18·−24·−30% 이하 → 50·75·100·100% 코스피
       V2.1: F&G ≤ 30 ∧ 히스토그램 > 0 ∧ 직전 월말보다 큼 → 0/25/50/75/100 단계에서 한 단계 확대
+      V2.5: 낙폭 ≤ −24% ∧ 코스피 60일 연율 변동성 ≥ 과거 3년(756일, 최근 63일 뺌) 중앙값 × 2 → 코스피 비중 × 50%
   · 코스피 가격 기반 F&G = RSI14 25% + 125일 모멘텀 25% + 20일선 이격 20% + 252일 고점 대비 15% + 20일 변동성(역) 15%,
     각각 직전 252거래일 안 백분위. 오실레이터 = EMA5 − EMA20, 시그널 EMA5, 히스토그램 = 오실레이터 − 시그널.
-  · 백테스트: 월말 종가 신호 → 다음 거래일 적용, 편도 거래비용 0.1%, 비중은 매일 가격대로 움직임. V2 · V2.1 · V2.3 · 코스피 비교.
+  · 백테스트: 월말 종가 신호 → 다음 거래일 적용, 편도 거래비용 0.1%, 비중은 매일 가격대로 움직임.
+      원본처럼 V2.5(기준) · V2.6(최종) · 코스피를 두 전략 중 늦게 시작한 날부터 비교.
   · '이번 달 확정' = 직전 월말 신호, '다음 달 예상' = 최신 거래일을 월말로 친 신호(아직 적용 전).
 [자료] WICS 업종지수 26개(wiseindex.com DataCenter, WI100 ~ WI800) + 코스피(야후 ^KS11, 빈 날은 KRX 지수).
   원본 엑셀(DataGuide 'Time Series (Sector)', 2015-12-30 ~)과 같은 지수 — 사용자 보유 원본 엑셀(2026-09-28까지)과 대조:
@@ -45,7 +50,22 @@ SECTORS = [('WI100', '에너지'), ('WI110', '화학'), ('WI200', '비철,목재
            ('WI630', 'IT가전'), ('WI640', '디스플레이'), ('WI700', '통신서비스'), ('WI800', '유틸리티')]
 WISE_URL = 'https://www.wiseindex.com/DataCenter/GridData'
 
-# ── 원본 0. 설정 (V2.3) ─────────────────────────────────────────────────
+# ── 원본 0. 설정 (V2.6) ─────────────────────────────────────────────────
+VERSION = 'V2.6'
+# V2.5 적응형 고변동성 제한(역추세에서만)
+V25_DD_THRESHOLD = -0.24
+V25_VOL_WINDOW = 60
+V25_MEDIAN_LOOKBACK_DAYS = 756
+V25_MEDIAN_SKIP_RECENT_DAYS = 63
+V25_MEDIAN_MIN_HISTORY = 252
+V25_VOL_MEDIAN_MULTIPLIER = 2.0
+V25_POSITION_MULTIPLIER = 0.50
+# V2.6 추세 60 ~ 75%: 3개월 RS 순위
+V26_TREND_RS3M_BREADTH_UPPER = 0.75
+RS3M_DAYS = 63
+# V2.4 주간 순위 가점(원본 WEEKLY_RANK_MODE = 'W26_30_bonus10')
+WEEKLY_BONUS_COEF = 0.10
+WEEKLY_TOP, WEEKLY_WEEKS = 0.3, 26
 MOMENTUM_DAYS = 126
 MA_DAYS = 120
 KOSPI_HIGH_DAYS = 252
@@ -72,7 +92,10 @@ FG_HIGH_DAYS, FG_PERCENTILE_DAYS = 252, 252
 FG_FAST_EMA, FG_SLOW_EMA, FG_SIGNAL_EMA = 5, 20, 5
 FG_OVERSOLD_LEVEL = 30.0
 EXPOSURE_STEPS = [0.00, 0.25, 0.50, 0.75, 1.00]
-STRATS = (('v2', 'final_v2'), ('v21', 'final_v2_1'), ('v23', 'final_v2_2'))
+STRATS = (('v25', 'final_v2_5'), ('v26', 'final_v2_6'))     # 원본 화면 비교: 기존 V2.5 · 개선 V2.6(최종)
+V22_TYPES = ('final_v2_2', 'final_v2_5', 'final_v2_6')        # 비추세 −75%p 보정을 쓰는 판
+FG_TYPES = ('final_v2_1', 'final_v2_2', 'final_v2_5', 'final_v2_6')
+CAP_TYPES = ('final_v2_5', 'final_v2_6')
 RECENT_SIGNALS = 12
 
 
@@ -182,7 +205,7 @@ def load_excel(path):
 # ── 계산 (원본 2 ~ 12) ────────────────────────────────────────────────────
 
 def compute(df) -> dict:
-    """df: 날짜 × [업종 …, '코스피']. 원본 V2.3 코드와 같은 순서 · 같은 식으로 계산해 payload를 만든다."""
+    """df: 날짜 × [업종 …, '코스피']. 원본 V2.6 코드와 같은 순서 · 같은 식으로 계산해 payload를 만든다."""
     import numpy as np
     import pandas as pd
 
@@ -210,6 +233,13 @@ def compute(df) -> dict:
     kospi_dd_252 = kospi / kospi_high_252 - 1
     kospi_ma200 = kospi.rolling(KOSPI_TREND_MA_DAYS, min_periods=KOSPI_TREND_MA_DAYS).mean()
     kospi_abs_momentum_6m = kospi / kospi.shift(KOSPI_ABS_MOMENTUM_DAYS) - 1
+    # V2.5 — 60일 연율 변동성과 '과거 3년 평상시(최근 63일 뺌)' 중앙값
+    kospi_vol60_annual = kospi_returns.rolling(V25_VOL_WINDOW, min_periods=V25_VOL_WINDOW).std() * np.sqrt(252)
+    kospi_vol60_3y_median = kospi_vol60_annual.shift(V25_MEDIAN_SKIP_RECENT_DAYS).rolling(
+        V25_MEDIAN_LOOKBACK_DAYS, min_periods=V25_MEDIAN_MIN_HISTORY).median()
+    kospi_vol60_shock_ratio = kospi_vol60_annual / kospi_vol60_3y_median.replace(0, np.nan)
+    kospi_vol60_threshold = kospi_vol60_3y_median * V25_VOL_MEDIAN_MULTIPLIER
+    rs3m = relative_strength / relative_strength.shift(RS3M_DAYS) - 1.0
     month_period = pd.Series(dates.to_period('M'), index=dates)
     month_end_mask = month_period != month_period.shift(-1)
     month_end_dates = dates[month_end_mask.fillna(True).values]
@@ -301,12 +331,48 @@ def compute(df) -> dict:
             regime = 'WEAK_NON_TREND'
         return float(np.clip(adjusted, 0.0, 1.0)), regime
 
+    # V2.4 — 최근 26주 동안 주간 수익률이 업종 상위 30%(올림)에 든 횟수. 그 주 금요일 기준 주봉(신호일이 든 주는 신호일까지)
+    weekly_cache = {}
+
+    def weekly_top30_count(signal_date):
+        if signal_date in weekly_cache:
+            return weekly_cache[signal_date]
+        px = sector_prices.loc[:signal_date]
+        out = pd.Series(dtype=float)
+        if len(px):
+            weekly_close = px.groupby(px.index.to_period('W-FRI')).tail(1)
+            weekly_returns = weekly_close.pct_change(fill_method=None).iloc[1:]
+            ranks = weekly_returns.rank(axis=1, ascending=False, method='min')
+            nvalid = weekly_returns.notna().sum(axis=1)
+            cutoff = np.ceil(nvalid * WEEKLY_TOP)
+            hits = ranks.le(cutoff, axis=0) & weekly_returns.notna()
+            freq = hits.tail(WEEKLY_WEEKS).sum(axis=0).astype(float)
+            enough = weekly_returns.tail(WEEKLY_WEEKS).notna().sum(axis=0) >= WEEKLY_WEEKS
+            out = freq.where(enough)
+        weekly_cache[signal_date] = out
+        return out
+
     def rank_eligible_sectors(signal_date):
         price_now = sector_prices.loc[signal_date]
         ma_now = ma120.loc[signal_date]
         relmom_now = relative_momentum.loc[signal_date]
         eligible = (price_now.notna() & ma_now.notna() & relmom_now.notna() & (price_now > ma_now) & (relmom_now > 0))
-        return relmom_now[eligible].sort_values(ascending=False)
+        ranked = relmom_now[eligible].sort_values(ascending=False)
+        if ranked.empty:
+            return ranked
+        count = weekly_top30_count(signal_date).reindex(ranked.index)
+        score = ranked + WEEKLY_BONUS_COEF * count.fillna(0) / float(WEEKLY_WEEKS)
+        return ranked.loc[score.sort_values(ascending=False).index]      # 값은 6개월 RS 그대로, 순서만 점수 순
+
+    def rerank_3m(signal_date, ranked):
+        """V2.6 — 추세 60 ~ 75%: 3개월 RS 순서(값이 없는 업종은 뒤에 원래 순서대로)."""
+        if ranked.empty:
+            return ranked
+        valid = rs3m.loc[signal_date].reindex(ranked.index).dropna()
+        if len(valid) == 0:
+            return ranked
+        order = valid.sort_values(ascending=False).index
+        return ranked.reindex(order.append(ranked.index.difference(order, sort=False)))
 
     def select_with_buffer(ranked, previous_holdings):
         ranking = {sector: rank for rank, sector in enumerate(ranked.index, start=1)}
@@ -365,8 +431,11 @@ def compute(df) -> dict:
                 continue
             breadth = (price_now[valid_breadth] > ma_now[valid_breadth]).mean()
             ranked = rank_eligible_sectors(signal_date)
-            current_top3_set = set(ranked.head(ENTRY_RANK).index)
+            current_top3_set = set(ranked.head(ENTRY_RANK).index)          # 회복 후보 이력은 3개월 재정렬 전 순위로(원본 순서)
             pool = set().union(*top3_history) if top3_history else set()
+            rs3_applied = strategy_type == 'final_v2_6' and BREADTH_TREND <= breadth < V26_TREND_RS3M_BREADTH_UPPER
+            if rs3_applied:
+                ranked = rerank_3m(signal_date, ranked)
             kospi_dd = kospi_dd_252.loc[signal_date]
             previous_holdings = current_holdings.copy()
             sector_target = pd.Series(0.0, index=sector_cols, dtype=float)
@@ -374,6 +443,8 @@ def compute(df) -> dict:
             top3_average_rs = np.nan
             recovery = []
             fg_boost = False
+            cap = False
+            precap = 0.0
             nt_base = np.nan
             nt_regime = ''
             fg_value = fear_greed_index.loc[signal_date]
@@ -394,7 +465,7 @@ def compute(df) -> dict:
                     top3_average_rs = top3_scores.mean()
                 nt_base = get_non_trend_exposure(top3_average_rs)
                 final_exposure = nt_base
-                if strategy_type == 'final_v2_2':
+                if strategy_type in V22_TYPES:
                     final_exposure, nt_regime = adjust_non_trend_exposure_v22(signal_date, nt_base)
                 current_holdings = select_with_buffer(ranked, previous_holdings)
                 if current_holdings and final_exposure > 0:
@@ -402,7 +473,7 @@ def compute(df) -> dict:
                 else:
                     final_exposure = 0.0
                     current_holdings = []
-                mode = f'NON_TREND_V22_{nt_regime}' if strategy_type == 'final_v2_2' else 'NON_TREND'
+                mode = f'NON_TREND_V22_{nt_regime}' if strategy_type in V22_TYPES else 'NON_TREND'
             elif breadth >= BREADTH_CONTRARIAN:                  # C. 회복
                 recovery = select_recovery_pullbacks(signal_date, ranked, pool)
                 current_holdings = recovery.copy()
@@ -418,10 +489,16 @@ def compute(df) -> dict:
                 current_holdings = []
                 base_kospi_target = get_overlay_exposure(kospi_dd)
                 kospi_target = base_kospi_target
-                if strategy_type in ('final_v2_1', 'final_v2_2'):
+                if strategy_type in FG_TYPES:
                     fg_boost, fg_value, fg_hist_value, previous_fg_hist = get_fg_oversold_rebound_signal(signal_date)
                     if fg_boost:
                         kospi_target = increase_exposure_one_step(base_kospi_target)
+                precap = float(kospi_target)
+                vr = kospi_vol60_shock_ratio.loc[signal_date]
+                cap = bool(strategy_type in CAP_TYPES and pd.notna(kospi_dd) and kospi_dd <= V25_DD_THRESHOLD
+                           and pd.notna(vr) and np.isfinite(vr) and vr >= V25_VOL_MEDIAN_MULTIPLIER and precap > 0)
+                if cap:                                          # V2.5 — 변동성 충격이면 코스피 비중 절반
+                    kospi_target = float(precap * V25_POSITION_MULTIPLIER)
                 final_exposure = kospi_target
                 if kospi_target > 0:
                     mode = 'CONTRARIAN_KOSPI_FG_BOOST' if kospi_target > base_kospi_target else 'CONTRARIAN_KOSPI'
@@ -437,6 +514,8 @@ def compute(df) -> dict:
                 'base': base_kospi_target, 'exp': final_exposure, 'cash': max(0.0, 1.0 - final_exposure),
                 'fg': fg_value, 'osc': fg_osc_value, 'sig': fg_signal_value, 'hist': fg_hist_value, 'prev_hist': previous_fg_hist,
                 'boost': bool(fg_boost), 'top3_rs': top3_average_rs, 'nt_base': nt_base, 'nt_regime': nt_regime,
+                'rs3': bool(rs3_applied), 'precap': precap, 'cap': cap, 'vol': kospi_vol60_annual.loc[signal_date],
+                'vol_med': kospi_vol60_3y_median.loc[signal_date], 'vol_ratio': kospi_vol60_shock_ratio.loc[signal_date],
                 'ma200': kospi_ma200.loc[signal_date], 'mom6': kospi_abs_momentum_6m.loc[signal_date],
                 'prev': list(previous_holdings), 'hold': ['KOSPI'] if kospi_target > 0 else list(current_holdings),
                 'rec': list(recovery), 'pool': sorted(pool), 'top3': list(ranked.head(ENTRY_RANK).index),
@@ -529,53 +608,84 @@ def compute(df) -> dict:
         'mult': kospi_equity.iloc[-1], 'turnover': 0.0, 'rebal': 0,
     }
 
-    # 10. 연도별 수익률
-    def yearly(curve, start):
+    # 10. 비교 — 원본: 두 전략 중 늦게 시작한 날(COMPARISON_START)부터, 그 전날 값 = 기준
+    cmp_start = max(res[k]['live_start'] for k, _ in STRATS)
+
+    def strategy_metrics(curve):
+        """원본 strategy_metrics — 연수익 · 전체 MDD는 비교 시작일부터, 2018~2025 연수익, 2026 연초 이후 수익 · MDD, 누적 배수."""
+        c = curve.loc[cmp_start:]
+        pos = curve.index.get_loc(cmp_start)
+        anchor = curve.iloc[pos - 1] if pos > 0 else c.iloc[0]
+        span = (c.index[-1] - c.index[0]).days / 365.25
+        out = {'cagr': (c.iloc[-1] / c.iloc[0]) ** (1 / span) - 1 if span > 0 else np.nan,
+               'mdd_all': (c / c.cummax() - 1).min(), 'mult_cmp': c.iloc[-1] / anchor}
+        cur, prev = curve.loc['2026-01-01':], curve.loc[:'2025-12-31']
+        if len(cur) and len(prev):
+            out['ytd'] = cur.iloc[-1] / prev.iloc[-1] - 1
+            path = pd.concat([pd.Series([prev.iloc[-1]], index=[prev.index[-1]]), cur])
+            out['ytd_mdd'] = (cur / path.cummax().loc[cur.index] - 1).min()
+        older = c.loc[:'2025-12-31']
+        yrs = (older.index[-1] - older.index[0]).days / 365.25 if len(older) >= 2 else 0
+        out['cagr_old'] = (older.iloc[-1] / older.iloc[0]) ** (1 / yrs) - 1 if yrs > 0 else np.nan
+        return out
+
+    cmp_metrics = {k: strategy_metrics(res[k]['equity']) for k, _ in STRATS}
+    cmp_metrics['kospi'] = strategy_metrics(kospi_equity)
+
+    # 연도별 수익률(원본 yearly_return_table — 비교 시작 연도부터, 첫해는 그 해 첫날 전날 대비)
+    def yearly(curve):
         out = {}
-        part = curve.loc[start:]
-        for y in sorted(part.index.year.unique()):
-            yc = part[part.index.year == y]
+        for y in sorted(curve.index.year.unique()):
+            if y < cmp_start.year:
+                continue
+            yc = curve[curve.index.year == y]
             if len(yc) == 0:
                 continue
             loc = curve.index.get_loc(yc.index[0])
             sv = curve.iloc[loc - 1] if loc > 0 else yc.iloc[0]
             out[int(y)] = yc.iloc[-1] / sv - 1
         return out
-    cmp_start = min(res['v2']['live_start'], res['v21']['live_start'])
-    yr = {k: yearly(res[k]['equity'], res[k]['live_start']) for k, _ in STRATS}
-    yr['kospi'] = yearly(kospi_equity, cmp_start)
+    yr = {k: yearly(res[k]['equity']) for k, _ in STRATS}
+    yr['kospi'] = yearly(kospi_equity)
     years = sorted(set().union(*[set(v) for v in yr.values()]))
 
-    # 11. F&G 과매도 확대 발동 이력(V2.1)
-    boost = [r for r in res['v21']['rows'] if r['mode'] == 'CONTRARIAN_KOSPI_FG_BOOST']
+    # 11. 최종 V2.6 신호에서 F&G 과매도 확대 · 고변동성 절반 제한이 걸린 달
+    rows26 = res['v26']['rows']
+    boost = [r for r in rows26 if r['boost']]
+    caps = [r for r in rows26 if r['cap']]
 
-    # 12-1. 이번 달 확정 / 다음 달 예상(V2.3)
-    rows23 = res['v23']['rows']
+    # 12-1. 이번 달 확정 / 다음 달 예상(V2.6)
     latest = dates[-1]
-    conf = [r for r in rows23 if r['ed'] is not None and r['ed'] <= latest]
-    confirmed = sorted(conf, key=lambda r: (r['ed'], r['sd']))[-1] if conf else rows23[-1]
-    prev_c = [r for r in rows23 if r['ed'] is None and r['sd'] <= latest]
-    preview = prev_c[-1] if prev_c else rows23[-1]
+    conf = [r for r in rows26 if r['ed'] is not None and r['ed'] <= latest]
+    confirmed = sorted(conf, key=lambda r: (r['ed'], r['sd']))[-1] if conf else rows26[-1]
+    prev_c = [r for r in rows26 if r['ed'] is None and r['sd'] <= latest]
+    preview = prev_c[-1] if prev_c else rows26[-1]
 
-    # 13. 그림 — V2와 V2.1 중 늦게 시작한 날부터(원본과 같음), 그날 = 1
-    graph_start = max(res['v2']['live_start'], res['v21']['live_start'])
+    # 13. 그림 — 비교 시작일부터(원본과 같음), 그날 = 1
+    graph_start = cmp_start
     def norm(curve):
         c = curve.loc[graph_start:]
         return c / c.iloc[0]
     curves = {k: norm(res[k]['equity']) for k, _ in STRATS}
     curves['kospi'] = norm(kospi_equity)
-    gdates = curves['v23'].index
+    gdates = curves['v26'].index
 
-    # 지금 업종 현황(원본 화면엔 없음 — Breadth · 상위 업종이 왜 그렇게 나왔는지 보이려고)
+    # 지금 업종 현황(원본 화면엔 없음 — Breadth · 상위 업종이 왜 그렇게 나왔는지 보이려고). 순위는 V2.6이 오늘 쓰는 순서
     last = dates[-1]
     ranked_now = rank_eligible_sectors(last)
+    if preview.get('rs3'):
+        ranked_now = rerank_3m(last, ranked_now)
     rank_map = {s: i for i, s in enumerate(ranked_now.index, start=1)}
+    wk_now = weekly_top30_count(last)
     now = []
     for s in sector_cols:
         p, m = sector_prices.loc[last, s], ma120.loc[last, s]
+        rs6, wk = relative_momentum.loc[last, s], wk_now.get(s, np.nan)
         now.append({'n': s, 'code': dict((n, c) for c, n in SECTORS).get(s), 'close': _num(p, 2),
                     'ma_gap': _num((p / m - 1) if pd.notna(p) and pd.notna(m) and m else None, 4),
-                    'rs': _num(relative_momentum.loc[last, s], 4), 'dd20': _num(sector_dd_20.loc[last, s], 4),
+                    'rs': _num(rs6, 4), 'rs3': _num(rs3m.loc[last, s], 4), 'wk': None if pd.isna(wk) else int(wk),
+                    'score': _num(rs6 + WEEKLY_BONUS_COEF * (0 if pd.isna(wk) else wk) / WEEKLY_WEEKS if pd.notna(rs6) else None, 4),
+                    'dd20': _num(sector_dd_20.loc[last, s], 4),
                     'r1m': _num(sector_prices[s].iloc[-1] / sector_prices[s].iloc[-22] - 1 if len(dates) > 22 else None, 4),
                     'elig': s in rank_map, 'rank': rank_map.get(s)})
 
@@ -588,29 +698,41 @@ def compute(df) -> dict:
             'top3_rs': _num(r['top3_rs'], 4), 'nt_base': _num(r['nt_base'], 2), 'nt_regime': r['nt_regime'],
             'ma200': _num(r['ma200'], 2), 'mom6': _num(r['mom6'], 4), 'prev': r['prev'], 'hold': r['hold'], 'rec': r['rec'],
             'pool': r['pool'], 'top3': r['top3'], 'top5': r['top5'], 'top5_rs': [_num(v, 4) for v in r['top5_rs']],
+            'rs3': r['rs3'], 'precap': _num(r['precap'], 2), 'cap': r['cap'], 'vol': _num(r['vol'], 4),
+            'vol_med': _num(r['vol_med'], 4), 'vol_ratio': _num(r['vol_ratio'], 3),
         }
 
-    def perf(p):
+    def perf(p, m):
         return {'data_start': p['data_start'].date().isoformat(), 'live_start': p['live_start'].date().isoformat(),
                 'data_cagr': _num(p['data_cagr'], 4), 'live_cagr': _num(p['live_cagr'], 4), 'mdd': _num(p['mdd'], 4),
                 'sharpe': _num(p['sharpe'], 3), 'sortino': _num(p['sortino'], 3), 'vol': _num(p['vol'], 4), 'win': _num(p['win'], 4),
-                'mult': _num(p['mult'], 4), 'turnover': _num(p['turnover'], 2), 'rebal': int(p['rebal'])}
+                'mult': _num(p['mult'], 4), 'turnover': _num(p['turnover'], 2), 'rebal': int(p['rebal']),
+                # 원본 비교표(같은 시작일)
+                'cagr': _num(m.get('cagr'), 4), 'mdd_all': _num(m.get('mdd_all'), 4), 'cagr_old': _num(m.get('cagr_old'), 4),
+                'ytd': _num(m.get('ytd'), 4), 'ytd_mdd': _num(m.get('ytd_mdd'), 4), 'mult_cmp': _num(m.get('mult_cmp'), 4)}
 
+    gd_vol = kospi_vol60_annual.reindex(gdates)
     return {
-        'asof': last.date().isoformat(), 'start': dates[0].date().isoformat(), 'n': len(sector_cols),
+        'asof': last.date().isoformat(), 'start': dates[0].date().isoformat(), 'n': len(sector_cols), 'version': VERSION,
         'sectors': [{'c': c, 'n': n} for c, n in SECTORS if n in sector_cols], 'src': 'wiseindex',
         'confirmed': sig(confirmed), 'preview': sig(preview),
-        'signals': [sig(r) for r in rows23[-RECENT_SIGNALS:]],
-        'perf': {**{k: perf(res[k]['perf']) for k, _ in STRATS}, 'kospi': perf(kospi_perf)},
-        'yearly': {'years': years, **{k: [_num(yr[k].get(y), 4) for y in years] for k in ('v2', 'v21', 'v23', 'kospi')}},
-        'boost': [sig(r) for r in boost],
+        'signals': [sig(r) for r in rows26[-RECENT_SIGNALS:]],
+        'cmp_start': cmp_start.date().isoformat(),
+        'perf': {**{k: perf(res[k]['perf'], cmp_metrics[k]) for k, _ in STRATS}, 'kospi': perf(kospi_perf, cmp_metrics['kospi'])},
+        'yearly': {'years': years, **{k: [_num(yr[k].get(y), 4) for y in years] for k in ('v25', 'v26', 'kospi')}},
+        'boost': [sig(r) for r in boost], 'caps': [sig(r) for r in caps],
         'graph_start': graph_start.date().isoformat(),
         'curve': {'dates': [d.date().isoformat() for d in gdates], **{k: [_num(v, 4) for v in curves[k].reindex(gdates)] for k in curves}},
         'fg': {'v': [_num(v, 2) for v in fear_greed_index.reindex(gdates)], 'hist': [_num(v, 3) for v in fg_histogram.reindex(gdates)]},
+        'vol': {'v': [_num(v * 100, 2) if pd.notna(v) else None for v in gd_vol],
+                'th': [_num(v * 100, 2) if pd.notna(v) else None for v in kospi_vol60_threshold.reindex(gdates)]},
         'now': sorted(now, key=lambda x: (x['rank'] is None, x['rank'] or 0, -(x['rs'] if x['rs'] is not None else -9))),
         'kospi_now': {'close': _num(kospi.iloc[-1], 2), 'dd': _num(kospi_dd_252.iloc[-1], 4), 'ma200': _num(kospi_ma200.iloc[-1], 2),
                       'mom6': _num(kospi_abs_momentum_6m.iloc[-1], 4), 'fg': _num(fear_greed_index.iloc[-1], 2),
-                      'hist': _num(fg_histogram.iloc[-1], 4)},
+                      'hist': _num(fg_histogram.iloc[-1], 4), 'vol': _num(kospi_vol60_annual.iloc[-1], 4),
+                      'vol_med': _num(kospi_vol60_3y_median.iloc[-1], 4), 'vol_ratio': _num(kospi_vol60_shock_ratio.iloc[-1], 3)},
+        'rule': {'w_coef': WEEKLY_BONUS_COEF, 'w_top': WEEKLY_TOP, 'w_weeks': WEEKLY_WEEKS, 'rs3_upper': V26_TREND_RS3M_BREADTH_UPPER,
+                 'cap_dd': V25_DD_THRESHOLD, 'cap_mult': V25_VOL_MEDIAN_MULTIPLIER, 'cap_pos': V25_POSITION_MULTIPLIER},
     }
 
 
@@ -628,7 +750,7 @@ def run(dry: bool = False, excel: str = None) -> dict:
         sb.table(TABLE).delete().eq('kind', KIND).lt('base_date', cutoff).execute()
     c, v = p['confirmed'], p['preview']
     log.info(f"[국내월간] {'dry-run ' if dry else ''}{p['asof']} 업종 {p['n']} · 확정 {c['sd']} {c['mode']} {c['exp']} {','.join(c['hold']) or '-'}"
-             f" · 예상 {v['mode']} {v['exp']} {','.join(v['hold']) or '-'} · Breadth {v['breadth']} · V2.3 {p['perf']['v23']['mult']}배")
+             f" · 예상 {v['mode']} {v['exp']} {','.join(v['hold']) or '-'} · Breadth {v['breadth']} · {VERSION} {p['perf']['v26']['mult_cmp']}배")
     return {'date': p['asof'], 'payload': p}
 
 

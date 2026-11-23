@@ -262,7 +262,7 @@ def run_scheduler():
     schedule.every().day.at("08:40").do(_threaded(job_us_52w))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
     schedule.every().day.at("16:50").do(_threaded(job_kr_etf_rs))  # 한국 업종 ETF 38 + 대형주 4 상대강도·시장 폭·52주 전략(약 15초) — 장 마감 뒤
     schedule.every().day.at("19:20").do(_threaded(job_kr_etf_rs))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
-    schedule.every().day.at("20:50").do(_threaded(job_kr_monthly))  # 국내 월 리밸런싱 V2.3(WICS 업종지수 26 · 코스피, 약 20초) — wiseindex가 저녁에 그날 값을 올린 뒤
+    schedule.every().day.at("20:50").do(_threaded(job_kr_monthly))  # 국내 월 리밸런싱 V2.6(WICS 업종지수 26 · 코스피, 약 20초) — wiseindex가 저녁에 그날 값을 올린 뒤
     schedule.every().day.at("07:50").do(_threaded(job_kr_monthly))  # 한 번 더 — 전날 값이 늦게 올라온 날 (같은 기준일은 덮어씀)
     schedule.every().day.at("07:45").do(_threaded(job_us_monthly))  # 미국 월 리밸런싱 V8.2 개선 2조건(ETF 52개, 약 15초) — 미국 마감 뒤
     schedule.every().day.at("08:50").do(_threaded(job_us_monthly))  # 한 번 더 — 야후 값이 늦게 굳은 날 (같은 기준일은 덮어씀)
