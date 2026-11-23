@@ -1317,6 +1317,26 @@ def job_us_monthly():
 
 
 @_job()
+def job_us_inverse():
+    """매일 07:35 · 08:45 — 미국 인버스 혼용 전략(QQQ · TIP 월봉 6개월선 → 상승 QQQ · QLD · SOXX / 하락 SPMO · PSQ)
+    → market_snapshot(kind='us_inverse').
+
+    야후 수정 종가 6개(2020-12-02~)로 월말 신호 · 다음 달 고정 비중 백테스트, 이번 달 확정 · 다음 달 임시 포지션을 계산한다(약 5초).
+    한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다."""
+    try:
+        logging.info("🔻 [미국인버스] collect_us_inverse 실행 시작")
+        import collect_us_inverse
+        r = collect_us_inverse.run()
+        p = r.get('payload') or {}
+        nxt = (p.get('preview') or p.get('confirmed') or {}).get('w') or {}
+        logging.info(f"=== [미국인버스] 완료: {r.get('date')} 다음 달 "
+                     f"{' / '.join(f'{a} {v * 100:.0f}%' for a, v in nxt.items() if v)} ===")
+    except Exception as e:
+        logging.error(f"❌ [미국인버스] 오류: {e}")
+        mark_failed(e)
+
+
+@_job()
 def job_ai_hw():
     """매일 07:00 · 08:20 — AI 하드웨어 41종목 Breadth · 피크아웃 점검(Yahoo 수정 종가 3년) → market_snapshot(kind='ai_hw').
 
@@ -1632,6 +1652,7 @@ _RETRYABLE_JOBS = {
     'job_kr_etf_rs':                job_kr_etf_rs,
     'job_kr_monthly':               job_kr_monthly,
     'job_us_monthly':               job_us_monthly,
+    'job_us_inverse':               job_us_inverse,
     'job_market_summary':           job_market_summary,
     'job_collect_us_etf':           job_collect_us_etf,
     'job_collect_analyst_opinions': job_collect_analyst_opinions,
