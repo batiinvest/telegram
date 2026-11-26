@@ -5,6 +5,7 @@ dart_parser.py(파사드)에서 분리한 문서 계층:
   API 조회(list/majorstock) · 원문 fetch 3단 폴백(document.xml → zip.do →
   뷰어 스크래핑+UTF-8 손상 복구) · _build_kv 테이블 파싱 · _get/_trunc
   공용 유틸 · parse_all_fields 범용 파서
+  원문 크기 상한(_MAX_DOC_BYTES): 이보다 큰 문서는 받는 즉시 버리고 해석하지 않는다(상세 생략, 제목만 발송).
 """
 import re
 import logging
@@ -14,6 +15,23 @@ from managers import global_session as _session
 log = logging.getLogger(__name__)
 
 _DART_API_BASE = 'https://opendart.fss.or.kr/api'
+
+# 원문 크기 상한 — 압축을 푼 본문 기준. 이보다 크면 해석하지 않는다.
+#   BeautifulSoup은 문서 크기의 20배 넘게 메모리를 쓴다. SK이노베이션 합병 증권신고서(본문 25MB · 표 8,026개)는
+#   +561MB · 29초(11-26 실측)가 들었다. 공시봇이 이걸 통째로 해석하다 e2-micro(958MB)가 스왑에 갇혀,
+#   11-25 · 26 봇 전체가 몇 시간씩 멈췄다(그동안 공시 알림 0건).
+#   보통 공시는 1MB 미만이다(합병결정 주요사항보고서 0.08MB). 증권신고서 · 투자설명서 같은 수십 MB 문서만 걸린다.
+_MAX_DOC_BYTES = 5 * 1024 * 1024
+
+
+class _DocTooLarge(Exception):
+    """원문이 _MAX_DOC_BYTES보다 크다 — 해석하지 않고, 다른 경로로 같은 문서를 다시 받지도 않는다."""
+
+
+def _check_doc_size(size: int, rcept_no: str, where: str) -> None:
+    if size > _MAX_DOC_BYTES:
+        log.info(f'[DART 파서] 원문 {size / 1e6:.1f}MB > {_MAX_DOC_BYTES / 1e6:.1f}MB — 해석 생략({where}, {rcept_no})')
+        raise _DocTooLarge(rcept_no)
 
 # 원문 줄바꿈(<br>·</p>) 표지 — 정규식 \s·str.strip/split()에선 공백으로 취급돼 기존 매칭은 그대로,
 # 공백 접기(re.sub(r'\s+', ' '))를 거친 값에선 사라짐(=예전과 동일). 살아남은 표지는 최종 렌더
@@ -161,6 +179,7 @@ def _fetch_zip_original(rcept_no: str) -> str | None:
         if not names:
             return None
         name = max(names, key=lambda n: z.getinfo(n).file_size)
+        _check_doc_size(z.getinfo(name).file_size, rcept_no, 'zip.do')   # 풀기 전에 크기부터
         raw = z.read(name)
         if len(raw) < 100:
             return None
@@ -174,6 +193,8 @@ def _fetch_zip_original(rcept_no: str) -> str | None:
             except (UnicodeDecodeError, LookupError):
                 continue
         return None
+    except _DocTooLarge:
+        raise
     except Exception as e:
         log.debug(f'[DART 파서] zip.do 원본 실패 ({rcept_no}): {e}')
         return None
@@ -324,17 +345,26 @@ def _fetch_html(rcept_no: str) -> str | None:
             if api_resp.status_code == 200:
                 try:
                     z = zipfile.ZipFile(_io.BytesIO(api_resp.content))
-                    xml_bytes = z.read(z.namelist()[0])
+                    first = z.infolist()[0]
+                    _check_doc_size(first.file_size, rcept_no, 'document.xml')   # 풀기 전에 크기부터
+                    xml_bytes = z.read(first)
                     decoded = xml_bytes.decode('utf-8', errors='replace')
                     log.debug(f'[DART 파서] document.xml API 사용 ({rcept_no})')
                     return decoded
+                except _DocTooLarge:
+                    raise
                 except Exception as e:
                     log.debug(f'[DART 파서] document.xml zip 실패 ({rcept_no}): {e}')
+    except _DocTooLarge:
+        return None
     except Exception as e:
         log.debug(f'[DART 파서] document.xml API 접근 실패: {e}')
 
     # ── 1.5순위: 웹사이트 원본파일 다운로드 (당일 공시 대응) ────────────────
-    zip_text = _fetch_zip_original(rcept_no)
+    try:
+        zip_text = _fetch_zip_original(rcept_no)
+    except _DocTooLarge:
+        return None
     if zip_text:
         log.debug(f'[DART 파서] zip.do 원본파일 사용 ({rcept_no})')
         return zip_text
@@ -366,6 +396,9 @@ def _fetch_html(rcept_no: str) -> str | None:
             return None
 
         raw = doc.content
+        if len(raw) > _MAX_DOC_BYTES:
+            log.info(f'[DART 파서] 원문 {len(raw) / 1e6:.1f}MB > {_MAX_DOC_BYTES / 1e6:.1f}MB — 해석 생략(viewer, {rcept_no})')
+            return None
         enc = _detect_encoding(raw, doc.headers)
         is_xml_utf8 = (enc.lower().replace('-', '').replace('_', '') == 'utf8'
                        and raw[:6] in (b'<?xml ', b'<?XML '))
