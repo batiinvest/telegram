@@ -880,9 +880,10 @@ def _alert_new_high(rows: list):
         logging.info(f"🏆 [신고가 알림] 메인방 {len(rows)}개 / {len(ordered)}섹터 발송")
 
 
-@_job("collect_us_etf")
+@_job("collect_us_etf", us_holiday=True)
 def job_collect_us_etf():
-    """미국 산업별 ETF 수집 → us_market 테이블"""
+    """미국 산업별 ETF 수집 → us_market 테이블 (06:35 · 16:20, 봉 날짜로 저장 — 최근 10일 다시 씀).
+    미국 휴장일(평일)엔 건너뛴다 — 휴장일 봉이 없어 다시 받아도 같은 줄뿐이다."""
     logging.info("=== US ETF 수집 시작 ===")
     try:
         import collect_us_etf
@@ -1184,11 +1185,12 @@ def job_sio():
         mark_failed(e)
 
 
-@_job()
+@_job(us_holiday=True)
 def job_us_index():
     """매일 06:50 · 08:10 — 미국 지수·ETF 종가(yfinance) → us_index_daily (미국 위험신호 · 미국 피어앤그리드 원재료).
 
-    한국 휴장일에도 돈다(미국 장은 열린다). 저장값과 다른 날만 써서 주말·미국 휴장일엔 쓰는 줄이 없다."""
+    한국 휴장일에도 돈다(미국 장은 열린다). 미국 휴장일(평일)엔 건너뛴다 — 예전엔 ^VIX 연장 거래 봉 때문에
+    '종가가 비었습니다'로 실패했다(2026-11-27). 저장값과 다른 날만 써서 주말엔 쓰는 줄이 없다."""
     try:
         logging.info("🗽 [미국지수] collect_us_index 실행 시작")
         import collect_us_index
@@ -1231,12 +1233,13 @@ def job_jp_tw():
         mark_failed(e)
 
 
-@_job()
+@_job(us_holiday=True)
 def job_us_52w():
     """매일 07:30 · 08:40 — 미국 52주 신고가 전략(원본 v11.63 개선 52W + 성장 ETF + MA40 2일) → market_snapshot(kind='us_52w').
 
     SPY·QQQ·업종 ETF 57개 수정 종가(2018-12-07~, 2000거래일)로 옛 52W FIXED · Rotation_B와 개선 전략 백테스트,
-    다음 거래일 목표 비중을 계산한다(약 25초). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓴다."""
+    다음 거래일 목표 비중을 계산한다(약 25초). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓴다.
+    미국 휴장일(평일)엔 건너뛴다 — 새 봉이 없어 전 거래일 줄을 같은 값으로 다시 쓸 뿐이다."""
     try:
         logging.info("🏁 [미국52주] collect_us_52w 실행 시작")
         import collect_us_52w
@@ -1247,12 +1250,13 @@ def job_us_52w():
         mark_failed(e)
 
 
-@_job()
+@_job(us_holiday=True)
 def job_us_etf_rs():
     """매일 07:20 · 08:30 — 미국 업종 ETF 99개 상대강도 · 소르티노 점검(Yahoo 수정 종가 3년) → market_snapshot(kind='us_etf').
 
     SPY 대비 Mansfield RS, 변동성 조정 모멘텀 · 소르티노 최근 10거래일 상위 20, 30일 이격도 과열 점검, 이동평균 정배열.
-    한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다."""
+    한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다.
+    미국 휴장일(평일)엔 건너뛴다 — 새 봉이 없어 전 거래일 줄을 같은 값으로 다시 쓸 뿐이다(약 2분 절약)."""
     try:
         logging.info("📊 [미국ETF] collect_us_etf_rs 실행 시작")
         import collect_us_etf_rs
@@ -1298,13 +1302,14 @@ def job_kr_monthly():
         mark_failed(e)
 
 
-@_job()
+@_job(us_holiday=True)
 def job_us_monthly():
     """매일 07:45 · 08:50 — 미국 월 리밸런싱 V8.2 · 개선 2조건(ETF 52개 Breadth · QQQ/SPY 상대강도 · 업종 모멘텀 · 금속)
     → market_snapshot(kind='us_monthly').
 
     야후 수정 종가 52개(2018-12-07~)로 원본 신호 · 다음 거래일 종가 체결 백테스트 · 전체 기간 SPY · QQQ 비교와
-    이번 달 확정 · 다음 달 예상 포지션을 계산한다(약 15초). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다."""
+    이번 달 확정 · 다음 달 예상 포지션을 계산한다(약 15초). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다.
+    미국 휴장일(평일)엔 건너뛴다 — 확정 · 예상도 가격 날짜로만 정해져 새 봉이 없으면 결과가 같다."""
     try:
         logging.info("🗽 [미국월간] collect_us_monthly 실행 시작")
         import collect_us_monthly
@@ -1322,7 +1327,9 @@ def job_us_inverse():
     → market_snapshot(kind='us_inverse').
 
     야후 수정 종가 6개(2020-12-02~)로 월말 신호 · 다음 달 고정 비중 백테스트, 이번 달 확정 · 다음 달 임시 포지션을 계산한다(약 5초).
-    한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다."""
+    한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다.
+    미국 휴장일에도 일부러 돈다(us_holiday 가드 없음) — 확정 · 임시를 '지금 뉴욕 달'로 가르므로, 1/1처럼 새 달 첫날이
+    휴장이면 그날 실행이 전달 신호를 확정으로 바꾼다. 기준일은 전 거래일 그대로라 휴장일 줄은 생기지 않는다."""
     try:
         logging.info("🔻 [미국인버스] collect_us_inverse 실행 시작")
         import collect_us_inverse
@@ -1340,7 +1347,9 @@ def job_us_inverse():
 def job_ai_hw():
     """매일 07:00 · 08:20 — AI 하드웨어 41종목 Breadth · 피크아웃 점검(Yahoo 수정 종가 3년) → market_snapshot(kind='ai_hw').
 
-    미국 장 마감 뒤 계산한다(미국 26 · 한국 3 · 일본 8 · 대만/ADR 4). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다."""
+    미국 장 마감 뒤 계산한다(미국 26 · 한국 3 · 일본 8 · 대만/ADR 4). 한국 휴장일에도 돈다. 같은 기준일은 덮어쓰고 지난 줄은 10일만 남긴다.
+    미국 휴장일에도 돈다(us_holiday 가드 없음) — 원본은 네 나라 날짜를 합쳐 앞 값으로 메우므로(ffill 5), 한국 · 일본이 연
+    미국 휴장일(2026-11-26)도 기준일이 된다. 그날 줄은 한국 · 일본 11종목만 새 값이고 미국 상장 30종목은 전 거래일 값이다."""
     try:
         logging.info("🧠 [AI하드웨어] collect_ai_hw 실행 시작")
         import collect_ai_hw

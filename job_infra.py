@@ -15,6 +15,7 @@ import functools
 import stock_api
 import job_state
 import mem_release
+import us_calendar
 from managers import market_timer
 from logger_config import mask_secrets
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
@@ -132,7 +133,7 @@ _FAIL_ALERTED: set = set() # (date, fn 이름) — 동일 잡 실패 알림 하�
 # 스레드 로컬 — _threaded 잡이 병렬 실행돼도 서로 섞이지 않는다.
 _JOB_LOCAL = threading.local()
 
-_JOB_GUARDS: dict = {}     # fn 이름 → {'key','holiday','weekday_only'} (데코레이션 시점 등록)
+_JOB_GUARDS: dict = {}     # fn 이름 → {'key','holiday','weekday_only','us_holiday'} (데코레이션 시점 등록)
 _EXPECTED_JOBS: dict = {}  # fn 이름 → {'at':'HH:MM','day':'every'|'saturday'|...}
 
 
@@ -227,6 +228,10 @@ def get_missing_jobs(ran) -> tuple:
         holiday = market_timer.is_kr_holiday()
     except Exception:
         holiday = False
+    try:
+        us_off = us_calendar.holiday_session() is not None   # 19:25 · 19:50도 '뉴욕 전날'을 본다 — 아침 가드와 같은 날
+    except Exception:
+        us_off = False
     _running, _waiting = job_state.active()
     in_progress = set(_running) | set(_waiting)
     missing, disabled = [], []
@@ -241,6 +246,8 @@ def get_missing_jobs(ran) -> tuple:
         if g.get('weekday_only') and is_weekend:
             continue
         if g.get('holiday') and holiday:
+            continue
+        if g.get('us_holiday') and us_off:
             continue
         k = g.get('key')
         if k and not _is_enabled(k):
@@ -304,7 +311,7 @@ def _notify_job_failure(fn_name: str, error):
         pass
 
 
-def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
+def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False, us_holiday: bool = False):
     """Job 함수 데코레이터: 휴장일/평일 체크 + DB 활성화 체크 + 결과 기록/실패 알림.
 
     Args:
@@ -313,10 +320,14 @@ def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
         weekday_only: True면 주말만 스킵 — **공휴일은 통과한다**.
                       한국 거래일에만 의미가 있는 잡이라면 holiday를 써야 한다.
                       (2026-09-25 추석에 수급·신고가·투자의견 잡이 이 차이로 돌았다)
+        us_holiday:   True면 방금 끝났어야 할 뉴욕 세션이 평일 NYSE 휴장일인 날 스킵(us_calendar) —
+                      한국 아침 · 저녁 모두 '뉴욕 전날'을 본다(11-27 아침 · 저녁 → 11-26 추수감사절).
+                      주말은 통과한다(지금처럼 금요일 값을 다시 계산 — 같은 기준일 덮어씀).
+                      미국 장 값만 쓰고, 휴장일에 다시 돌아도 얻는 게 없는 잡에만 쓴다.
     """
     def decorator(fn):
         _JOB_GUARDS[fn.__name__] = {
-            'key': key, 'holiday': holiday, 'weekday_only': weekday_only,
+            'key': key, 'holiday': holiday, 'weekday_only': weekday_only, 'us_holiday': us_holiday,
         }
 
         @functools.wraps(fn)
@@ -328,6 +339,12 @@ def _job(key: str = None, *, holiday: bool = False, weekday_only: bool = False):
             if holiday and market_timer.is_kr_holiday():
                 job_state.skipped(fn.__name__)
                 return
+            if us_holiday:
+                off = us_calendar.holiday_session()
+                if off:
+                    logging.info(f"⏸ [{fn.__name__}] 미국 휴장({off.isoformat()}) — 건너뜀")
+                    job_state.skipped(fn.__name__)
+                    return
             if key is not None and not _is_enabled(key):
                 logging.info(f"⏸ [{key}] 비활성화 (DB 설정)")
                 job_state.skipped(fn.__name__)

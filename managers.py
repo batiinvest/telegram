@@ -655,40 +655,20 @@ class MarketTimeManager:
         if hasattr(self, cache_key) and getattr(self, cache_key, {}).get('date') == today_str:
             return getattr(self, cache_key)['is_holiday']
 
-        US_HOLIDAYS = {
-            # 2025 NYSE 휴장일
-            '20250101',  # New Year's Day
-            '20250120',  # MLK Day
-            '20250217',  # Presidents' Day
-            '20250418',  # Good Friday
-            '20250526',  # Memorial Day
-            '20250619',  # Juneteenth
-            '20250704',  # Independence Day
-            '20250901',  # Labor Day
-            '20251127',  # Thanksgiving
-            '20251225',  # Christmas
-            # 2026 NYSE 휴장일
-            '20260101',  # New Year's Day
-            '20260119',  # MLK Day
-            '20260216',  # Presidents' Day
-            '20260403',  # Good Friday
-            '20260525',  # Memorial Day
-            '20260619',  # Juneteenth
-            '20260703',  # Independence Day (Friday observe)
-            '20260907',  # Labor Day
-            '20261126',  # Thanksgiving
-            '20261225',  # Christmas
-        }
+        # NYSE 휴장일은 us_calendar 규칙으로 계산한다 — 예전 고정 목록은 2026년까지만 있었다
+        # (2025 · 2026 목록과 같음 — tests/test_us_calendar.py).
+        import us_calendar
         # KST 기준 오늘(월~금)의 "미국 전날" 체크:
         # KST 월요일 아침 → 미국 금요일이 마지막 장. 금요일 날짜 = KST 오늘 - 3일
         # KST 화~금 아침 → 미국 전날 = KST 어제
         from datetime import timedelta as _td
         if now.weekday() == 0:  # KST 월요일 → 미국 금요일 체크
-            us_prev_date = (now - _td(days=3)).strftime('%Y%m%d')
+            us_prev = (now - _td(days=3)).date()
         else:
-            us_prev_date = (now - _td(days=1)).strftime('%Y%m%d')
+            us_prev = (now - _td(days=1)).date()
+        us_prev_date = us_prev.strftime('%Y%m%d')
 
-        is_holiday = us_prev_date in US_HOLIDAYS
+        is_holiday = us_calendar.is_holiday(us_prev)
         setattr(self, cache_key, {'date': today_str, 'is_holiday': is_holiday})
         if is_holiday:
             logging.info(f"[미국휴장] 미국 전날({us_prev_date}) 휴장 → 글로벌 시황 브리핑 생략")
