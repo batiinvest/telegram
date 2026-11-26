@@ -7,6 +7,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from managers import market_timer, HistoryManager
 from format_utils import fmt_change_pct
+from logger_config import mask_secrets   # 관리자 방에 직접 띄우는 오류 문구용(요청 URL의 /bot<토큰>/ 등)
 # ✅ 통합 API 모듈 및 설정
 import stock_api  
 from config import (
@@ -687,7 +688,7 @@ class KisMyStockScanner:
             except Exception as e:
                 logging.error(f"[PRO approve] 오류: {e}")
                 answer("❌ 오류 발생", alert=True)
-                edit(f"❌ <b>[승인 오류]</b>\n<code>{e}</code>")
+                edit(f"❌ <b>[승인 오류]</b>\n<code>{mask_secrets(e)}</code>")
 
         elif action == 'reject':
             try:
@@ -826,7 +827,7 @@ class KisMyStockScanner:
         except Exception as e:
             logging.error(f"[ROOM callback] 오류: {e}")
             answer("❌ 오류 발생", alert=True)
-            edit(f"❌ <b>[입장 처리 오류]</b>\n<code>{e}</code>")
+            edit(f"❌ <b>[입장 처리 오류]</b>\n<code>{mask_secrets(e)}</code>")
 
     def _handle_group_ban(self, message, cmd):
         """그룹에서 관리자가 메시지에 답장하며 /차단 → 그 작성자 전체 방 차단(프라이버시 무관)."""
@@ -1084,7 +1085,7 @@ class KisMyStockScanner:
                 except Exception as e:
                     logging.error(f"[IK go] {e}")
                     self.listener_session.post(f"{base_url}/sendMessage",
-                        json={'chat_id': chat_id, 'text': '강퇴 중 오류: ' + str(e)}, timeout=10)
+                        json={'chat_id': chat_id, 'text': '강퇴 중 오류: ' + mask_secrets(e)}, timeout=10)
             threading.Thread(target=_kick_worker, daemon=True).start()
             return
 

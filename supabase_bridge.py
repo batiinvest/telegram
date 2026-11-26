@@ -24,6 +24,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, List
 
+from logger_config import mask_secrets
+
 # .env 파일 로드 (환경변수가 시스템에 없을 때 폴백)
 try:
     from dotenv import load_dotenv
@@ -138,7 +140,8 @@ class SupabaseBridge:
         try:
             client.table("notice_history").insert({
                 "target":     target,
-                "content":    content[:max_len],   # 너무 길면 자름
+                # 오류 문구가 섞여도 키는 남기지 않는다(가린 뒤 자름) — _log_notice·_send_logged 공용
+                "content":    mask_secrets(content)[:max_len],
                 "sent_count": sent_count,
                 "ok_count":   ok_count,
             }).execute()

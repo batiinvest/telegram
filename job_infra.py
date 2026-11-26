@@ -16,6 +16,7 @@ import stock_api
 import job_state
 import mem_release
 from managers import market_timer
+from logger_config import mask_secrets
 from telegram_utils import get_admin_chat_id as _get_admin_chat_id
 from config import DEFAULT_CHAT_ID, INDUSTRY_CHAT_IDS, COMPANY_CHAT_IDS, COMPANY_CODES
 
@@ -143,7 +144,7 @@ def mark_failed(reason):
     """
     fails = getattr(_JOB_LOCAL, 'failures', None)
     if fails is not None:
-        fails.append(str(reason)[:200])
+        fails.append(mask_secrets(reason)[:200])   # 오류 문구의 요청 URL에 든 키는 가린 뒤 자른다
 
 
 _DART_MAINT_MARKERS = ("'status': '800'", '"status": "800"', "<status>800</status>", "시스템 점검")
@@ -250,11 +251,13 @@ def get_missing_jobs(ran) -> tuple:
 
 
 def _record_job(fn_name: str, ok: bool, error=None, elapsed: float = 0.0):
+    # requests 오류 문구엔 요청 URL(crtfc_key=…)이 들어 있다 — 메모리·DB·알림 어디든 가린 문구만 쓴다
+    error = mask_secrets(error) if error else None
     _JOB_RESULTS[fn_name] = {
         'date':    datetime.date.today().isoformat(),
         'time':    datetime.datetime.now().strftime('%H:%M'),
         'ok':      ok,
-        'error':   str(error)[:200] if error else None,
+        'error':   error[:200] if error else None,
         'elapsed': round(elapsed, 1),
     }
     _record_job_db(fn_name, ok, error, elapsed)
@@ -277,7 +280,7 @@ def _record_job_db(fn_name: str, ok: bool, error, elapsed: float):
             'started_at':  (now - datetime.timedelta(seconds=elapsed)).isoformat(),
             'finished_at': now.isoformat(),
             'ok':          ok,
-            'error':       str(error)[:500] if error else None,
+            'error':       mask_secrets(error)[:500] if error else None,
             'elapsed_sec': round(elapsed, 1),
         }).execute()
     except Exception as e:
@@ -296,7 +299,7 @@ def _notify_job_failure(fn_name: str, error):
     _FAIL_ALERTED.add(key)
     try:
         target = _get_admin_chat_id(fallback=DEFAULT_CHAT_ID)
-        stock_api.send_telegram(target, f"❌ <b>[잡 실패] {fn_name}</b>\n{str(error)[:300]}")
+        stock_api.send_telegram(target, f"❌ <b>[잡 실패] {fn_name}</b>\n{mask_secrets(error)[:300]}")
     except Exception:
         pass
 

@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 load_dotenv('/home/kjhofone/.env')
 
 from db_client import get_supabase_client
+from logger_config import mask_secrets
 
 TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 
@@ -226,7 +227,7 @@ def _handle_sync_desc(sb, payload):
             if 'not modified' in str(e):
                 skip += 1
             else:
-                fail += 1; fails.append(f"{name}: {str(e)[:50]}")
+                fail += 1; fails.append(f"{name}: {mask_secrets(e)[:50]}")
         time.sleep(0.35)
     return {'total': len(rooms), 'ok': ok, 'skip': skip, 'fail': fail, 'fails': fails[:20]}
 
@@ -311,7 +312,8 @@ def _process_one(sb, req):
     except Exception as e:
         try:
             sb.table('bot_requests').update({
-                'status': 'error', 'result': {'error': str(e)[:500]},
+                # 결과는 관리자 화면에 그대로 뜬다 — 요청 URL(/bot<토큰>/·crtfc_key=…)의 키는 가려 저장
+                'status': 'error', 'result': {'error': mask_secrets(e)[:500]},
                 'processed_at': datetime.now(timezone.utc).isoformat(),
             }).eq('id', rid).execute()
         except Exception:

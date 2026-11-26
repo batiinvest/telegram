@@ -17,6 +17,8 @@ from concurrent.futures import ThreadPoolExecutor
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from logger_config import mask_secrets
+
 # 파일 잠금 라이브러리 (Safe Import)
 try:
     from filelock import FileLock
@@ -349,7 +351,7 @@ _SEND_FAILURES: dict = {}
 def note_send_failure(chat_id, reason: str):
     rec = _SEND_FAILURES.setdefault(str(chat_id), {'count': 0, 'reason': ''})
     rec['count'] += 1
-    rec['reason'] = str(reason)[:100]
+    rec['reason'] = mask_secrets(reason)[:100]   # 연결 에러 문구엔 /bot<토큰>/ URL이 들어 있다
 
 
 def pop_send_failures() -> dict:
@@ -409,6 +411,9 @@ class TelegramBotManager:
         """모든 청크 발송 성공 시 True. DRY_RUN 환경변수 설정 시 발송 없이 True."""
         if not self.token or not chat_id or not text:
             return False
+        # 잡 실패·운영 요약·명령 오류 답장 등 오류 문구(요청 URL의 crtfc_key=… 등)가 실려도
+        # 키는 나가지 않게 — 봇이 보내는 글은 모두 여기를 지난다(stock_api.send_telegram 포함)
+        text = mask_secrets(text)
         if os.getenv("DRY_RUN"):
             logging.info(f"[DRY-RUN] → {chat_id}: {text[:100]!r} ({len(text)}자)")
             return True
